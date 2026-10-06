@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# npm trusted publishing: no NPM_TOKEN anywhere. The OIDC token proves this
+# workflow (this repo, this file, this environment) to npm.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
+      - run: bun install --frozen-lockfile
+      - run: bun run pack
+      - run: bun run pack:server
+      - name: Publish platform packages
+        run: |
+          set -e
+          for p in packages/cli-* packages/server-*; do
+            (cd "$p" && npm publish --access public)
+          done
+      - name: Publish umbrella packages
+        run: |
+          (cd packages/gildforge && npm publish --access public)
+          (cd packages/server && npm publish --access public)

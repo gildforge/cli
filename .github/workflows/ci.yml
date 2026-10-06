@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    environment: public-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - name: Pack and smoke-test the npm layout
+        run: |
+          bun run pack
+          bun run pack:server
+          mkdir -p /tmp/nstest/node_modules/@gildforge
+          cp -R packages/gildforge /tmp/nstest/node_modules/gildforge
+          cp -R packages/cli-linux-x64 /tmp/nstest/node_modules/@gildforge/cli-linux-x64
+          node /tmp/nstest/node_modules/gildforge/bin/gild.js --version
+          HOME=/tmp/nstest node /tmp/nstest/node_modules/gildforge/bin/gild.js init --yes
+          HOME=/tmp/nstest node /tmp/nstest/node_modules/gildforge/bin/gild.js whoami
