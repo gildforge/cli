@@ -116,7 +116,7 @@ program
     console.log()
     console.log(chalk.green('Identity created.'))
     console.log(`  device:      ${identity.device}`)
-    console.log(`  public key:  ${identity.publicKey.slice(0, 32)}…`)
+    console.log(`  public key:  ${identity.publicKey}`)
     console.log(`  fingerprint: ${fingerprint(identity.publicKey)}`)
     console.log()
     console.log(`Next: claim a name at ${chalk.underline('https://gild.gg/auth/claim')} — it asks for the public key above.`)
@@ -129,6 +129,7 @@ program
     const identity = await loadIdentity()
     if (!identity) { console.log('No identity here yet. Run `gild init`.'); return }
     console.log(`${identity.name ?? chalk.dim('(no name claimed)')} on ${identity.device}`)
+    console.log(`public key:  ${identity.publicKey}`)
     console.log(`fingerprint: ${fingerprint(identity.publicKey)}`)
   })
 
