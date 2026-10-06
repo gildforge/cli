@@ -23,14 +23,11 @@ jobs:
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
       - run: bun install --frozen-lockfile
       - run: bun run pack
-      - run: bun run pack:server
       - name: Publish platform packages
         run: |
           set -e
-          for p in packages/cli-* packages/server-*; do
+          for p in packages/cli-*; do
             (cd "$p" && npm publish --access public)
           done
-      - name: Publish umbrella packages
-        run: |
-          (cd packages/gildforge && npm publish --access public)
-          (cd packages/server && npm publish --access public)
+      - name: Publish umbrella package
+        run: cd packages/gildforge && npm publish --access public
