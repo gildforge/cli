@@ -38,33 +38,43 @@ for (const t of TARGETS) {
   console.log(`built ${t.name}`)
 }
 
-const launcher = `#!/usr/bin/env node
+const launcher = (family, bin) => `#!/usr/bin/env node
 // Picks the platform binary installed via optionalDependencies and execs it.
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 const require = createRequire(import.meta.url)
-const pkg = \`@gildforge/cli-\${process.platform}-\${process.arch}\`
-let bin
-try { bin = join(dirname(require.resolve(pkg + '/package.json')), 'bin', 'gild') }
-catch { console.error(\`gild: no binary for \${process.platform}-\${process.arch} (tried \${pkg})\`); process.exit(1) }
-const { status } = spawnSync(bin, process.argv.slice(2), { stdio: 'inherit' })
+const pkg = \`@gildforge/${family}-\${process.platform}-\${process.arch}\`
+let binPath
+try { binPath = join(dirname(require.resolve(pkg + '/package.json')), 'bin', '${bin}') }
+catch { console.error(\`${bin}: no build for \${process.platform}-\${process.arch} (tried \${pkg})\`); process.exit(1) }
+if (!existsSync(binPath)) { console.error(\`${bin}: \${pkg} is installed but has no binary yet — it ships with the next server release.\`); process.exit(1) }
+const { status } = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' })
 process.exit(status ?? 1)
 `
 
 const main = join(ROOT, 'packages', 'gildforge')
 mkdirSync(join(main, 'bin'), { recursive: true })
-writeFileSync(join(main, 'bin', 'gild.js'), launcher)
+// One install, both tools: `gild` (identity + forge client) and `gild-server`
+// (the self-hosted backend). The server binaries come from gildforge/server's
+// own releases; the umbrella tracks them loosely so either can ship alone.
+writeFileSync(join(main, 'bin', 'gild.js'), launcher('cli', 'gild'))
+writeFileSync(join(main, 'bin', 'gild-server.js'), launcher('server', 'gild-server'))
 chmodSync(join(main, 'bin', 'gild.js'), 0o755)
+chmodSync(join(main, 'bin', 'gild-server.js'), 0o755)
 writeFileSync(join(main, 'package.json'), JSON.stringify({
   name: 'gildforge',
   version: pkg.version,
-  description: 'gildforge — key-first identity for the gild forge',
+  description: 'gildforge — key-first identity for the gild forge (installs gild and gild-server)',
   type: 'module',
-  bin: { gild: 'bin/gild.js' },
+  bin: { gild: 'bin/gild.js', 'gild-server': 'bin/gild-server.js' },
   files: ['bin'],
   license: 'MIT',
   publishConfig: { access: 'public' },
-  optionalDependencies: Object.fromEntries(TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version])),
+  optionalDependencies: {
+    ...Object.fromEntries(TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version])),
+    ...Object.fromEntries(TARGETS.map((t) => [`@gildforge/server-${t.name.replace('cli-', '')}`, '*'])),
+  },
 }, null, 2) + '\n')
 console.log('assembled packages/gildforge')

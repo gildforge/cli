@@ -23,18 +23,30 @@ jobs:
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
       - run: bun install --frozen-lockfile
       - run: bun run pack
-      - name: Upload binaries to the release bucket (releases.gild.gg)
+      - name: Upload binaries to the release bucket (releases.gild.gg/cli)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -e
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          mkdir -p "out/$TAG"
           for p in packages/cli-*; do
             name="${p#packages/cli-}"
-            aws s3 cp "$p/bin/gild" "s3://${{ secrets.RELEASE_BUCKET }}/$VERSION/gild-$name" \
-              --endpoint-url "${{ secrets.SCCACHE_ENDPOINT }}" --region auto
+            cp "$p/bin/gild" "out/$TAG/gild-$name"
           done
+          cd "out/$TAG"
+          for f in gild-*; do shasum -a 256 "$f" | cut -d' ' -f1 > "$f.sha"; done
+          jq -n --arg version "$VERSION" --arg tag "$TAG" \
+            --arg arm64 "$(cat gild-darwin-arm64.sha)" --arg x64 "$(cat gild-darwin-x64.sha)" --arg linux "$(cat gild-linux-x64.sha)" \
+            '{version: $version, tag: $tag, artifacts: {"gild-darwin-arm64": $arm64, "gild-darwin-x64": $x64, "gild-linux-x64": $linux}}' > manifest.json
+          rm -f *.sha
+          jq -n --arg version "$VERSION" --arg tag "$TAG" '{version: $version, tag: $tag}' > latest.json
+          cp latest.json "../latest.json"
+          cd ../..
+          aws s3 sync out/ "s3://${{ secrets.RELEASE_BUCKET }}/cli/" \
+            --endpoint-url "${{ secrets.SCCACHE_ENDPOINT }}" --region auto
       - name: Publish platform packages
         run: |
           set -e
