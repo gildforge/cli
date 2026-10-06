@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import inquirer from 'inquirer'
 import { z } from 'zod'
 import { generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, createHash } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -29,8 +29,21 @@ const identityPath = () => join(configDir(), 'identity.json')
 export const fingerprint = (publicKey: string) =>
   createHash('sha256').update(publicKey).digest('hex').slice(0, 16)
 
+/** The identity is only as safe as its permissions: dir 0700, file 0600,
+ *  enforced on every read, not just at creation — anything looser means
+ *  another user (or an agent running as one) could read the key. */
+async function enforcePermissions() {
+  const dir = await stat(configDir()).catch(() => null)
+  if (dir && (dir.mode & 0o077) !== 0) await chmod(configDir(), 0o700)
+  const file = await stat(identityPath()).catch(() => null)
+  if (file && (file.mode & 0o077) !== 0) await chmod(identityPath(), 0o600)
+}
+
 export async function loadIdentity(): Promise<Identity | null> {
-  try { return identitySchema.parse(JSON.parse(await readFile(identityPath(), 'utf8'))) }
+  try {
+    await enforcePermissions()
+    return identitySchema.parse(JSON.parse(await readFile(identityPath(), 'utf8')))
+  }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
 }
 
