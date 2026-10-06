@@ -119,7 +119,21 @@ program
     console.log(`  public key:  ${identity.publicKey}`)
     console.log(`  fingerprint: ${fingerprint(identity.publicKey)}`)
     console.log()
-    console.log(`Next: claim a name at ${chalk.underline('https://gild.gg/auth/claim')} — it asks for the public key above.`)
+
+    const { openClaim } = opts.yes
+      ? { openClaim: false }
+      : await inquirer.prompt([{
+          type: 'confirm', name: 'openClaim', default: true,
+          message: 'Open gild.gg now to claim your name? (your public key goes along, nothing else)',
+        }])
+    if (openClaim) {
+      const url = `https://gild.gg/auth/claim?key=${encodeURIComponent(identity.publicKey)}`
+      const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+      Bun.spawn([opener, url], { stdout: 'ignore', stderr: 'ignore' })
+      console.log('The claim page is open with your key filled in — pick a name.')
+    } else {
+      console.log(`Claim a name whenever: ${chalk.underline('https://gild.gg/auth/claim')}`)
+    }
   })
 
 program
@@ -155,6 +169,32 @@ program
       return
     }
     console.log(chalk.green('Signed and sent. The browser tab should open your session now.'))
+  })
+
+program
+  .command('claim')
+  .description('sign a name claim: gild claim <challenge>')
+  .argument('<challenge>', 'the claim challenge shown in the browser')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (challenge, opts) => {
+    const identity = await loadIdentity()
+    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+
+    const signature = signChallenge(identity, challenge)
+    const res = await fetch(`${opts.server}/api/claim/answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ challenge, publicKey: identity.publicKey, signature }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      console.error(chalk.red(`The forge rejected the claim (${res.status}): ${data.error ?? 'unknown'}`))
+      process.exitCode = 1
+      return
+    }
+    identity.name = data.name
+    await saveIdentity(identity)
+    console.log(chalk.green(`@${data.name} is yours.`))
   })
 
 if (import.meta.main) program.parseAsync()
