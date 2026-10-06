@@ -10,6 +10,7 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promise
 import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
+import pkg from '../package.json'
 
 // ---------- identity storage (~/.config/gild/identity.json, mode 0600) ----------
 
@@ -72,7 +73,7 @@ export function verifyChallenge(publicKey: string, challenge: string, signature:
 // ---------- commands ----------
 
 const program = new Command()
-program.name('gild').description('gild — key-first identity for the forge').version('0.1.0')
+program.name('gild').description('gild — key-first identity for the forge').version(pkg.version)
 
 program
   .command('init')
