@@ -1,5 +1,5 @@
 // Builds the platform matrix and assembles the npm packages:
-//   packages/gild                    — the umbrella (bin launcher + optionalDependencies)
+//   packages/gildforge               — the umbrella (bin launcher + optionalDependencies)
 //   packages/gild-darwin-arm64       — the compiled binary per platform
 //   packages/gild-darwin-x64
 //   packages/gild-linux-x64
@@ -11,9 +11,9 @@ import pkg from '../package.json'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const TARGETS = [
-  { name: 'gild-darwin-arm64', bun: 'bun-darwin-arm64', os: 'darwin', cpu: 'arm64' },
-  { name: 'gild-darwin-x64', bun: 'bun-darwin-x64', os: 'darwin', cpu: 'x64' },
-  { name: 'gild-linux-x64', bun: 'bun-linux-x64', os: 'linux', cpu: 'x64' },
+  { name: 'cli-darwin-arm64', bun: 'bun-darwin-arm64', os: 'darwin', cpu: 'arm64' },
+  { name: 'cli-darwin-x64', bun: 'bun-darwin-x64', os: 'darwin', cpu: 'x64' },
+  { name: 'cli-linux-x64', bun: 'bun-linux-x64', os: 'linux', cpu: 'x64' },
 ]
 
 rmSync(join(ROOT, 'packages'), { recursive: true, force: true })
@@ -44,7 +44,7 @@ import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 const require = createRequire(import.meta.url)
-const pkg = \`@gildforge/gild-\${process.platform}-\${process.arch}\`
+const pkg = \`@gildforge/cli-\${process.platform}-\${process.arch}\`
 let bin
 try { bin = join(dirname(require.resolve(pkg + '/package.json')), 'bin', 'gild') }
 catch { console.error(\`gild: no binary for \${process.platform}-\${process.arch} (tried \${pkg})\`); process.exit(1) }
@@ -52,14 +52,14 @@ const { status } = spawnSync(bin, process.argv.slice(2), { stdio: 'inherit' })
 process.exit(status ?? 1)
 `
 
-const main = join(ROOT, 'packages', 'gild')
+const main = join(ROOT, 'packages', 'gildforge')
 mkdirSync(join(main, 'bin'), { recursive: true })
 writeFileSync(join(main, 'bin', 'gild.js'), launcher)
 chmodSync(join(main, 'bin', 'gild.js'), 0o755)
 writeFileSync(join(main, 'package.json'), JSON.stringify({
-  name: 'gild',
+  name: 'gildforge',
   version: pkg.version,
-  description: 'gild — key-first identity for the forge',
+  description: 'gildforge — key-first identity for the gild forge',
   type: 'module',
   bin: { gild: 'bin/gild.js' },
   files: ['bin'],
@@ -67,4 +67,4 @@ writeFileSync(join(main, 'package.json'), JSON.stringify({
   publishConfig: { access: 'public' },
   optionalDependencies: Object.fromEntries(TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version])),
 }, null, 2) + '\n')
-console.log('assembled packages/gild')
+console.log('assembled packages/gildforge')
