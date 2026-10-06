@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "gild": "src/gild.ts" },
+  "bin": {
+    "gild": "src/gild.ts"
+  },
   "scripts": {
     "dev": "bun run src/gild.ts",
     "build": "bun build --compile --minify src/gild.ts --outfile dist/gild",
-    "test": "bun test"
+    "test": "bun test",
+    "pack": "bun run scripts/pack.mjs"
   },
   "dependencies": {
     "chalk": "^5.6.2",
