@@ -20,6 +20,7 @@ const identitySchema = z.object({
   device: z.string(),                   // human label for this machine
   publicKey: z.string(),                // ed25519:<base64>
   secretKey: z.string(),                // ed25519 private (base64 PKCS8)
+  apiToken: z.string().nullable().default(null),  // gf_… for git push auth
   createdAt: z.string(),
 })
 type Identity = z.infer<typeof identitySchema>
@@ -68,6 +69,20 @@ export function signChallenge(identity: Identity, challenge: string): string {
 export function verifyChallenge(publicKey: string, challenge: string, signature: string): boolean {
   const pub = Buffer.from(publicKey.replace(/^ed25519:/, ''), 'base64')
   return cryptoVerify(null, Buffer.from(challenge, 'utf8'), { key: pub, format: 'der', type: 'spki' }, Buffer.from(signature, 'base64'))
+}
+
+/** Every mutating API call proves the key: fetch a challenge, sign it, send. */
+export async function signedCall(server: string, path: string, identity: Identity, extra: Record<string, unknown> = {}) {
+  const chRes = await fetch(`${server}/api/auth/challenge`, { method: 'POST' })
+  const { challenge } = await chRes.json() as { challenge: string }
+  const signature = signChallenge(identity, challenge)
+  const res = await fetch(`${server}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ challenge, publicKey: identity.publicKey, signature, ...extra }),
+  })
+  const data = await res.json().catch(() => ({}))
+  return { ok: res.ok, status: res.status, data }
 }
 
 // ---------- commands ----------
@@ -196,6 +211,60 @@ program
     identity.name = data.name
     await saveIdentity(identity)
     console.log(chalk.green(`@${data.name} is yours.`))
+  })
+
+program
+  .command('token')
+  .description('mint a gild API token (used as the push credential by gild clone)')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (opts) => {
+    const identity = await loadIdentity()
+    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    const { ok, status, data } = await signedCall(opts.server, '/api/tokens', identity)
+    if (!ok) { console.error(chalk.red(`token mint failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    identity.apiToken = data.token
+    await saveIdentity(identity)
+    console.log(chalk.green('token saved.'))
+    console.log('It proves your key for git pushes. Rotate any time with `gild token`.')
+  })
+
+program
+  .command('repo')
+  .description('forge repositories')
+  .command('create')
+  .argument('<name>', 'repo name')
+  .option('--description <text>', 'description')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (name, opts) => {
+    const identity = await loadIdentity()
+    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    const { ok, status, data } = await signedCall(opts.server, '/api/repos', identity, { name, description: opts.description })
+    if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    console.log(chalk.green(`created ${data.owner}/${data.name}`))
+    console.log(`  clone: gild clone ${data.owner}/${data.name}`)
+  })
+
+program
+  .command('clone')
+  .description('clone a forge repo (push access wired up automatically)')
+  .argument('<repo>', 'owner/name')
+  .argument('[dir]', 'directory')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (repoArg, dir, opts) => {
+    const identity = await loadIdentity()
+    const url = `${opts.server}/git/${repoArg}.git`
+    const run = (args: string[], cwd?: string) => {
+      const r = Bun.spawnSync(args, { cwd, stdout: 'inherit', stderr: 'inherit' })
+      if (r.exitCode !== 0) { console.error(chalk.red(`git ${args[0]} failed`)); process.exit(1) }
+    }
+    run(['git', 'clone', url, ...(dir ? [dir] : [])])
+    const repoDir = dir ?? repoArg.split('/').pop()!
+    if (identity?.apiToken) {
+      run(['git', 'config', `http.${opts.server}.extraHeader`, `Authorization: Bearer ${identity.apiToken}`], repoDir)
+      console.log('push access wired (your gild token). `git push` just works.')
+    } else {
+      console.log(chalk.dim('cloned read-only; run `gild token` and re-set the push header to push'))
+    }
   })
 
 if (import.meta.main) program.parseAsync()
