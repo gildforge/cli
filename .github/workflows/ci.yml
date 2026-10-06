@@ -20,7 +20,6 @@ jobs:
       - name: Pack and smoke-test the npm layout
         run: |
           bun run pack
-          bun run pack:server
           mkdir -p /tmp/nstest/node_modules/@gildforge
           cp -R packages/gildforge /tmp/nstest/node_modules/gildforge
           cp -R packages/cli-linux-x64 /tmp/nstest/node_modules/@gildforge/cli-linux-x64
