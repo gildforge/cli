@@ -338,4 +338,41 @@ repoCmd
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(cloneAction)
 
+program
+  .command('credential')
+  .description('git credential helper — git runs this; see `gild setup git`')
+  .argument('<action>', 'get | store | erase')
+  .action(async (action) => {
+    if (action !== 'get') return // nothing to store or erase: the token lives in identity.json
+    // The request (protocol/host lines) ends with a blank line — git may
+    // hold stdin open, so stop there rather than at EOF.
+    const decoder = new TextDecoder()
+    let request = ''
+    for await (const chunk of Bun.stdin.stream()) {
+      request += decoder.decode(chunk)
+      if (request.includes('\n\n')) break
+    }
+    const identity = await loadIdentity()
+    if (!identity?.apiToken) process.exit(0) // no answer = git falls back to prompting
+    // The proxy checks the password slot; any username works.
+    console.log('username=gild')
+    console.log(`password=${identity.apiToken}`)
+  })
+
+program
+  .command('setup')
+  .description('one-time machine setup')
+  .command('git')
+  .description('register gild as git\'s credential helper for the forge, so every clone pushes without prompts')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (opts) => {
+    const identity = await loadIdentity()
+    if (!identity?.apiToken) { console.error('Run `gild token` first — the helper answers with your API token.'); process.exitCode = 1; return }
+    const key = `credential.${opts.server}.helper`
+    const r = Bun.spawnSync(['git', 'config', '--global', key, '!gild credential'], { stdout: 'inherit', stderr: 'inherit' })
+    if (r.exitCode !== 0) { console.error(chalk.red('git config failed')); process.exitCode = 1; return }
+    console.log(chalk.green(`git is wired: pushes to ${opts.server} use your gild token automatically.`))
+    console.log('Any clone works now — plain `git clone`, CI, scripts. Rotate any time with `gild token`.')
+  })
+
 if (import.meta.main) program.parseAsync()
