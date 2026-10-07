@@ -1,4 +1,5 @@
-import { GildClient,requestPath } from './api/client'
+import { runnerService } from './runner-service'
+import { GildClient, requestPath } from './api/client'
 import {
   chmod,
   mkdir,
@@ -15,17 +16,39 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import type { Command } from 'commander'
 import { z } from 'zod'
 
-const configSchema = z.object({
-  schema: z.literal(1),
-  id: z.string(),
-  token: z.string().startsWith('gr_'),
-  name: z.string().regex(/^[a-zA-Z0-9][\w.-]{0,63}$/),
-  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
-  server: z.string().url(),
-  os: z.string(),
-  arch: z.string(),
-  labels: z.array(z.string()),
-})
+const configSchema = z
+  .object({
+    schema: z.literal(1),
+    id: z.string(),
+    token: z.string().regex(/^(gr|gro|gc)_[a-zA-Z0-9]+$/),
+    scope: z.enum(['repo', 'org', 'user']).optional(),
+    owner: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,38}$/i)
+      .optional(),
+    name: z.string().regex(/^[a-zA-Z0-9][\w.-]{0,63}$/),
+    repo: z
+      .string()
+      .regex(/^[\w.-]+\/[\w.-]+$/)
+      .optional(),
+    server: z.string().url(),
+    os: z.string(),
+    arch: z.string(),
+    labels: z.array(z.string()),
+  })
+  .superRefine((data, ctx) => {
+    if (data.scope === 'org' || data.scope === 'user') {
+      if (!data.owner || !data.token.startsWith('gro_'))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Owner runner requires owner and gro_ token',
+        })
+    } else if (!data.repo)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Repo runner requires a repository',
+      })
+  })
 export type RunnerConfig = z.infer<typeof configSchema>
 export interface RunnerStep {
   name: string
@@ -41,6 +64,7 @@ export interface RunnerStep {
 }
 export interface Assignment {
   schema: 1
+  checkoutToken?: string
   workspaceToken: string
   github: Record<string, string>
   job: number
@@ -89,14 +113,21 @@ export async function listRunners(root: string): Promise<RunnerConfig[]> {
   )
 }
 export async function request(
-  config: Pick<RunnerConfig, 'server' | 'repo' | 'token'>,
+  config: Pick<RunnerConfig, 'server' | 'repo' | 'token' | 'scope' | 'owner'>,
   path: string,
   body?: unknown,
   method = 'POST',
 ): Promise<any> {
-  const client=new GildClient(config.server.replace(/\/$/,'')+'/api/v1',config.token)
-  return requestPath(client,method,`/repos/${config.repo}/actions/${path || 'runners'}`,body)
-
+  const client = new GildClient(
+    config.server.replace(/\/$/, '') + '/api/v1',
+    config.token,
+  )
+  return requestPath(
+    client,
+    method,
+    `${config.scope === 'org' ? '/orgs/' + config.owner : config.scope === 'user' ? '/users/' + config.owner : '/repos/' + config.repo}/actions/${path || 'runners'}`,
+    body,
+  )
 }
 const delay = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done) => {
@@ -110,8 +141,8 @@ const delay = (ms: number, signal?: AbortSignal) =>
     if (signal?.aborted) finish()
   })
 export function assertRunnerHost(allowRoot = false) {
-  if (!['linux', 'darwin'].includes(process.platform))
-    throw new Error('gild runners support Linux and macOS')
+  if (!['linux', 'darwin', 'win32'].includes(process.platform))
+    throw new Error('gild runners support Linux, macOS and Windows')
   if (process.getuid?.() === 0 && !allowRoot)
     throw new Error(
       'gild runner does not run as root; use a regular user (or explicitly pass --allow-root)',
@@ -121,7 +152,12 @@ export async function insideWorkspace(workspace: string, path: string) {
   const root = await realpath(workspace),
     target = await realpath(resolve(workspace, path)),
     r = relative(root, target)
-  if (r === '..' || r.startsWith('../') || isAbsolute(r))
+  if (
+    r === '..' ||
+    r.startsWith('../') ||
+    r.startsWith('..\\') ||
+    isAbsolute(r)
+  )
     throw new Error('working-directory must stay inside this checkout')
   return target
 }
@@ -129,6 +165,8 @@ export function shellCommand(shell: string, script: string): string[] {
   if (shell === 'bash')
     return ['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', script]
   if (shell === 'sh') return ['sh', '-e', script]
+  if (shell === 'pwsh' || shell === 'powershell')
+    return [shell, '-NoProfile', '-NonInteractive', '-File', script]
   if (shell === 'python') return ['python', script]
   // Documented shell templates; no shell eval or command substitution here.
   const parts = shell.split(/\s+/)
@@ -140,6 +178,15 @@ export function shellCommand(shell: string, script: string): string[] {
 }
 function envFor(work: string, env: Record<string, string> = {}) {
   return {
+    ...(process.platform === 'win32'
+      ? {
+          SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+          WINDIR: process.env.WINDIR ?? 'C:\\Windows',
+          COMSPEC: process.env.COMSPEC ?? 'C:\\Windows\\System32\\cmd.exe',
+          TEMP: join(work, 'tmp'),
+          TMP: join(work, 'tmp'),
+        }
+      : {}),
     PATH: process.env.PATH ?? '/usr/bin:/bin',
     HOME: join(work, 'home'),
     TMPDIR: join(work, 'tmp'),
@@ -154,18 +201,41 @@ function envFor(work: string, env: Record<string, string> = {}) {
 function processTree(child: ChildProcess) {
   const owned = new Map<number, string>()
   const scan = () => {
-    const rows = execFileSync('ps', ['-axo', 'pid=,ppid=,lstart='], {
-      encoding: 'utf8',
-    })
-      .trim()
-      .split('\n')
-      .map((line) => {
-        const m = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line)
-        return m
-          ? { pid: Number(m[1]), parent: Number(m[2]), started: m[3] }
-          : null
-      })
-      .filter((r) => r !== null)
+    const rows =
+      process.platform === 'win32'
+        ? (
+            JSON.parse(
+              execFileSync(
+                'powershell.exe',
+                [
+                  '-NoProfile',
+                  '-Command',
+                  '@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate) | ConvertTo-Json -Compress',
+                ],
+                { encoding: 'utf8' },
+              ),
+            ) as {
+              ProcessId: number
+              ParentProcessId: number
+              CreationDate: string
+            }[]
+          ).map((r) => ({
+            pid: r.ProcessId,
+            parent: r.ParentProcessId,
+            started: r.CreationDate,
+          }))
+        : execFileSync('ps', ['-axo', 'pid=,ppid=,lstart='], {
+            encoding: 'utf8',
+          })
+            .trim()
+            .split('\n')
+            .map((line) => {
+              const m = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line)
+              return m
+                ? { pid: Number(m[1]), parent: Number(m[2]), started: m[3] }
+                : null
+            })
+            .filter((r) => r !== null)
     const root = rows.find((r) => r.pid === child.pid)
     if (root && !owned.has(root.pid)) owned.set(root.pid, root.started)
     let added: boolean
@@ -449,7 +519,7 @@ export async function executeJob(
         GIT_CONFIG_VALUE_0: `Authorization: Bearer ${config.token}`,
         GIT_TERMINAL_PROMPT: '0',
         GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       }
       const url = `${config.server}/${config.repo}.git`
       if (
@@ -480,7 +550,7 @@ export async function executeJob(
           [
             'git',
             '-c',
-            'core.hooksPath=/dev/null',
+            'core.hooksPath=' + join(work, 'disabled-hooks'),
             'checkout',
             '--detach',
             job.sha,
@@ -556,7 +626,10 @@ export async function executeJob(
             GITHUB_WORKSPACE: checkout,
           }
         if (s.run !== undefined) {
-          const script = join(work, `step-${i}.script`)
+          const script = join(
+            work,
+            `step-${i}.${s.shell === 'pwsh' || s.shell === 'powershell' ? 'ps1' : 'script'}`,
+          )
           await writeFile(script, s.run + '\n', { mode: 0o600 })
           exit = await command(
             shellCommand(s.shell, script),
@@ -716,7 +789,15 @@ export async function startRunner(
       continue
     }
     console.log(`Run #${job.run}, job #${job.job} on ${config.name}`)
-    const status = await executeJob(config, job, root, signal)
+    const jobConfig = job.checkoutToken
+      ? {
+          ...config,
+          scope: 'repo' as const,
+          repo: job.repository,
+          token: job.checkoutToken,
+        }
+      : config
+    const status = await executeJob(jobConfig, job, root, signal)
     console.log(`Run #${job.run}: ${status}`)
     if (once) return status
   }
@@ -742,20 +823,36 @@ export function runnerCommands(
     .description('Actions on machines you register')
   runner
     .command('add')
-    .requiredOption('--repo <owner/name>', 'repo to run jobs for')
+    .option('--repo <owner/name>', 'repo to run jobs for')
+    .option('--org <name>', 'organization to run jobs for')
+    .option('--user <name>', 'personal account to run jobs for')
+    .option('--group <group>', 'owner runner group', 'default')
+    .option('--token <token>', 'one-time registration token')
     .option('--name <name>', 'machine name', hostname())
     .option('--labels <labels>', 'comma-separated custom labels', '')
     .option('--server <url>', 'forge base URL', 'https://gild.gg')
     .option('--config-dir <path>', 'gild config directory', configRoot())
     .action(async (opts) => {
       assertRunnerHost(true)
-      if (!/^[\w.-]+\/[\w.-]+$/.test(opts.repo))
-        throw new Error('--repo must be owner/name')
+      if ([opts.repo, opts.org, opts.user].filter(Boolean).length !== 1)
+        throw Error('Choose exactly one of --repo, --org or --user')
+      if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo))
+        throw Error('--repo must be owner/name')
+      const scope = opts.org
+          ? ('org' as const)
+          : opts.user
+            ? ('user' as const)
+            : ('repo' as const),
+        owner = opts.org ?? opts.user
       configPath(opts.configDir, opts.name)
       if ((await listRunners(opts.configDir)).some((r) => r.name === opts.name))
         throw new Error('runner name already stored; remove it first')
-      const identity = await runnerIdentity(opts.configDir, loadIdentity)
-      if (!identity?.apiToken) throw new Error('run gild auth token first')
+      const identity = opts.token
+        ? null
+        : await runnerIdentity(opts.configDir, loadIdentity)
+      const registrationToken = opts.token ?? identity?.apiToken
+      if (!registrationToken)
+        throw new Error('Use --token or run gild auth token first')
       const server = new URL(opts.server)
       if (
         server.protocol !== 'https:' &&
@@ -788,19 +885,27 @@ export function runnerCommands(
           labels,
         }
       const result = await request(
-        { server: server.origin, repo: opts.repo, token: identity.apiToken },
+        {
+          server: server.origin,
+          repo: opts.repo,
+          scope,
+          owner,
+          token: registrationToken,
+        },
         'runners',
-        base,
+        scope === 'repo' ? base : { ...base, group: opts.group },
       )
       await saveRunner(opts.configDir, {
         schema: 1,
         ...base,
         ...result,
         repo: opts.repo,
+        scope,
+        owner,
         server: server.origin,
       })
       console.log(
-        `Registered ${opts.name} for ${opts.repo}. Start with gild runner start --name ${opts.name}`,
+        `Registered ${opts.name} for ${opts.repo ?? owner}. Start with gild runner start --name ${opts.name}`,
       )
     })
   runner
@@ -826,7 +931,7 @@ export function runnerCommands(
       process.once('SIGINT', stop)
       process.once('SIGTERM', stop)
       console.log(
-        `${config.name} waiting for ${config.repo} (${config.labels.join(', ') || 'OS and architecture labels'})`,
+        `${config.name} waiting for ${config.repo ?? config.owner} (${config.labels.join(', ') || 'OS and architecture labels'})`,
       )
       try {
         await startRunner(config, opts.configDir, c.signal, opts.once)
@@ -837,11 +942,44 @@ export function runnerCommands(
     })
   runner
     .command('list')
+    .option('--org <name>')
+    .option('--user <name>')
+    .option('--server <url>', 'forge base URL', 'https://gild.gg')
     .option('--config-dir <path>', 'gild config directory', configRoot())
     .action(async (opts) => {
+      if (opts.org || opts.user) {
+        const identity = await runnerIdentity(opts.configDir, loadIdentity)
+        if (!identity?.apiToken) throw Error('Run gild auth token first')
+        console.log(
+          JSON.stringify(
+            await request(
+              {
+                server: opts.server,
+                scope: opts.org ? 'org' : 'user',
+                owner: opts.org ?? opts.user,
+                token: identity.apiToken,
+              },
+              'runners',
+              undefined,
+              'GET',
+            ),
+            null,
+            2,
+          ),
+        )
+        return
+      }
       for (const r of await listRunners(opts.configDir)) {
-        const view = await request(r, '', undefined, 'GET'),
-          live = view.runners.find((x: { gild_id: string }) => x.gild_id === r.id)
+        const identity = await runnerIdentity(opts.configDir, loadIdentity)
+        const view = await request(
+            { ...r, token: identity?.apiToken ?? r.token },
+            '',
+            undefined,
+            'GET',
+          ),
+          live = view.runners.find(
+            (x: { gild_id: string }) => x.gild_id === r.id,
+          )
         console.log(
           `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? 'busy' : 'idle') : 'removed'}`,
         )
@@ -863,4 +1001,88 @@ export function runnerCommands(
       await rm(configPath(opts.configDir, name))
       console.log(`Removed ${name}`)
     })
+  const group = runner.command('group').description('owner runner groups')
+  for (const action of [
+    'create',
+    'ls',
+    'add-repo',
+    'rm-repo',
+    'allow-public',
+  ] as const) {
+    const cmd = group
+      .command(action)
+      .option('--org <name>')
+      .option('--user <name>')
+      .option('--server <url>', 'forge base URL', 'https://gild.gg')
+      .option('--config-dir <path>', 'gild config directory', configRoot())
+    if (action !== 'ls') cmd.argument('<group>')
+    if (action === 'add-repo' || action === 'rm-repo')
+      cmd.argument('<repo>', 'repo name (owner is inferred)')
+    if (action === 'allow-public') cmd.argument('<enabled>', 'true or false')
+    cmd.action(async (...args) => {
+      const opts = args[action === 'ls' ? 0 : action === 'create' ? 1 : 2]
+      if (Boolean(opts.org) === Boolean(opts.user))
+        throw Error('Choose --org or --user')
+      const identity = await runnerIdentity(opts.configDir, loadIdentity)
+      if (!identity?.apiToken) throw Error('Run gild auth token first')
+      const owner = opts.org ?? opts.user,
+        config = {
+          server: opts.server,
+          scope: opts.org ? ('org' as const) : ('user' as const),
+          owner,
+          token: identity.apiToken,
+        }
+      const path =
+        action === 'ls' || action === 'create'
+          ? 'runner-groups'
+          : 'runner-groups/' +
+            encodeURIComponent(args[0]) +
+            (action === 'add-repo' || action === 'rm-repo'
+              ? '/repositories/' +
+                encodeURIComponent(args[1].replace(owner + '/', ''))
+              : '')
+      if (action === 'allow-public' && !['true', 'false'].includes(args[1]))
+        throw Error('Use true or false')
+      console.log(
+        JSON.stringify(
+          await request(
+            config,
+            path,
+            action === 'create'
+              ? { name: args[0] }
+              : action === 'allow-public'
+                ? { allow_public_repositories: args[1] === 'true' }
+                : undefined,
+            action === 'ls'
+              ? 'GET'
+              : action === 'create'
+                ? 'POST'
+                : action === 'add-repo'
+                  ? 'PUT'
+                  : action === 'rm-repo'
+                    ? 'DELETE'
+                    : 'PATCH',
+          ),
+          null,
+          2,
+        ),
+      )
+    })
+  }
+  const service = runner
+    .command('service')
+    .description('run a registered runner as an OS service')
+  for (const action of ['install', 'uninstall', 'status'] as const)
+    service
+      .command(action)
+      .requiredOption('--name <name>')
+      .option('--config-dir <path>', 'gild config directory', configRoot())
+      .action(async (opts) => {
+        await loadRunner(opts.configDir, opts.name)
+        await runnerService(action, {
+          name: opts.name,
+          configDir: opts.configDir,
+        })
+        console.log(`Service ${action}: ${opts.name}`)
+      })
 }
