@@ -58,13 +58,7 @@ export const receiptPayload = sessionInput.safeExtend({
   closed: z.boolean(),
 })
 export const receiptSchema = receiptPayload.safeExtend({
-  signature: z.object({
-    algorithm: z.literal('HMAC-SHA256'),
-    digest: z.string(),
-    payload_sha256: z.string(),
-    token_fingerprint: z.string(),
-    public_key: z.string(),
-  }),
+  reported_by: z.literal('agent').default('agent'),
 })
 export type SessionInput = z.output<typeof sessionInput>
 export type Receipt = z.output<typeof receiptSchema>

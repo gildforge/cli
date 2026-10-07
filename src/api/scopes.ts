@@ -11,6 +11,7 @@ export const SCOPES = [
 ] as const
 export type Scope = (typeof SCOPES)[number]
 export interface Principal {
+  anonymous?: boolean
   id: string
   name: string
   publicKey: string
