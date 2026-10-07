@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { saveRunner, loadRunner, request, startRunner } from './runner'
 import { servicePlan, runnerService } from './runner-service'
@@ -156,6 +156,39 @@ test('service install invokes the native manager with a credential-free private 
     expect(windows.install[3]).toContain('ServiceBase.Run')
     expect(windows.install[3]).toContain('Get-Credential')
   } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+test('production nested runner command honors global config-dir and edits the requested group', async () => {
+  const { program } = await import('./gild')
+  const root = await mkdtemp(resolve('.tmp/owner-controls-'))
+  const original = globalThis.fetch,
+    calls: any[] = []
+  await writeFile(join(root, 'identity.json'), JSON.stringify({ apiToken: 'gf_fixture' }), { mode: 0o600 })
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get('authorization'),
+        body: JSON.parse(String(init?.body)),
+      })
+      return Response.json({
+        id: 'builds', name: 'builds', visibility: 'selected',
+        allow_public_repositories: false, repositories: [],
+      }, { status: 201 })
+    },
+    { preconnect: original.preconnect },
+  )
+  try {
+    await program.parseAsync(
+      ['runner', 'group', 'create', 'builds', '--org', 'acme', '--config-dir', root],
+      { from: 'user' },
+    )
+    expect(calls[0].url).toBe('https://gild.gg/api/v1/orgs/acme/actions/runner-groups')
+    expect(calls[0].authorization).toBe('Bearer gf_fixture')
+    expect(calls[0].body.name).toBe('builds')
+  } finally {
+    globalThis.fetch = original
     await rm(root, { recursive: true, force: true })
   }
 })
