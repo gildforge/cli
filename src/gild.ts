@@ -85,6 +85,17 @@ export async function signedCall(server: string, path: string, identity: Identit
   return { ok: res.ok, status: res.status, data }
 }
 
+/** Register gild as git's credential helper for the forge host, so every
+ *  clone pushes with the identity's API token and no prompts. Idempotent;
+ *  silent when git is missing (the helper is a convenience, never a blocker). */
+export function ensureGitHelper(server = 'https://gild.gg'): boolean {
+  const r = Bun.spawnSync(
+    ['git', 'config', '--global', `credential.${server}.helper`, '!gild credential'],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  return r.exitCode === 0
+}
+
 // ---------- commands ----------
 
 const program = new Command()
@@ -129,11 +140,17 @@ program
     }
     await saveIdentity(identity)
 
+    // Git wiring is part of the new-account flow: once `gild token` mints
+    // this machine's API token, every clone pushes without prompts. The
+    // helper stays quiet until then (git falls back to prompting).
+    const gitWired = ensureGitHelper()
+
     console.log()
     console.log(chalk.green('Identity created.'))
     console.log(`  device:      ${identity.device}`)
     console.log(`  public key:  ${identity.publicKey}`)
     console.log(`  fingerprint: ${fingerprint(identity.publicKey)}`)
+    if (gitWired) console.log('  git:         credential helper installed (activates with `gild token`)')
     console.log()
 
     const { openClaim } = opts.yes
@@ -224,8 +241,10 @@ program
     if (!ok) { console.error(chalk.red(`token mint failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
     identity.apiToken = data.token
     await saveIdentity(identity)
+    const gitWired = ensureGitHelper(opts.server)
     console.log(chalk.green('token saved.'))
     console.log('It proves your key for git pushes. Rotate any time with `gild token`.')
+    if (gitWired) console.log('git credential helper active — every clone pushes without prompts.')
   })
 
 const repoCmd = program
@@ -368,9 +387,7 @@ program
   .action(async (opts) => {
     const identity = await loadIdentity()
     if (!identity?.apiToken) { console.error('Run `gild token` first — the helper answers with your API token.'); process.exitCode = 1; return }
-    const key = `credential.${opts.server}.helper`
-    const r = Bun.spawnSync(['git', 'config', '--global', key, '!gild credential'], { stdout: 'inherit', stderr: 'inherit' })
-    if (r.exitCode !== 0) { console.error(chalk.red('git config failed')); process.exitCode = 1; return }
+    if (!ensureGitHelper(opts.server)) { console.error(chalk.red('git config failed')); process.exitCode = 1; return }
     console.log(chalk.green(`git is wired: pushes to ${opts.server} use your gild token automatically.`))
     console.log('Any clone works now — plain `git clone`, CI, scripts. Rotate any time with `gild token`.')
   })
