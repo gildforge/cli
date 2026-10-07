@@ -228,20 +228,74 @@ program
     console.log('It proves your key for git pushes. Rotate any time with `gild token`.')
   })
 
-program
+const repoCmd = program
   .command('repo')
   .description('forge repositories')
+
+repoCmd
   .command('create')
-  .argument('<name>', 'repo name')
+  .argument('<name>', 'repo name, or owner/name to create under an org')
+  .option('--description <text>', 'description')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (nameArg, opts) => {
+    const identity = await loadIdentity()
+    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    const [owner, name] = nameArg.includes('/')
+      ? [nameArg.split('/')[0], nameArg.split('/').slice(1).join('/')]
+      : [undefined, nameArg]
+    const { ok, status, data } = await signedCall(opts.server, '/api/repos', identity, { name, owner, description: opts.description })
+    if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    console.log(chalk.green(`created ${data.owner}/${data.name}`))
+    console.log(`  clone: gild clone ${data.owner}/${data.name}`)
+  })
+
+const orgCmd = program
+  .command('org')
+  .description('orgs: grouped repos with shared access')
+
+orgCmd
+  .command('create')
+  .description('create an org (you become its owner)')
+  .argument('<name>', 'org name')
   .option('--description <text>', 'description')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (name, opts) => {
     const identity = await loadIdentity()
     if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
-    const { ok, status, data } = await signedCall(opts.server, '/api/repos', identity, { name, description: opts.description })
+    const { ok, status, data } = await signedCall(opts.server, '/api/orgs', identity, { name, description: opts.description })
     if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
-    console.log(chalk.green(`created ${data.owner}/${data.name}`))
-    console.log(`  clone: gild clone ${data.owner}/${data.name}`)
+    console.log(chalk.green(`created org @${data.name}`))
+    console.log(`  add a repo: gild repo create ${data.name}/<repo>`)
+    console.log(`  add a member: gild org add-member ${data.name} <user>`)
+  })
+
+orgCmd
+  .command('list')
+  .description('list the orgs you belong to')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (opts) => {
+    const identity = await loadIdentity()
+    if (!identity?.apiToken) { console.error('Run `gild token` first — listing needs your API token.'); process.exitCode = 1; return }
+    const res = await fetch(`${opts.server}/api/orgs`, { headers: { authorization: `Bearer ${identity.apiToken}` } })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { console.error(chalk.red(`list failed (${res.status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    if (!data.orgs?.length) { console.log('No orgs yet. `gild org create <name>` makes one.'); return }
+    for (const o of data.orgs) console.log(`@${o.name}  ${chalk.dim(o.role)}${o.description ? `  ${o.description}` : ''}`)
+  })
+
+orgCmd
+  .command('add-member')
+  .description('add a claimed user to an org you own or admin')
+  .argument('<org>', 'org name')
+  .argument('<user>', 'the user\'s claimed name')
+  .option('--role <role>', 'owner, admin or member', 'member')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (org, user, opts) => {
+    const identity = await loadIdentity()
+    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    const { ok, status, data } = await signedCall(opts.server, `/api/orgs/${org}/members`, identity, { member: user, role: opts.role })
+    if (!ok) { console.error(chalk.red(`add-member failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    console.log(chalk.green(`@${data.member} is now ${data.role} of @${data.org}`))
   })
 
 program
