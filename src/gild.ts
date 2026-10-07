@@ -101,7 +101,11 @@ export function ensureGitHelper(server = 'https://gild.gg'): boolean {
 const program = new Command()
 program.name('gild').description('gild — key-first identity for the forge').version(pkg.version)
 
-program
+const authCmd = program
+  .command('auth')
+  .description('identity and account — key-first, terminal-first (mirrors gh auth)')
+
+authCmd
   .command('init')
   .description('create your identity key on this machine')
   .option('--yes', 'accept defaults without prompting')
@@ -140,7 +144,7 @@ program
     }
     await saveIdentity(identity)
 
-    // Git wiring is part of the new-account flow: once `gild token` mints
+    // Git wiring is part of the new-account flow: once `gild auth token` mints
     // this machine's API token, every clone pushes without prompts. The
     // helper stays quiet until then (git falls back to prompting).
     const gitWired = ensureGitHelper()
@@ -150,7 +154,7 @@ program
     console.log(`  device:      ${identity.device}`)
     console.log(`  public key:  ${identity.publicKey}`)
     console.log(`  fingerprint: ${fingerprint(identity.publicKey)}`)
-    if (gitWired) console.log('  git:         credential helper installed (activates with `gild token`)')
+    if (gitWired) console.log('  git:         credential helper installed (activates with `gild auth token`)')
     console.log()
 
     const { openClaim } = opts.yes
@@ -169,25 +173,25 @@ program
     }
   })
 
-program
-  .command('whoami')
+authCmd
+  .command('status')
   .description('show the identity on this machine')
   .action(async () => {
     const identity = await loadIdentity()
-    if (!identity) { console.log('No identity here yet. Run `gild init`.'); return }
+    if (!identity) { console.log('No identity here yet. Run `gild auth init`.'); return }
     console.log(`${identity.name ?? chalk.dim('(no name claimed)')} on ${identity.device}`)
     console.log(`public key:  ${identity.publicKey}`)
     console.log(`fingerprint: ${fingerprint(identity.publicKey)}`)
   })
 
-program
-  .command('auth')
-  .description('sign a browser challenge: gild auth <challenge>')
+authCmd
+  .command('sign')
+  .description('sign a browser challenge: gild auth sign <challenge>')
   .argument('<challenge>', 'the challenge shown in the browser')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (challenge, opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
 
     const signature = signChallenge(identity, challenge)
     const server = opts.server as string
@@ -204,14 +208,14 @@ program
     console.log(chalk.green('Signed and sent. The browser tab should open your session now.'))
   })
 
-program
+authCmd
   .command('claim')
-  .description('sign a name claim: gild claim <challenge>')
+  .description('sign a name claim: gild auth claim <challenge>')
   .argument('<challenge>', 'the claim challenge shown in the browser')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (challenge, opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
 
     const signature = signChallenge(identity, challenge)
     const res = await fetch(`${opts.server}/api/claim/answer`, {
@@ -230,20 +234,20 @@ program
     console.log(chalk.green(`@${data.name} is yours.`))
   })
 
-program
+authCmd
   .command('token')
   .description('mint a gild API token (used as the push credential by gild clone)')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
     const { ok, status, data } = await signedCall(opts.server, '/api/tokens', identity)
     if (!ok) { console.error(chalk.red(`token mint failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
     identity.apiToken = data.token
     await saveIdentity(identity)
     const gitWired = ensureGitHelper(opts.server)
     console.log(chalk.green('token saved.'))
-    console.log('It proves your key for git pushes. Rotate any time with `gild token`.')
+    console.log('It proves your key for git pushes. Rotate any time with `gild auth token`.')
     if (gitWired) console.log('git credential helper active — every clone pushes without prompts.')
   })
 
@@ -258,7 +262,7 @@ repoCmd
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (nameArg, opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
     const [owner, name] = nameArg.includes('/')
       ? [nameArg.split('/')[0], nameArg.split('/').slice(1).join('/')]
       : [undefined, nameArg]
@@ -280,7 +284,7 @@ orgCmd
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (name, opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
     const { ok, status, data } = await signedCall(opts.server, '/api/orgs', identity, { name, description: opts.description })
     if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
     console.log(chalk.green(`created org @${data.name}`))
@@ -294,7 +298,7 @@ orgCmd
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (opts) => {
     const identity = await loadIdentity()
-    if (!identity?.apiToken) { console.error('Run `gild token` first — listing needs your API token.'); process.exitCode = 1; return }
+    if (!identity?.apiToken) { console.error('Run `gild auth token` first — listing needs your API token.'); process.exitCode = 1; return }
     const res = await fetch(`${opts.server}/api/orgs`, { headers: { authorization: `Bearer ${identity.apiToken}` } })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) { console.error(chalk.red(`list failed (${res.status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
@@ -311,7 +315,7 @@ orgCmd
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (org, user, opts) => {
     const identity = await loadIdentity()
-    if (!identity) { console.error('No identity here yet. Run `gild init` first.'); process.exitCode = 1; return }
+    if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
     const { ok, status, data } = await signedCall(opts.server, `/api/orgs/${org}/members`, identity, { member: user, role: opts.role })
     if (!ok) { console.error(chalk.red(`add-member failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
     console.log(chalk.green(`@${data.member} is now ${data.role} of @${data.org}`))
@@ -337,7 +341,7 @@ const cloneAction = async (repoArg: string, dir: string | undefined, opts: { ser
     run(['git', 'config', `http.${opts.server}.extraHeader`, `Authorization: Bearer ${identity.apiToken}`], repoDir)
     console.log('push access wired (your gild token). `git push` just works.')
   } else {
-    console.log(chalk.dim('cloned read-only; run `gild token` and re-set the push header to push'))
+    console.log(chalk.dim('cloned read-only; run `gild auth token` and re-set the push header to push'))
   }
 }
 
@@ -359,7 +363,7 @@ repoCmd
 
 program
   .command('credential')
-  .description('git credential helper — git runs this; see `gild setup git`')
+  .description('git credential helper — git runs this; see `gild auth setup-git`')
   .argument('<action>', 'get | store | erase')
   .action(async (action) => {
     if (action !== 'get') return // nothing to store or erase: the token lives in identity.json
@@ -378,18 +382,16 @@ program
     console.log(`password=${identity.apiToken}`)
   })
 
-program
-  .command('setup')
-  .description('one-time machine setup')
-  .command('git')
+authCmd
+  .command('setup-git')
   .description('register gild as git\'s credential helper for the forge, so every clone pushes without prompts')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (opts) => {
     const identity = await loadIdentity()
-    if (!identity?.apiToken) { console.error('Run `gild token` first — the helper answers with your API token.'); process.exitCode = 1; return }
+    if (!identity?.apiToken) { console.error('Run `gild auth token` first — the helper answers with your API token.'); process.exitCode = 1; return }
     if (!ensureGitHelper(opts.server)) { console.error(chalk.red('git config failed')); process.exitCode = 1; return }
     console.log(chalk.green(`git is wired: pushes to ${opts.server} use your gild token automatically.`))
-    console.log('Any clone works now — plain `git clone`, CI, scripts. Rotate any time with `gild token`.')
+    console.log('Any clone works now — plain `git clone`, CI, scripts. Rotate any time with `gild auth token`.')
   })
 
 if (import.meta.main) program.parseAsync()
