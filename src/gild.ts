@@ -307,6 +307,13 @@ const cloneAction = async (repoArg: string, dir: string | undefined, opts: { ser
   }
   run(['git', 'clone', url, ...(dir ? [dir] : [])])
   const repoDir = dir ?? repoArg.split('/').pop()!
+  // Safety net for repos created before HEAD pointed at main: never leave
+  // a clone sitting on the forge-managed _meta branch.
+  const head = Bun.spawnSync(['git', 'symbolic-ref', '--short', 'HEAD'], { cwd: repoDir }).stdout.toString().trim()
+  if (head === '_meta') {
+    run(['git', 'checkout', 'main'], repoDir)
+    console.log(chalk.dim('(switched to main — _meta is the forge\'s metadata branch)'))
+  }
   if (identity?.apiToken) {
     run(['git', 'config', `http.${opts.server}.extraHeader`, `Authorization: Bearer ${identity.apiToken}`], repoDir)
     console.log('push access wired (your gild token). `git push` just works.')
