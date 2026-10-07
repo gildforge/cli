@@ -1,0 +1,12 @@
+[
+  {
+    "behavior": "default shell fails a failed pipeline",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "first-step logs survive checkout and unsupported actions log their failure",
+    "exit": 1,
+    "assertionFailure": true
+  }
+]
