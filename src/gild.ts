@@ -298,27 +298,37 @@ orgCmd
     console.log(chalk.green(`@${data.member} is now ${data.role} of @${data.org}`))
   })
 
+const cloneAction = async (repoArg: string, dir: string | undefined, opts: { server: string }) => {
+  const identity = await loadIdentity()
+  const url = `${opts.server}/${repoArg}.git`
+  const run = (args: string[], cwd?: string) => {
+    const r = Bun.spawnSync(args, { cwd, stdout: 'inherit', stderr: 'inherit' })
+    if (r.exitCode !== 0) { console.error(chalk.red(`git ${args[0]} failed`)); process.exit(1) }
+  }
+  run(['git', 'clone', url, ...(dir ? [dir] : [])])
+  const repoDir = dir ?? repoArg.split('/').pop()!
+  if (identity?.apiToken) {
+    run(['git', 'config', `http.${opts.server}.extraHeader`, `Authorization: Bearer ${identity.apiToken}`], repoDir)
+    console.log('push access wired (your gild token). `git push` just works.')
+  } else {
+    console.log(chalk.dim('cloned read-only; run `gild token` and re-set the push header to push'))
+  }
+}
+
 program
   .command('clone')
   .description('clone a forge repo (push access wired up automatically)')
   .argument('<repo>', 'owner/name')
   .argument('[dir]', 'directory')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
-  .action(async (repoArg, dir, opts) => {
-    const identity = await loadIdentity()
-    const url = `${opts.server}/git/${repoArg}.git`
-    const run = (args: string[], cwd?: string) => {
-      const r = Bun.spawnSync(args, { cwd, stdout: 'inherit', stderr: 'inherit' })
-      if (r.exitCode !== 0) { console.error(chalk.red(`git ${args[0]} failed`)); process.exit(1) }
-    }
-    run(['git', 'clone', url, ...(dir ? [dir] : [])])
-    const repoDir = dir ?? repoArg.split('/').pop()!
-    if (identity?.apiToken) {
-      run(['git', 'config', `http.${opts.server}.extraHeader`, `Authorization: Bearer ${identity.apiToken}`], repoDir)
-      console.log('push access wired (your gild token). `git push` just works.')
-    } else {
-      console.log(chalk.dim('cloned read-only; run `gild token` and re-set the push header to push'))
-    }
-  })
+  .action(cloneAction)
+
+repoCmd
+  .command('clone')
+  .description('clone a forge repo (same as gild clone)')
+  .argument('<repo>', 'owner/name')
+  .argument('[dir]', 'directory')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(cloneAction)
 
 if (import.meta.main) program.parseAsync()
