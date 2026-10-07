@@ -63,7 +63,7 @@ export const eventPage = z.object({
   cursor: z.string(),
 })
 export const deliverySchema = z.object({
-  id: z.string(),
+  id: z.number().int().positive(),
   guid: z.string(),
   delivered_at: z.string().nullable(),
   redelivery: z.boolean(),
@@ -75,7 +75,8 @@ export const deliverySchema = z.object({
   attempts: z.number().int(),
   request: z.object({
     headers: z.record(z.string(), z.string()),
-    payload: z.string(),
+    payload: z.record(z.string(), z.unknown()),
+    wire: z.string(),
   }),
   response: z.object({
     headers: z.record(z.string(), z.string()),

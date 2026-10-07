@@ -33,7 +33,10 @@ export class GildClient {
     const path = route.path.replace(/\{(\w+)\}/g, (_, name: string) => {
       if (params[name] === undefined)
         throw new Error(`Missing path parameter: ${name}`)
-      return String(params[name]).split('/').map(encodeURIComponent).join('/')
+      const value = String(params[name])
+      return name === 'path' || name === 'ref'
+        ? value.split('/').map(encodeURIComponent).join('/')
+        : encodeURIComponent(value)
     })
     const url = new URL(this.baseURL.replace(/\/$/, '') + path)
     if (query)

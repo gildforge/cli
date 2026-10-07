@@ -289,7 +289,7 @@ function route<
           ? text.regex(/^[a-z0-9][a-z0-9-]{0,38}$/i)
           : m[1] === 'repo'
             ? text.regex(/^[a-z0-9][a-z0-9._-]{0,99}$/i)
-            : ['number', 'run', 'job', 'hook'].includes(m[1])
+            : ['number', 'run', 'job', 'hook', 'delivery'].includes(m[1])
               ? text.regex(/^[1-9][0-9]{0,14}$/)
               : text.min(1).max(4096),
       ]),
@@ -504,7 +504,7 @@ export const routes = [
     'POST',
     R + '/hooks/{hook}/deliveries/{delivery}/attempts',
     'hooks',
-    z.object({ id: text }),
+    z.object({ id: integer, guid: text }),
     empty,
     'no-store',
     false,
@@ -517,7 +517,7 @@ export const routes = [
     'POST',
     R + '/hooks/{hook}/pings',
     'hooks',
-    z.object({ id: text }),
+    z.object({ id: integer, guid: text }),
     empty,
     'no-store',
     false,
@@ -621,7 +621,7 @@ export const routes = [
     'POST',
     '/orgs/{org}' + '/hooks/{hook}/deliveries/{delivery}/attempts',
     'hooks',
-    z.object({ id: text }),
+    z.object({ id: integer, guid: text }),
     empty,
     'no-store',
     false,
@@ -634,7 +634,7 @@ export const routes = [
     'POST',
     '/orgs/{org}' + '/hooks/{hook}/pings',
     'hooks',
-    z.object({ id: text }),
+    z.object({ id: integer, guid: text }),
     empty,
     'no-store',
     false,
