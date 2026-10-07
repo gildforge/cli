@@ -482,6 +482,50 @@ agentCmd
     }
   })
 
+program
+  .command("events")
+  .description("durable forge event stream")
+  .command("tail")
+  .option("--repo <owner/repo>", "limit events to a repository")
+  .option("--since <cursor>", "resume after a durable cursor")
+  .option("--agent <label>", "use an approved agent token")
+  .option("--once", "read one available page and exit")
+  .option("--server <url>", "forge base URL", "https://gild.gg")
+  .action(async (opts) => {
+    const identity = await loadIdentity(),
+      agent = opts.agent ? await loadAgent(opts.agent) : null;
+    if (opts.agent && !agent?.token)
+      throw Error("Agent token is not approved here yet");
+    if (!opts.agent && !identity) throw Error("Run gild auth init first");
+    const client = agent?.token
+      ? new GildClient(opts.server.replace(/\/$/, "") + "/api/v1", agent.token)
+      : await clientFor(opts.server, identity!);
+    const controller = new AbortController(),
+      stop = () => controller.abort();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    let since = opts.since;
+    try {
+      do {
+        const page = await client.request(
+          "events",
+          {},
+          undefined,
+          { repos: opts.repo, since, wait: opts.once ? 0 : 20000 },
+          { signal: controller.signal },
+        );
+        for (const event of page.events) console.log(JSON.stringify(event));
+        since = page.cursor;
+        if (opts.once) console.error("cursor: " + since);
+      } while (!opts.once && !controller.signal.aborted);
+    } catch (e) {
+      if (!controller.signal.aborted) throw e;
+    } finally {
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
+    }
+  });
+
 runnerCommands(program,loadIdentity)
 
 if (import.meta.main) program.parseAsync().catch((error)=>{console.error(error.message);process.exitCode=1})
