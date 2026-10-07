@@ -394,4 +394,123 @@ authCmd
     console.log('Any clone works now — plain `git clone`, CI, scripts. Rotate any time with `gild auth token`.')
   })
 
+// ---------- agents: ask to join, wait for a person to approve ----------
+
+const agentSchema = z.object({
+  schema: z.literal(1),
+  name: z.string(),              // sponsor/label
+  server: z.string(),
+  publicKey: z.string(),
+  secretKey: z.string(),
+  requestId: z.string(),
+  token: z.string().nullable().default(null),
+  createdAt: z.string(),
+})
+type AgentIdentity = z.infer<typeof agentSchema>
+
+const agentsDir = () => join(configDir(), 'agents')
+const agentPath = (label: string) => join(agentsDir(), `${label}.json`)
+
+/** What an agent signs to collect its token. Must match the server. */
+export const agentJoinChallenge = (requestId: string) => `gild-agent-join:${requestId}`
+
+async function saveAgent(label: string, agent: AgentIdentity) {
+  await mkdir(agentsDir(), { recursive: true, mode: 0o700 })
+  await chmod(configDir(), 0o700)
+  const temp = `${agentPath(label)}.${process.pid}.tmp`
+  await writeFile(temp, JSON.stringify(agentSchema.parse(agent), null, 2) + '\n', { mode: 0o600 })
+  await rename(temp, agentPath(label))
+}
+
+async function loadAgent(label: string): Promise<AgentIdentity | null> {
+  try { return agentSchema.parse(JSON.parse(await readFile(agentPath(label), 'utf8'))) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+}
+
+const agentCmd = program
+  .command('agent')
+  .description('agent accounts: an agent asks to join, a person approves (like adding a machine to a tailnet)')
+
+agentCmd
+  .command('join <label>')
+  .description('ask to work for someone as @<sponsor>/<label>; prints an approval link and waits')
+  .requiredOption('--sponsor <name>', 'the person you work for (their gild name)')
+  .option('--repo <owner/name>', 'a repo you want to work in')
+  .option('--grants <list>', 'what you ask for there: pr, review, queue (comma separated)', 'pr')
+  .option('--note <text>', 'why, in a sentence the approver will read')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .option('--no-wait', 'file the request and exit; run `gild agent join` again later to collect')
+  .action(async (label: string, opts) => {
+    const server = (opts.server as string).replace(/\/$/, '')
+    let agent = await loadAgent(label)
+    if (!agent || agent.token) {
+      if (agent?.token) { console.log(chalk.yellow(`@${agent.name} has already joined. Its token: gild agent token ${label}`)); return }
+      const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+      const pub = `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`
+      const res = await fetch(`${server}/api/agents/requests`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sponsor: opts.sponsor, label, publicKey: pub, repo: opts.repo,
+          grants: String(opts.grants ?? '').split(',').map((g: string) => g.trim()).filter(Boolean), note: opts.note,
+        }),
+      })
+      const data = await res.json().catch(() => ({})) as { id?: string; agent?: string; approveUrl?: string; error?: string }
+      if (!res.ok || !data.id) { console.error(chalk.red(data.error ?? `request failed (${res.status})`)); process.exitCode = 1; return }
+      agent = {
+        schema: 1, name: data.agent!, server, publicKey: pub, token: null, requestId: data.id, createdAt: new Date().toISOString(),
+        secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
+      }
+      await saveAgent(label, agent)
+      console.log(`Asked @${opts.sponsor} to approve ${chalk.bold('@' + agent.name)}.`)
+      console.log(`Approve here: ${chalk.cyan(data.approveUrl)}`)
+    } else {
+      console.log(`Still waiting on @${agent.name.split('/')[0]}: ${chalk.cyan(`${agent.server}/agents/approve/${agent.requestId}`)}`)
+    }
+    if (opts.wait === false) return
+
+    // Poll by proving the key; the token comes back once, on approval.
+    const signature = signChallenge(agent as unknown as Identity, agentJoinChallenge(agent.requestId))
+    for (const started = Date.now(); Date.now() - started < 60 * 60 * 1000;) {
+      const res = await fetch(`${agent.server}/api/agents/requests/${agent.requestId}/token`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signature }),
+      })
+      const data = await res.json().catch(() => ({})) as { status?: string; token?: string; repo?: string; grants?: string[]; error?: string }
+      if (res.status >= 500) { await Bun.sleep(5000); continue } // the forge is briefly unavailable: keep waiting
+      if (!res.ok) { console.error(chalk.red(data.error ?? `check failed (${res.status})`)); process.exitCode = 1; return }
+      if (data.status === 'approved' && data.token) {
+        await saveAgent(label, { ...agent, token: data.token })
+        console.log(chalk.green(`Approved. You are @${agent.name}.`) + (data.repo && data.grants?.length ? ` In ${data.repo} you may: ${data.grants.join(', ')}.` : ''))
+        console.log(`Use the token for git (any username) and the API: ${chalk.bold(`gild agent token ${label}`)}`)
+        return
+      }
+      if (data.status === 'denied' || data.status === 'expired') {
+        console.error(chalk.red(`The request was ${data.status}.`)); process.exitCode = 1; return
+      }
+      await Bun.sleep(3000)
+    }
+    console.error(chalk.yellow('Still waiting after an hour. Run the same command again to keep waiting.'))
+  })
+
+agentCmd
+  .command('token <label>')
+  .description('print an approved agent\'s API token (for git and Authorization: Bearer)')
+  .action(async (label: string) => {
+    const agent = await loadAgent(label)
+    if (!agent?.token) { console.error(`No approved agent named ${label} on this machine. Run gild agent join ${label} --sponsor <name>.`); process.exitCode = 1; return }
+    console.log(agent.token)
+  })
+
+agentCmd
+  .command('list')
+  .description('agents on this machine')
+  .action(async () => {
+    const { readdir } = await import('node:fs/promises')
+    const files = await readdir(agentsDir()).catch(() => [] as string[])
+    if (!files.length) { console.log('No agents on this machine. Ask to join with gild agent join <label> --sponsor <name>.'); return }
+    for (const f of files.filter((x) => x.endsWith('.json'))) {
+      const a = await loadAgent(f.replace(/\.json$/, ''))
+      if (a) console.log(`@${a.name}  ${a.token ? chalk.green('approved') : chalk.yellow('waiting')}  ${fingerprint(a.publicKey)}`)
+    }
+  })
+
 if (import.meta.main) program.parseAsync()
