@@ -6,6 +6,7 @@ const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const identity = {
   schema: 1 as const,
   name: null,
+  apiToken: null,
   device: 'test',
   publicKey: `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`,
   secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),

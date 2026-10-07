@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import pkg from '../package.json'
+import { runnerCommands } from './runner'
 
 // ---------- identity storage (~/.config/gild/identity.json, mode 0600) ----------
 
@@ -62,7 +63,7 @@ async function saveIdentity(identity: Identity) {
 
 export function signChallenge(identity: Identity, challenge: string): string {
   const secret = Buffer.from(identity.secretKey, 'base64')
-  const key = { key: secret, format: 'der', type: 'pkcs8' as const }
+  const key = { key: secret, format: 'der' as const, type: 'pkcs8' as const }
   return cryptoSign(null, Buffer.from(challenge, 'utf8'), key).toString('base64')
 }
 
@@ -137,6 +138,7 @@ authCmd
     const identity: Identity = {
       schema: 1,
       name: null,
+      apiToken: null,
       device: answers.device,
       publicKey: `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`,
       secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
@@ -513,4 +515,6 @@ agentCmd
     }
   })
 
-if (import.meta.main) program.parseAsync()
+runnerCommands(program,loadIdentity)
+
+if (import.meta.main) program.parseAsync().catch((error)=>{console.error(error.message);process.exitCode=1})
