@@ -1,3 +1,4 @@
+import { GildClient,requestPath } from './api/client'
 import {
   chmod,
   mkdir,
@@ -93,23 +94,9 @@ export async function request(
   body?: unknown,
   method = 'POST',
 ): Promise<any> {
-  const res = await fetch(
-    `${config.server}/api/repos/${config.repo}/actions/${path}`,
-    {
-      method,
-      headers: {
-        authorization: `Bearer ${config.token}`,
-        'content-type': 'application/json',
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-      redirect: 'error',
-    },
-  )
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok)
-    throw new Error(`runner ${path}: ${data.error ?? `HTTP ${res.status}`}`)
-  return data
+  const client=new GildClient(config.server.replace(/\/$/,'')+'/api/v1',config.token)
+  return requestPath(client,method,`/repos/${config.repo}/actions/${path || 'runners'}`,body)
+
 }
 const delay = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done) => {
@@ -854,9 +841,9 @@ export function runnerCommands(
     .action(async (opts) => {
       for (const r of await listRunners(opts.configDir)) {
         const view = await request(r, '', undefined, 'GET'),
-          live = view.runners.find((x: { id: string }) => x.id === r.id)
+          live = view.runners.find((x: { gild_id: string }) => x.gild_id === r.id)
         console.log(
-          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.job ? `busy · run #${live.run}` : 'idle') : 'removed'}`,
+          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? 'busy' : 'idle') : 'removed'}`,
         )
       }
     })

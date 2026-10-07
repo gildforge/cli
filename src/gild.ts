@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { ApiRequestError,GildClient } from './api/client'
+import { ProofClient } from './api/bootstrap-contract'
 /** gild — key-first identity for the forge. One Bun/TypeScript entry point,
  *  also compiled into a standalone executable (bun build --compile). */
 import { Command } from 'commander'
@@ -26,7 +28,8 @@ const identitySchema = z.object({
 })
 type Identity = z.infer<typeof identitySchema>
 
-const configDir = () => join(homedir(), '.config', 'gild')
+let identityDirectory:string|undefined
+const configDir = () => identityDirectory ?? join(homedir(), '.config', 'gild')
 const identityPath = () => join(configDir(), 'identity.json')
 
 export const fingerprint = (publicKey: string) =>
@@ -72,18 +75,16 @@ export function verifyChallenge(publicKey: string, challenge: string, signature:
   return cryptoVerify(null, Buffer.from(challenge, 'utf8'), { key: pub, format: 'der', type: 'spki' }, Buffer.from(signature, 'base64'))
 }
 
-/** Every mutating API call proves the key: fetch a challenge, sign it, send. */
-export async function signedCall(server: string, path: string, identity: Identity, extra: Record<string, unknown> = {}) {
-  const chRes = await fetch(`${server}/api/auth/challenge`, { method: 'POST' })
-  const { challenge } = await chRes.json() as { challenge: string }
-  const signature = signChallenge(identity, challenge)
-  const res = await fetch(`${server}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ challenge, publicKey: identity.publicKey, signature, ...extra }),
-  })
-  const data = await res.json().catch(() => ({}))
-  return { ok: res.ok, status: res.status, data }
+/** Initial token mint proves the key; subsequent calls use scoped API v1 tokens. */
+export async function signedCall(server:string,path:string,identity:Identity,extra:Record<string,unknown>={}) {
+  const proof=new ProofClient(server),{challenge}=await proof.request('challenge',{})
+  if(path!=='/api/tokens')throw new Error('Use the scoped v1 client for forge writes')
+  const data=await proof.request('token',{challenge,publicKey:identity.publicKey,signature:signChallenge(identity,challenge)})
+  return {ok:true,status:200,data}
+}
+async function clientFor(server:string,identity:Identity) {
+  if(!identity.apiToken) {const result=await signedCall(server,'/api/tokens',identity);identity.apiToken=result.data.token;await saveIdentity(identity)}
+  return new GildClient(server.replace(/\/$/,'')+'/api/v1',identity.apiToken)
 }
 
 /** Register gild as git's credential helper for the forge host, so every
@@ -100,6 +101,8 @@ export function ensureGitHelper(server = 'https://gild.gg'): boolean {
 // ---------- commands ----------
 
 const program = new Command()
+  .option('--config-dir <path>','identity directory (default: ~/.config/gild)')
+  .hook('preAction',(_,command)=>{identityDirectory=command.optsWithGlobals().configDir;if(command.parent?.name()==='runner')command.setOptionValue('configDir',identityDirectory ?? join(homedir(),'.config','gild'))})
 program.name('gild').description('gild — key-first identity for the forge').version(pkg.version)
 
 const authCmd = program
@@ -197,16 +200,7 @@ authCmd
 
     const signature = signChallenge(identity, challenge)
     const server = opts.server as string
-    const res = await fetch(`${server}/api/auth/answer`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ challenge, publicKey: identity.publicKey, signature }),
-    })
-    if (!res.ok) {
-      console.error(chalk.red(`The forge rejected the answer (${res.status}).`))
-      process.exitCode = 1
-      return
-    }
+    await new ProofClient(server).request('answer',{challenge,publicKey:identity.publicKey,signature})
     console.log(chalk.green('Signed and sent. The browser tab should open your session now.'))
   })
 
@@ -220,17 +214,7 @@ authCmd
     if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
 
     const signature = signChallenge(identity, challenge)
-    const res = await fetch(`${opts.server}/api/claim/answer`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ challenge, publicKey: identity.publicKey, signature }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      console.error(chalk.red(`The forge rejected the claim (${res.status}): ${data.error ?? 'unknown'}`))
-      process.exitCode = 1
-      return
-    }
+    const data=await new ProofClient(opts.server).request('claim',{challenge,publicKey:identity.publicKey,signature})
     identity.name = data.name
     await saveIdentity(identity)
     console.log(chalk.green(`@${data.name} is yours.`))
@@ -244,7 +228,6 @@ authCmd
     const identity = await loadIdentity()
     if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
     const { ok, status, data } = await signedCall(opts.server, '/api/tokens', identity)
-    if (!ok) { console.error(chalk.red(`token mint failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
     identity.apiToken = data.token
     await saveIdentity(identity)
     const gitWired = ensureGitHelper(opts.server)
@@ -268,10 +251,10 @@ repoCmd
     const [owner, name] = nameArg.includes('/')
       ? [nameArg.split('/')[0], nameArg.split('/').slice(1).join('/')]
       : [undefined, nameArg]
-    const { ok, status, data } = await signedCall(opts.server, '/api/repos', identity, { name, owner, description: opts.description })
-    if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
-    console.log(chalk.green(`created ${data.owner}/${data.name}`))
-    console.log(`  clone: gild clone ${data.owner}/${data.name}`)
+    const client=await clientFor(opts.server,identity)
+    const data=owner ? await client.request('createOrgRepository',{org:owner},{name,description:opts.description}) : await client.request('createRepository',{},{name,description:opts.description})
+    console.log(chalk.green(`created ${data.full_name}`))
+    console.log(`  clone: gild clone ${data.full_name}`)
   })
 
 const orgCmd = program
@@ -287,8 +270,7 @@ orgCmd
   .action(async (name, opts) => {
     const identity = await loadIdentity()
     if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
-    const { ok, status, data } = await signedCall(opts.server, '/api/orgs', identity, { name, description: opts.description })
-    if (!ok) { console.error(chalk.red(`create failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    const data=await (await clientFor(opts.server,identity)).request('createOrg',{},{name,description:opts.description})
     console.log(chalk.green(`created org @${data.name}`))
     console.log(`  add a repo: gild repo create ${data.name}/<repo>`)
     console.log(`  add a member: gild org add-member ${data.name} <user>`)
@@ -301,11 +283,9 @@ orgCmd
   .action(async (opts) => {
     const identity = await loadIdentity()
     if (!identity?.apiToken) { console.error('Run `gild auth token` first — listing needs your API token.'); process.exitCode = 1; return }
-    const res = await fetch(`${opts.server}/api/orgs`, { headers: { authorization: `Bearer ${identity.apiToken}` } })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) { console.error(chalk.red(`list failed (${res.status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
-    if (!data.orgs?.length) { console.log('No orgs yet. `gild org create <name>` makes one.'); return }
-    for (const o of data.orgs) console.log(`@${o.name}  ${chalk.dim(o.role)}${o.description ? `  ${o.description}` : ''}`)
+    const orgs=await (await clientFor(opts.server,identity)).request('orgs')
+    if(!orgs.length) {console.log('No orgs yet. `gild org create <name>` makes one.');return}
+    for(const o of orgs)console.log(`@${o.name}  ${chalk.dim(o.role)}${o.description ? `  ${o.description}` : ''}`)
   })
 
 orgCmd
@@ -318,8 +298,7 @@ orgCmd
   .action(async (org, user, opts) => {
     const identity = await loadIdentity()
     if (!identity) { console.error('No identity here yet. Run `gild auth init` first.'); process.exitCode = 1; return }
-    const { ok, status, data } = await signedCall(opts.server, `/api/orgs/${org}/members`, identity, { member: user, role: opts.role })
-    if (!ok) { console.error(chalk.red(`add-member failed (${status}): ${data.error ?? 'unknown'}`)); process.exitCode = 1; return }
+    const data=await (await clientFor(opts.server,identity)).request('addOrgMember',{org},{member:user,role:opts.role})
     console.log(chalk.green(`@${data.member} is now ${data.role} of @${data.org}`))
   })
 
@@ -449,15 +428,7 @@ agentCmd
       if (agent?.token) { console.log(chalk.yellow(`@${agent.name} has already joined. Its token: gild agent token ${label}`)); return }
       const { publicKey, privateKey } = generateKeyPairSync('ed25519')
       const pub = `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`
-      const res = await fetch(`${server}/api/agents/requests`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sponsor: opts.sponsor, label, publicKey: pub, repo: opts.repo,
-          grants: String(opts.grants ?? '').split(',').map((g: string) => g.trim()).filter(Boolean), note: opts.note,
-        }),
-      })
-      const data = await res.json().catch(() => ({})) as { id?: string; agent?: string; approveUrl?: string; error?: string }
-      if (!res.ok || !data.id) { console.error(chalk.red(data.error ?? `request failed (${res.status})`)); process.exitCode = 1; return }
+      const data=await new ProofClient(server).request('join',{sponsor:opts.sponsor,label,publicKey:pub,repo:opts.repo,grants:String(opts.grants ?? '').split(',').map((g:string)=>g.trim()).filter(Boolean),note:opts.note})
       agent = {
         schema: 1, name: data.agent!, server, publicKey: pub, token: null, requestId: data.id, createdAt: new Date().toISOString(),
         secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
@@ -473,12 +444,8 @@ agentCmd
     // Poll by proving the key; the token comes back once, on approval.
     const signature = signChallenge(agent as unknown as Identity, agentJoinChallenge(agent.requestId))
     for (const started = Date.now(); Date.now() - started < 60 * 60 * 1000;) {
-      const res = await fetch(`${agent.server}/api/agents/requests/${agent.requestId}/token`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signature }),
-      })
-      const data = await res.json().catch(() => ({})) as { status?: string; token?: string; repo?: string; grants?: string[]; error?: string }
-      if (res.status >= 500) { await Bun.sleep(5000); continue } // the forge is briefly unavailable: keep waiting
-      if (!res.ok) { console.error(chalk.red(data.error ?? `check failed (${res.status})`)); process.exitCode = 1; return }
+      let data:{status:string;name?:string;token?:string;repo?:string|null;grants?:string[]}
+      try {data=await new ProofClient(agent.server).request('collect',{signature},{id:agent.requestId})}catch(error){if(error instanceof ApiRequestError && error.status>=500){await Bun.sleep(5000);continue}throw error}
       if (data.status === 'approved' && data.token) {
         await saveAgent(label, { ...agent, token: data.token })
         console.log(chalk.green(`Approved. You are @${agent.name}.`) + (data.repo && data.grants?.length ? ` In ${data.repo} you may: ${data.grants.join(', ')}.` : ''))
