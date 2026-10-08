@@ -1,0 +1,7 @@
+[
+  {
+    "behavior": "token-routing",
+    "exit": 1,
+    "assertionFailure": true
+  }
+]

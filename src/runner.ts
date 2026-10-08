@@ -1,4 +1,9 @@
-import { GildClient,requestPath } from './api/client'
+import {
+  serverTokenSchema,
+  tokenForServer,
+  type ServerToken,
+} from './server-token'
+import { GildClient, requestPath } from './api/client'
 import {
   chmod,
   mkdir,
@@ -94,9 +99,16 @@ export async function request(
   body?: unknown,
   method = 'POST',
 ): Promise<any> {
-  const client=new GildClient(config.server.replace(/\/$/,'')+'/api/v1',config.token)
-  return requestPath(client,method,`/repos/${config.repo}/actions/${path || 'runners'}`,body)
-
+  const client = new GildClient(
+    config.server.replace(/\/$/, '') + '/api/v1',
+    config.token,
+  )
+  return requestPath(
+    client,
+    method,
+    `/repos/${config.repo}/actions/${path || 'runners'}`,
+    body,
+  )
 }
 const delay = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done) => {
@@ -724,18 +736,18 @@ export async function startRunner(
 }
 async function runnerIdentity(
   root: string,
-  load: () => Promise<{ apiToken?: string | null } | null>,
+  load: () => Promise<{ apiToken?: ServerToken | null } | null>,
 ) {
   if (resolve(root) === resolve(configRoot())) return load()
   const file = join(root, 'identity.json')
   await chmod(file, 0o600)
   return z
-    .object({ apiToken: z.string().startsWith('gf_') })
+    .object({ apiToken: serverTokenSchema })
     .parse(JSON.parse(await readFile(file, 'utf8')))
 }
 export function runnerCommands(
   program: Command,
-  loadIdentity: () => Promise<{ apiToken?: string | null } | null>,
+  loadIdentity: () => Promise<{ apiToken?: ServerToken | null } | null>,
 ) {
   const runner = program
     .command('runner')
@@ -788,7 +800,11 @@ export function runnerCommands(
           labels,
         }
       const result = await request(
-        { server: server.origin, repo: opts.repo, token: identity.apiToken },
+        {
+          server: server.origin,
+          repo: opts.repo,
+          token: tokenForServer(identity.apiToken, server.origin),
+        },
         'runners',
         base,
       )
@@ -841,9 +857,41 @@ export function runnerCommands(
     .action(async (opts) => {
       for (const r of await listRunners(opts.configDir)) {
         const view = await request(r, '', undefined, 'GET'),
-          live = view.runners.find((x: { gild_id: string }) => x.gild_id === r.id)
+          live = view.runners.find(
+            (x: { gild_id: string }) => x.gild_id === r.id,
+          )
+        let run: number | undefined
+        if (live?.busy) {
+          const [owner, repo] = r.repo.split('/')
+          const client = new GildClient(
+            r.server.replace(/\/$/, '') + '/api/v1',
+            r.token,
+          )
+          const overview = await client.request('actionOverview', {
+            owner,
+            repo,
+          })
+          for (const active of overview.workflow_runs.filter(
+            (x: { status: string }) => x.status === 'in_progress',
+          )) {
+            const jobs = await client.request('actionJobs', {
+              owner,
+              repo,
+              run: active.id,
+            })
+            if (
+              jobs.jobs.some(
+                (job: { status: string; runner_id: number | null }) =>
+                  job.status === 'in_progress' && job.runner_id === live.id,
+              )
+            ) {
+              run = active.run_number
+              break
+            }
+          }
+        }
         console.log(
-          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? 'busy' : 'idle') : 'removed'}`,
+          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? `busy${run === undefined ? '' : ` · run #${run}`}` : 'idle') : 'removed'}`,
         )
       }
     })
@@ -855,7 +903,7 @@ export function runnerCommands(
         identity = await runnerIdentity(opts.configDir, loadIdentity)
       if (!identity?.apiToken) throw new Error('run gild auth token first')
       await request(
-        { ...config, token: identity.apiToken },
+        { ...config, token: tokenForServer(identity.apiToken, config.server) },
         `runners/${config.id}`,
         undefined,
         'DELETE',
