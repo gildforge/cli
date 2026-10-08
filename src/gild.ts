@@ -4,6 +4,7 @@ import { ProofClient } from './api/bootstrap-contract'
 import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
 /** gild — key-first identity for the forge. One Bun/TypeScript entry point,
  *  also compiled into a standalone executable (bun build --compile). */
+import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
 import chalk from 'chalk'
 import inquirer from 'inquirer'
@@ -393,6 +394,7 @@ repoCmd
   .command('create')
   .argument('<name>', 'repo name, or owner/name to create under an org')
   .option('--description <text>', 'description')
+  .option('--private', 'create a private repository (free)')
   .option('--server <url>', 'forge base URL', 'https://gild.gg')
   .action(async (nameArg, opts) => {
     const identity = await loadIdentity()
@@ -409,15 +411,106 @@ repoCmd
       ? await client.request(
           'createOrgRepository',
           { org: owner },
-          { name, description: opts.description },
+          { name, description: opts.description, private: !!opts.private },
         )
       : await client.request(
           'createRepository',
           {},
-          { name, description: opts.description },
+          { name, description: opts.description, private: !!opts.private },
         )
     console.log(chalk.green(`created ${data.full_name}`))
     console.log(`  clone: gild clone ${data.full_name}`)
+  })
+
+async function repositoryClient(opts: { repo?: string; server: string }) {
+  const identity = await loadIdentity()
+  if (!identity) throw new Error('Run gild auth init first')
+  const remote =
+    opts.repo ??
+    spawnSync('git', ['remote', 'get-url', 'origin'], {
+      encoding: 'utf8',
+    }).stdout?.trim()
+  const pair = remote
+    ?.replace(/\.git$/, '')
+    .match(/(?:^|[/:])([a-z0-9-]+)\/([a-z0-9._-]+)$/i)
+  if (!pair)
+    throw new Error('Use --repo owner/name or run in a cloned repository')
+  return {
+    client: await clientFor(opts.server, identity),
+    params: { owner: pair[1], repo: pair[2] },
+  }
+}
+repoCmd
+  .command('visibility')
+  .argument('<visibility>', 'public | private')
+  .option('--repo <owner/name>', 'repository (defaults to origin)')
+  .option('--confirm <owner/name>', 'explicit confirmation when publishing')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (visibility, opts) => {
+    if (!['public', 'private'].includes(visibility))
+      throw new Error('Choose public or private')
+    const { client, params } = await repositoryClient(opts)
+    let confirm = opts.confirm
+    if (visibility === 'public' && !confirm) {
+      const answer = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'confirm',
+          message: `Publishing exposes all repository data. Type ${params.owner}/${params.repo} to confirm:`,
+        },
+      ])
+      confirm = answer.confirm
+    }
+    const result = await client.request('setRepoVisibility', params, {
+      visibility,
+      confirm,
+    })
+    console.log(`${params.owner}/${params.repo} is ${result.visibility}`)
+  })
+const collaboratorsCmd = repoCmd
+  .command('collaborators')
+  .description('invite and manage collaborators')
+collaboratorsCmd
+  .command('add')
+  .argument('<name>', 'gild name')
+  .option('--role <role>', 'read | write', 'read')
+  .option('--repo <owner/name>', 'repository (defaults to origin)')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (name, opts) => {
+    if (!['read', 'write'].includes(opts.role))
+      throw new Error('Choose read or write')
+    const { client, params } = await repositoryClient(opts)
+    await client.request(
+      'addCollaborator',
+      { ...params, username: name.replace(/^@/, '') },
+      { permission: opts.role },
+    )
+    console.log(`Invited @${name.replace(/^@/, '')} with ${opts.role} access`)
+  })
+collaboratorsCmd
+  .command('rm')
+  .argument('<name>', 'gild name')
+  .option('--repo <owner/name>', 'repository (defaults to origin)')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (name, opts) => {
+    const { client, params } = await repositoryClient(opts)
+    await client.request('removeCollaborator', {
+      ...params,
+      username: name.replace(/^@/, ''),
+    })
+    console.log(`Removed @${name.replace(/^@/, '')}`)
+  })
+collaboratorsCmd
+  .command('ls')
+  .option('--repo <owner/name>', 'repository (defaults to origin)')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async (opts) => {
+    const { client, params } = await repositoryClient(opts),
+      result = await client.request('collaborators', params)
+    for (const c of result.collaborators)
+      console.log(`@${c.login}  ${c.permission}`)
+    for (const i of result.invitations)
+      console.log(`@${i.invitee}  ${i.permission}  pending`)
   })
 
 const orgCmd = program
