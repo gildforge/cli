@@ -3,3 +3,6 @@ src/api/client.ts
 src/api/bootstrap-contract.ts
 src/api/scopes.ts
 src/api/*-contract.ts
+src/import/source.ts
+src/public-address.ts
+src/actions/support.ts

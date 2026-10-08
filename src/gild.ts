@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { importCommands } from './import/commands'
 import { ApiRequestError, GildClient } from './api/client'
 import { ProofClient } from './api/bootstrap-contract'
 import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
@@ -389,6 +390,15 @@ authCmd
   })
 
 const repoCmd = program.command('repo').description('forge repositories')
+importCommands(
+  repoCmd,
+  async (server) => {
+    const identity = await loadIdentity()
+    if (!identity) throw Error('Run gild auth init first')
+    return clientFor(server, identity)
+  },
+  configDir,
+)
 
 repoCmd
   .command('create')

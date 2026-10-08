@@ -1,0 +1,255 @@
+import { test, expect } from 'bun:test'
+import { createServer } from 'node:http'
+import { spawn, execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { NativeImport } from './import/git'
+import { fixture, cli } from './test-cli'
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+test('native import preserves full history, branches, annotated tags, default branch and source _meta without replacing gild ACL', async () => {
+  await mkdir('.tmp', { recursive: true })
+  const root = await mkdtemp(resolve('.tmp/import-git-')),
+    source = join(root, 'source.git'),
+    target = join(root, 'target.git')
+  await mkdir(source)
+  git(source, 'init', '-b', 'trunk')
+  git(source, 'config', 'receive.denyCurrentBranch', 'ignore')
+  for (let i = 0; i < 4; i++) {
+    await writeFile(join(source, 'README'), String(i))
+    git(source, 'add', '.')
+    git(source, '-c', 'commit.gpgsign=false', 'commit', '-m', `commit ${i}`)
+  }
+  git(source, 'branch', 'topic/x')
+  git(source, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v1', '-m', 'tag')
+  git(source, 'switch', '--orphan', '_meta')
+  await writeFile(join(source, 'ACL'), 'source')
+  git(source, 'add', '.')
+  git(source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'source meta')
+  git(source, 'switch', 'trunk')
+  await mkdir(target)
+  git(target, 'init', '-b', 'main')
+  git(target, 'config', 'receive.denyCurrentBranch', 'ignore')
+  git(target, 'config', 'receive.denyDeleteCurrent', 'ignore')
+  await writeFile(join(target, 'README'), 'seed')
+  git(target, 'add', '.')
+  git(target, '-c', 'commit.gpgsign=false', 'commit', '-m', 'seed')
+  git(target, 'branch', '_meta')
+  const protectedMeta = git(target, 'rev-parse', '_meta')
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, 'http://localhost'),
+      dir = url.pathname.startsWith('/source.git') ? source : target,
+      service =
+        url.searchParams.get('service') ?? url.pathname.split('/').at(-1)!,
+      advertise = url.pathname.endsWith('info/refs')
+    if (!['git-upload-pack', 'git-receive-pack'].includes(service)) {
+      res.writeHead(404).end()
+      return
+    }
+    res.setHeader(
+      'Content-Type',
+      advertise
+        ? `application/x-${service}-advertisement`
+        : `application/x-${service}-result`,
+    )
+    if (advertise) {
+      const head = `# service=${service}\n`
+      res.write((head.length + 4).toString(16).padStart(4, '0') + head + '0000')
+    }
+    const child = spawn(
+      'git',
+      [
+        service.slice(4),
+        '--stateless-rpc',
+        ...(advertise ? ['--advertise-refs'] : []),
+        dir,
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+    req.pipe(child.stdin)
+    child.stdout.pipe(res)
+    child.stderr.resume()
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const origin = `http://127.0.0.1:${(server.address() as any).port}`
+  const globalConfig = join(root, 'gitconfig')
+  await writeFile(
+    globalConfig,
+    `[url "${origin}/source.git"]\n insteadOf = https://source.fixture.test/source.git\n`,
+  )
+  const before = process.env.GIT_CONFIG_GLOBAL
+  process.env.GIT_CONFIG_GLOBAL = globalConfig
+  try {
+    const importer = new NativeImport({
+      source: 'https://source.fixture.test/source.git',
+      sourceToken: 'source-token-marker',
+      directory: join(root, 'mirror.git'),
+      signal: new AbortController().signal,
+      resolveHost: async () => ['140.82.112.3'],
+      credentials: async () => ({
+        url: origin + '/target.git',
+        token: 'import-marker',
+      }),
+      progress: () => {},
+    })
+    expect(await importer.fetch()).toBe('trunk')
+    const stats = await importer.push()
+    expect(stats.branches).toBe(3)
+    expect(stats.tags).toBe(1)
+    expect(stats.commits).toBe(5)
+    expect(git(target, 'rev-parse', '_meta')).toBe(protectedMeta)
+    for (const ref of [
+      'refs/heads/trunk',
+      'refs/heads/topic/x',
+      'refs/tags/v1',
+    ])
+      expect(git(target, 'rev-parse', ref)).toBe(git(source, 'rev-parse', ref))
+    expect(git(target, 'rev-parse', 'import/source/_meta')).toBe(
+      git(source, 'rev-parse', '_meta'),
+    )
+    expect(git(target, 'rev-list', '--count', 'trunk')).toBe('4')
+    expect(git(target, 'branch', '--list', 'main')).toBe('')
+    expect(
+      await readFile(join(root, 'mirror.git/config'), 'utf8'),
+    ).not.toContain('source-token-marker')
+    expect(
+      await readFile(join(root, 'mirror.git/config'), 'utf8'),
+    ).not.toContain('import-marker')
+    const first = git(target, 'rev-parse', 'trunk')
+    expect(await importer.fetch()).toBe('trunk')
+    await importer.push()
+    expect(git(target, 'rev-parse', 'trunk')).toBe(first)
+    const privateSource = new NativeImport({
+      ...importer.options,
+      resolveHost: async () => ['192.168.1.1'],
+    })
+    await expect(privateSource.fetch()).rejects.toThrow('public addresses')
+  } finally {
+    if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL
+    else process.env.GIT_CONFIG_GLOBAL = before
+    await new Promise<void>((r) => server.close(() => r()))
+    await rm(root, { recursive: true, force: true })
+  }
+})
+test('CLI status, resume and cutover use the canonical import contract', async () => {
+  const seen: string[] = [],
+    status = {
+      repository: 'alice/demo',
+      source: 'https://github.com/a/b',
+      mirror: true,
+      state: 'mirroring',
+      progress: { phase: 'metadata', completed: 4, message: 'Imported' },
+      warnings: [],
+      error: null,
+      updated_at: '2020-01-01',
+      next_sync: '2020-01-02',
+    }
+  const f = await fixture(async (req) => {
+    seen.push(new URL(req.url).pathname)
+    return Response.json(
+      new URL(req.url).pathname.endsWith('/claim') ? null : status,
+    )
+  })
+  try {
+    await f.identity()
+    for (const op of ['import-status', 'resume', 'cutover']) {
+      const r = await cli(f.root, [
+        'repo',
+        op,
+        'alice/demo',
+        '--server',
+        f.origin,
+      ])
+      expect(r.code).toBe(0)
+    }
+    expect(seen).toEqual([
+      '/api/v1/repos/alice/demo/import',
+      '/api/v1/repos/alice/demo/import/retry',
+      '/api/v1/repos/alice/demo/import/claim',
+      '/api/v1/repos/alice/demo/import/cutover',
+    ])
+  } finally {
+    await f.close()
+  }
+})
+
+test('a transient indexing response retries the real import RPC while revocation remains final', async () => {
+  const { retryImport } = await import('./import/retry')
+  const { GildClient } = await import('./api/client')
+  let calls = 0,
+    revoked = false
+  const server = createServer((_req, res) => {
+    calls++
+    res
+      .writeHead(revoked ? 401 : calls === 1 ? 503 : 200, {
+        'content-type': 'application/json',
+      })
+      .end(
+        JSON.stringify(
+          revoked
+            ? { message: 'Import lease expired or revoked' }
+            : calls === 1
+              ? { message: 'Repository is indexing; retry shortly' }
+              : { ok: true },
+        ),
+      )
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  try {
+    const client = new GildClient(
+        `http://127.0.0.1:${(server.address() as any).port}/api/v1`,
+        'fixture',
+      ),
+      result = await retryImport(
+        () =>
+          client.request(
+            'importBatch',
+            { owner: 'o', repo: 'r' },
+            {
+              records: [],
+              progress: { phase: 'metadata', completed: 0, message: 'Retry' },
+            },
+          ),
+        new AbortController().signal,
+        () => {},
+      )
+    expect(result.ok).toBe(true)
+    expect(calls).toBe(2)
+    revoked = true
+    await expect(
+      retryImport(
+        () =>
+          client.request(
+            'importBatch',
+            { owner: 'o', repo: 'r' },
+            {
+              records: [],
+              progress: { phase: 'metadata', completed: 0, message: 'Revoked' },
+            },
+          ),
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toMatchObject({ status: 401 })
+    expect(calls).toBe(3)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('source REST refuses literal internal destinations before opening a connection', async () => {
+  const { publicFetch } = await import('./import/http')
+  await expect(
+    publicFetch('http://127.0.0.1/api/v4/projects/x'),
+  ).rejects.toThrow('public addresses')
+  await expect(
+    publicFetch('https://169.254.169.254/latest/meta-data'),
+  ).rejects.toThrow('public addresses')
+  await expect(publicFetch('file:///etc/passwd')).rejects.toThrow(
+    'Invalid source API URL',
+  )
+})

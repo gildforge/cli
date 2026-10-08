@@ -1,3 +1,5 @@
+import { actionSupport } from './actions/support'
+import { executeImport } from './import/execute'
 import { runnerService } from './runner-service'
 import {
   serverTokenSchema,
@@ -647,16 +649,11 @@ export async function executeJob(
             Math.min(s.timeout, job.timeout),
           )
         } else {
+          const support = actionSupport(s.uses!, s.with)
+          if (support.error) throw Error(support.error)
           const action = s.uses!.split('@')[0].toLowerCase(),
             tool = toolCheck(s.uses!, s.with)
           if (action === 'actions/checkout') {
-            const unsupported = Object.keys(s.with).filter(
-              (k) => !['fetch-depth', 'persist-credentials'].includes(k),
-            )
-            if (unsupported.length)
-              throw new Error(
-                `gild checkout does not support: ${unsupported.join(', ')}`,
-              )
             await log.line(
               `[gild: already checked out ${job.sha} through gild; credentials are not persisted]`,
             )
@@ -669,34 +666,6 @@ export async function executeJob(
             )
             exit = 0
           } else if (tool) {
-            const actionInputs: Record<string, string[]> = {
-              'actions/setup-node': [
-                'node-version',
-                'cache',
-                'cache-dependency-path',
-              ],
-              'oven-sh/setup-bun': ['bun-version'],
-              'actions/setup-go': [
-                'go-version',
-                'cache',
-                'cache-dependency-path',
-              ],
-              'dtolnay/rust-toolchain': ['toolchain', 'components', 'targets'],
-              'actions-rs/toolchain': [
-                'toolchain',
-                'components',
-                'targets',
-                'override',
-                'profile',
-              ],
-            }
-            const unsupported = Object.keys(s.with).filter(
-              (k) => !actionInputs[action]?.includes(k),
-            )
-            if (unsupported.length)
-              throw new Error(
-                `gild ${action} does not support: ${unsupported.join(', ')}`,
-              )
             if (s.with.cache)
               await log.line(
                 '[gild: dependency cache options are a no-op on this machine]',
@@ -721,15 +690,6 @@ export async function executeJob(
                 `[gild: ${tool.label}${tool.version ? ` ${tool.version}` : ''} is required on this machine; install it before starting the runner]`,
               )
               exit = 1
-            }
-            if (
-              action === 'dtolnay/rust-toolchain' ||
-              action === 'actions-rs/toolchain'
-            ) {
-              if (s.with.components || s.with.targets)
-                throw new Error(
-                  'gild toolchain checks do not support components or targets yet',
-                )
             }
           } else {
             await log.line(`gild doesn't run ${s.uses} yet`)
@@ -788,6 +748,29 @@ export async function startRunner(
   once = false,
 ) {
   while (!signal.aborted) {
+    if (config.scope === 'org' || config.scope === 'user') {
+      const api = new GildClient(
+        config.server.replace(/\/$/, '') + '/api/v1',
+        config.token,
+      )
+      const imported =
+        config.scope === 'org'
+          ? await api.request('importOrgPoll', { org: config.owner! })
+          : await api.request('importUserPoll', { name: config.owner! })
+      if (imported) {
+        let importStatus = 'success'
+        try {
+          await executeImport(config.server, imported, root, signal)
+        } catch {
+          importStatus = 'failure'
+          console.error(
+            'Import interrupted; check source access and resume the job',
+          )
+        }
+        if (once) return importStatus
+        continue
+      }
+    }
     const { job } = (await request(config, 'runners/poll', {})) as {
       job: Assignment | null
     }
