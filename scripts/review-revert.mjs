@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
 export function prove(name, file, mutate, tests, pattern) {
@@ -51,6 +51,24 @@ if (import.meta.main) {
       'token routing remints',
     ),
   ]
+  if (existsSync('src/events-tail.test.ts'))
+    evidence.push(
+      prove(
+        'agent-event-routing',
+        'src/gild.ts',
+        (source) => {
+          const start = source.indexOf('export function agentServer(')
+          const end = source.indexOf('const agentsDir', start)
+          return (
+            source.slice(0, start) +
+            `export function agentServer(agent, requested) {return requested ?? agent.server}\n\n` +
+            source.slice(end)
+          )
+        },
+        'src/events-tail.test.ts',
+        'events tail uses joined server',
+      ),
+    )
   mkdirSync('docs', { recursive: true })
   writeFileSync(
     'docs/review-api-revert-evidence.json',

@@ -27,6 +27,7 @@ import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
+import { tailEvents } from './events-tail'
 
 // ---------- identity storage (~/.config/gild/identity.json, mode 0600) ----------
 
@@ -845,6 +846,43 @@ agentCmd
         console.log(
           `@${a.name}  ${a.token ? chalk.green('approved') : chalk.yellow('waiting')}  ${fingerprint(a.publicKey)}`,
         )
+    }
+  })
+
+program
+  .command('events')
+  .description('durable forge event stream')
+  .command('tail')
+  .option('--repo <owner/repo>', 'limit events to a repository')
+  .option('--since <cursor>', 'resume after a durable cursor')
+  .option('--agent <label>', 'use an approved agent token')
+  .option('--once', 'read one available page and exit')
+  .option(
+    '--raw',
+    'include full event payloads, including approval URLs and secrets',
+  )
+  .option(
+    '--server <url>',
+    'forge base URL (defaults to the joined server for agents)',
+  )
+  .action(async (opts) => {
+    const agent = opts.agent ? await loadAgent(opts.agent) : null
+    const identity = opts.agent ? null : await loadIdentity()
+    if (opts.agent && !agent?.token)
+      throw Error('Agent token is not approved here yet')
+    if (!opts.agent && !identity) throw Error('Run gild auth init first')
+    const client = agent?.token
+      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token)
+      : await clientFor(opts.server ?? 'https://gild.gg', identity!)
+    const controller = new AbortController(),
+      stop = () => controller.abort()
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+    try {
+      await tailEvents(client, opts, controller.signal)
+    } finally {
+      process.removeListener('SIGINT', stop)
+      process.removeListener('SIGTERM', stop)
     }
   })
 
