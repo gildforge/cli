@@ -26,6 +26,7 @@ test('native import preserves full history, branches, annotated tags, default br
   }
   git(source, 'branch', 'topic/x')
   git(source, 'branch', 'import/pr/2', 'HEAD~1')
+  git(source, 'branch', 'import_', 'HEAD~2')
   git(source, 'update-ref', 'refs/pull/2/head', 'HEAD')
   git(source, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v1', '-m', 'tag')
   git(source, 'switch', '--orphan', '_meta')
@@ -100,7 +101,7 @@ test('native import preserves full history, branches, annotated tags, default br
     })
     expect(await importer.fetch()).toBe('trunk')
     const stats = await importer.push()
-    expect(stats.branches).toBe(4)
+    expect(stats.branches).toBe(5)
     expect(stats.tags).toBe(1)
     expect(stats.commits).toBe(5)
     expect(git(target, 'rev-parse', '_meta')).toBe(protectedMeta)
@@ -108,10 +109,11 @@ test('native import preserves full history, branches, annotated tags, default br
       'refs/heads/trunk',
       'refs/heads/topic/x',
       'refs/heads/import/pr/2',
+      'refs/heads/import_',
       'refs/tags/v1',
     ])
       expect(git(target, 'rev-parse', ref)).toBe(git(source, 'rev-parse', ref))
-    expect(git(target, 'rev-parse', 'import/source/_meta')).toBe(
+    expect(git(target, 'rev-parse', importer.branch('_meta'))).toBe(
       git(source, 'rev-parse', '_meta'),
     )
     expect(git(target, 'rev-list', '--count', 'trunk')).toBe('4')
@@ -126,8 +128,8 @@ test('native import preserves full history, branches, annotated tags, default br
     expect(git(target, 'rev-parse', 'import/pr/2')).toBe(
       git(source, 'rev-parse', 'import/pr/2'),
     )
-    expect(importedHead).toBe('import/pr_/2')
-    expect(git(target, 'rev-parse', 'import/pr_/2')).toBe(
+    expect(importedHead).toBe('import__/pr/2')
+    expect(git(target, 'rev-parse', 'import__/pr/2')).toBe(
       git(source, 'rev-parse', 'trunk'),
     )
     const first = git(target, 'rev-parse', 'trunk')

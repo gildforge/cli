@@ -164,18 +164,18 @@ export class NativeImport {
     const o = this.options,
       refs = await this.refs(),
       sourceMeta = refs.find((r) => r.ref === 'refs/heads/_meta')
-    let reserved = 'refs/heads/import/source/_meta'
-    while (refs.some((r) => r.ref === reserved)) reserved += '_'
-    this.metaBranch = reserved.replace('refs/heads/', '')
-    this.pullPrefix = 'import/pr'
+    let namespace = 'import'
     while (
       refs.some(
         (r) =>
-          r.ref === 'refs/heads/' + this.pullPrefix ||
-          r.ref.startsWith('refs/heads/' + this.pullPrefix + '/'),
+          r.ref === 'refs/heads/' + namespace ||
+          r.ref.startsWith('refs/heads/' + namespace + '/'),
       )
     )
-      this.pullPrefix += '_'
+      namespace += '_'
+    const reserved = 'refs/heads/' + namespace + '/source/_meta'
+    this.metaBranch = namespace + '/source/_meta'
+    this.pullPrefix = namespace + '/pr'
     const expected = refs.map((r) => ({
       ...r,
       ref: r === sourceMeta ? reserved : r.ref,
