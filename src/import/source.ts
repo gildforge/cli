@@ -47,14 +47,31 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
   if(token) headers[gh?'authorization':'private-token']=gh?`Bearer ${token}`:token
   if(gh) {headers.accept='application/vnd.github+json';headers['X-GitHub-Api-Version']='2026-03-10'}
   const request=async(path:string,accept?:string)=>{
-    const response=await fetcher(source.api+path,{headers:{...headers,...(accept?{accept}:{})},redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(60000)]):AbortSignal.timeout(60000)})
-    if(!response.ok) throw Error(`Source API ${response.status}; import can be resumed after checking access or rate limits`)
-    return response
+    let url=new URL(source.api+path)
+    const origin=url.origin
+    for(let redirects=0;redirects<=3;redirects++) {
+      const response=await fetcher(url.toString(),{headers:{...headers,...(accept?{accept}:{})},redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(60000)]):AbortSignal.timeout(60000)})
+      if([301,302,307,308].includes(response.status)) {
+        const location=response.headers.get('location')
+        await response.body?.cancel()
+        if(!location)throw Error('Source API redirect has no destination')
+        const next=new URL(location,url)
+        if(next.origin!==origin || next.username || next.password || !(gh ? /^\/(?:repos|repositories)\//.test(next.pathname) : next.pathname.startsWith('/api/v4/')))throw Error('Source API redirect must stay on the same forge API origin')
+        url=next;continue
+      }
+      if(!response.ok) throw Error(`Source API ${response.status}; import can be resumed after checking access or rate limits`)
+      return response
+    }
+    throw Error('Source API redirect limit exceeded')
   }
   const json=async(path:string):Promise<any>=> (await request(path)).json()
   const page=async(path:string,n:number):Promise<any[]>=>json(`${path}${path.includes('?')?'&':'?'}per_page=30&page=${n}`)
-  const body=(v:unknown)=>rewriteLinks(typeof v==='string'?v:'',source,destination)
-  const provenance=(x:any,id:string)=>({forge:source.forge as 'github'|'gitlab',url:x.html_url??x.web_url??`https://${new URL(source.url).hostname}/${source.project}`,author:x.user?.login??x.author?.username??'ghost',id,updatedAt:x.updated_at??x.submitted_at??x.created_at,state:x.state,closedAt:x.closed_at,mergedAt:x.merged_at})
+  const projects=new Map([[source.project,source]])
+  const body=(v:unknown)=>{let text=typeof v==='string'?v:'';for(const project of projects.values())text=rewriteLinks(text,project,destination);return text}
+  const provenance=(x:any,id:string)=>{
+    const link=x.html_url??x.web_url
+    if(link){const web=new URL(link),project=(gh?/^\/([^/]+\/[^/]+)\/(?:issues|pull)\//:/^\/(.+)\/-\/(?:issues|merge_requests)\//).exec(web.pathname)?.[1];if(project && web.host===new URL(source.url).host)projects.set(project,{...source,project,url:web.origin+'/'+project})}
+    return {forge:source.forge as 'github'|'gitlab',url:x.html_url??x.web_url??`https://${new URL(source.url).hostname}/${source.project}`,author:x.user?.login??x.author?.username??'ghost',id,updatedAt:x.updated_at??x.submitted_at??x.created_at,state:x.state,closedAt:x.closed_at,mergedAt:x.merged_at}}
   let resume:{stage:number;page:number;index:number}={stage:0,page:1,index:0}
   if(options.checkpoint) {
     resume=JSON.parse(options.checkpoint)
