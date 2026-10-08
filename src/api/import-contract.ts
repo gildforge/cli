@@ -13,7 +13,7 @@ export const importRecord = z.discriminatedUnion('kind', [
   z.object({ kind:z.literal('patch'), number, part:z.number().int().nonnegative().max(100000), text:z.string().max(16384) }),
 ])
 export type ImportRecord = z.infer<typeof importRecord>
-export const importInput = z.object({ url:z.string().min(1).max(2048), name:z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/i).optional(), private:z.boolean().default(false), mirror:z.boolean().default(false), source_token:z.string().max(16384).optional(), forge:z.enum(['github','gitlab','git']).optional() })
+export const importInput = z.object({ url:z.string().min(1).max(2048), name:z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/i).optional(), private:z.boolean().optional(), mirror:z.boolean().default(false), source_token:z.string().max(16384).optional(), forge:z.enum(['github','gitlab','git']).optional() })
 export const importProgress = z.object({ phase:z.enum(['git','metadata','workflows']), completed:z.number().int().nonnegative(), message:z.string().max(200), checkpoint:z.string().max(2048).optional() })
 export const importSummary=z.object({branches:z.number().int().nonnegative(),tags:z.number().int().nonnegative(),commits:z.number().int().nonnegative(),records:z.number().int().nonnegative(),elapsed_ms:z.number().nonnegative()})
 export const importStatus = z.object({ repository:z.string(), source:z.string(), mirror:z.boolean(), state:z.enum(['queued','running','complete','mirroring','failed','cutover']), progress:importProgress, warnings:z.array(z.string()), error:z.string().nullable(), updated_at:z.string(), next_sync:z.string().nullable(),summary:importSummary.optional() })

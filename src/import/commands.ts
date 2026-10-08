@@ -15,7 +15,8 @@ export function importCommands(
     .command('import')
     .argument('<url>', 'Git source URL')
     .option('--name <name>', 'destination name, or owner/name')
-    .option('--private', 'private destination')
+    .option('--private', 'private destination (the default with a source token)')
+    .option('--public', 'public destination, even with a source token')
     .option('--mirror', 'sync source until cutover')
     .option('--forge <forge>', 'metadata provider: github, gitlab, git')
     .option('--source-token', 'prompt for a private source token')
@@ -46,7 +47,8 @@ export function importCommands(
       const body = {
         url: source.url,
         name,
-        private: !!opts.private,
+        // Unset lets the server choose: private whenever a source token is used.
+        private: opts.private ? true : opts.public ? false : undefined,
         mirror: !!opts.mirror,
         source_token: token,
         forge: source.forge,
