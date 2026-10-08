@@ -100,9 +100,18 @@ export function ensureGitHelper(server = 'https://gild.gg'): boolean {
 
 // ---------- commands ----------
 
-const program = new Command()
+export const program = new Command()
   .option('--config-dir <path>','identity directory (default: ~/.config/gild)')
-  .hook('preAction',(_,command)=>{identityDirectory=command.optsWithGlobals().configDir;if(command.parent?.name()==='runner')command.setOptionValue('configDir',identityDirectory ?? join(homedir(),'.config','gild'))})
+  .hook('preAction', (_, command) => {
+    identityDirectory = command.optsWithGlobals().configDir
+    // Commander parses the global option at every depth. Propagate it to
+    // runner group/service leaves as well as direct runner subcommands.
+    for (let parent = command.parent; parent; parent = parent.parent)
+      if (parent.name() === 'runner') {
+        command.setOptionValue('configDir', identityDirectory ?? join(homedir(), '.config', 'gild'))
+        break
+      }
+  })
 program.name('gild').description('gild — key-first identity for the forge').version(pkg.version)
 
 const authCmd = program
