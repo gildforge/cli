@@ -86,8 +86,14 @@ export class NativeImport {
       })
       child.stderr.on('data', (chunk) => {
         stderr = (stderr + chunk.toString()).slice(-4096)
-        const progress = /Receiving objects:\s+(\d+)%/.exec(stderr)
-        if (progress) o.progress('Receiving Git objects', Number(progress[1]))
+        const progress = [
+          ...stderr.matchAll(/(?:Receiving|Unpacking) objects:\s+(\d+)%/g),
+        ].at(-1)
+        if (progress)
+          o.progress(
+            'Receiving Git objects',
+            Math.min(100, Number(progress[1])),
+          )
       })
       child.on('error', () =>
         reject(
@@ -142,6 +148,7 @@ export class NativeImport {
     o.progress('Fetching all branches, tags, and full history')
     await this.git([
       'fetch',
+      '--progress',
       '--prune',
       '--force',
       'origin',
@@ -246,7 +253,13 @@ export class NativeImport {
     const head = `${this.pullPrefix}/${number}`
     if (
       (await this.git(
-        ['fetch', '--force', 'origin', `+${ref}:refs/heads/${head}`],
+        [
+          'fetch',
+          '--progress',
+          '--force',
+          'origin',
+          `+${ref}:refs/heads/${head}`,
+        ],
         undefined,
         true,
       )) === null

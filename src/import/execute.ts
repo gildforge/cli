@@ -64,7 +64,8 @@ export async function executeImport(
         client.request('importCredentials', params, undefined, {}, { signal }),
       ),
     progress: (message, completed = 0) => {
-      progress = { phase: 'git', message, completed }
+      if (progress.phase === 'git')
+        progress = { phase: 'git', message, completed }
       log(message)
     },
   })

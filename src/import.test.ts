@@ -89,8 +89,9 @@ test('native import preserves full history, branches, annotated tags, default br
   const globalConfig = join(root, 'gitconfig')
   await writeFile(
     globalConfig,
-    `[url "${origin}/source.git"]\n insteadOf = https://source.fixture.test/source.git\n`,
+    `[fetch]\n unpackLimit = 1\n[url "${origin}/source.git"]\n insteadOf = https://source.fixture.test/source.git\n`,
   )
+  const receiving: number[] = []
   const before = process.env.GIT_CONFIG_GLOBAL
   process.env.GIT_CONFIG_GLOBAL = globalConfig
   try {
@@ -104,9 +105,12 @@ test('native import preserves full history, branches, annotated tags, default br
         url: origin + '/target.git',
         token: 'import-marker',
       }),
-      progress: () => {},
+      progress: (message, completed) => {
+        if (message === 'Receiving Git objects') receiving.push(completed ?? 0)
+      },
     })
     expect(await importer.fetch()).toBe('trunk')
+    expect(Math.max(...receiving)).toBe(100)
     const stats = await importer.push()
     expect(stats.branches).toBe(5)
     expect(stats.tags).toBe(1)
