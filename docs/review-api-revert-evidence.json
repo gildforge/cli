@@ -18,5 +18,20 @@
     "behavior": "agent-session-routing",
     "exit": 1,
     "assertionFailure": true
+  },
+  {
+    "behavior": "service-uninstall-cleanup",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "service-install-rollback",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "service-linux-path",
+    "exit": 1,
+    "assertionFailure": true
   }
 ]

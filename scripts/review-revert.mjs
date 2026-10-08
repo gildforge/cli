@@ -106,6 +106,54 @@ if (import.meta.main) {
       ),
     )
   }
+  if (existsSync('src/runner-service.test.ts')) {
+    evidence.push(
+      prove(
+        'service-uninstall-cleanup',
+        'src/runner-service.ts',
+        (source) => {
+          const start = source.indexOf("} else if (action === 'uninstall')")
+          return (
+            source.slice(0, start) +
+            source
+              .slice(start)
+              .replace(
+                'await rm(plan.file, { force: true })',
+                '/* reverted unconditional cleanup */',
+              )
+          )
+        },
+        'src/runner-service.test.ts',
+        'service uninstall removes unit/plist',
+      ),
+    )
+    evidence.push(
+      prove(
+        'service-install-rollback',
+        'src/runner-service.ts',
+        (source) =>
+          source.replace(
+            'await rm(plan.file, { force: true })',
+            '/* reverted rollback */',
+          ),
+        'src/runner-service.test.ts',
+        'service install rolls back',
+      ),
+    )
+    evidence.push(
+      prove(
+        'service-linux-path',
+        'src/runner-service.ts',
+        (source) =>
+          source.replace(
+            "unit('PATH=' + servicePath(opts.findTool))",
+            "unit('PATH=' + process.env.PATH)",
+          ),
+        'src/runner-service.test.ts',
+        'Linux unit uses selected tool directories',
+      ),
+    )
+  }
   mkdirSync('docs', { recursive: true })
   writeFileSync(
     'docs/review-api-revert-evidence.json',

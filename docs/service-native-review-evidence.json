@@ -1,0 +1,10 @@
+{
+  "platform": "darwin",
+  "guiDomainAvailable": true,
+  "guiDomainCheckExit": 0,
+  "nativeBootstrapExit": 5,
+  "nativeInstallStatusUninstall": false,
+  "nativeFailedInstallRollback": true,
+  "definitionAndDisposableConfigCleaned": true,
+  "limitation": "launchctl bootstrap returned Input/output error despite GUI domain availability; native success not verified"
+}
