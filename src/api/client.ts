@@ -57,7 +57,7 @@ export class GildClient {
       signal: options?.signal ?? AbortSignal.timeout(30000),
       redirect: 'error',
     })
-    const data = await res
+    const data = res.status === 204 ? null : await res
       .json()
       .catch(() => ({ message: `HTTP ${res.status}` }))
     if (!res.ok)
