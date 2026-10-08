@@ -1,9 +1,16 @@
 import { test, expect } from 'bun:test'
 import { createServer } from 'node:http'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  writeFile,
+  readFile,
+  rm,
+  chmod,
+} from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { NativeImport } from './import/git'
+import { NativeImport, importSSHCommand } from './import/git'
 import { fixture, cli } from './test-cli'
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, {
@@ -265,4 +272,44 @@ test('source REST refuses literal internal destinations before opening a connect
   await expect(publicFetch('file:///etc/passwd')).rejects.toThrow(
     'Invalid source API URL',
   )
+})
+
+test('SSH source hostnames stay literal arguments even with shell metacharacters', async () => {
+  await mkdir('.tmp', { recursive: true })
+  const root = await mkdtemp(resolve('.tmp/import-ssh-')),
+    marker = join(root, 'unexpected'),
+    ssh = join(root, 'ssh')
+  try {
+    await writeFile(
+      ssh,
+      '#!/usr/bin/env bun\nconsole.log(JSON.stringify(process.argv.slice(2)))\n',
+    )
+    await chmod(ssh, 0o700)
+    for (const hostname of [
+      'x$(touch ' + marker + ').test',
+      "x'$(touch " + marker + ")'.test",
+    ]) {
+      const output = execFileSync(
+        '/bin/sh',
+        ['-c', importSSHCommand('140.82.112.3', hostname)],
+        {
+          env: { ...process.env, PATH: root + ':' + process.env.PATH },
+          encoding: 'utf8',
+        },
+      )
+      expect(await readFile(marker).catch(() => null)).toBeNull()
+      expect(JSON.parse(output)).toEqual([
+        '-o',
+        'HostName=140.82.112.3',
+        '-o',
+        'HostKeyAlias=' + hostname,
+        '-o',
+        'ProxyCommand=none',
+        '-o',
+        'BatchMode=yes',
+      ])
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

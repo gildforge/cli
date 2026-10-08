@@ -16,8 +16,13 @@ export interface GitTransport {
   credentials(): Promise<Credential>
   progress(message: string, completed?: number): void
 }
+const shellWord = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+export function importSSHCommand(address: string, hostname: string) {
+  return `ssh -o ${shellWord('HostName=' + address)} -o ${shellWord('HostKeyAlias=' + hostname)} -o ProxyCommand=none -o BatchMode=yes`
+}
 /** Git packs stay on disk and stream straight to the scoped Gild Git endpoint.
- * No shell, embedded passwords, token-bearing argv, or Worker pack buffering. */
+ * Git uses argv arrays and quoted SSH options. No embedded passwords,
+ * token-bearing argv, or Worker pack buffering. */
 export class NativeImport {
   private addresses: string[] = []
   private metaBranch = 'import/source/_meta'
@@ -58,7 +63,7 @@ export class NativeImport {
     } as NodeJS.ProcessEnv
     if (this.addresses.length && new URL(o.source).protocol === 'ssh:') {
       const source = new URL(o.source)
-      env.GIT_SSH_COMMAND = `ssh -o HostName=${this.addresses[0]} -o HostKeyAlias=${source.hostname} -o ProxyCommand=none -o BatchMode=yes`
+      env.GIT_SSH_COMMAND = importSSHCommand(this.addresses[0], source.hostname)
     }
     Object.entries(settings).forEach(([key, value], i) => {
       env[`GIT_CONFIG_KEY_${i}`] = key
