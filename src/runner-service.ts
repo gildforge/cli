@@ -3,6 +3,33 @@ import { join, resolve, dirname, isAbsolute } from 'node:path'
 import { existsSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { execFileSync } from 'node:child_process'
+/** The account's home from the OS user database. Bun's userInfo().homedir
+ *  follows $HOME, which is exactly what a dedicated runner HOME overrides. */
+export function accountHome(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const user = userInfo()
+  try {
+    if (platform === 'linux') {
+      const entry = execFileSync('getent', ['passwd', String(user.uid)], {
+        encoding: 'utf8',
+      }).trim()
+      const home = entry.split(':')[5]
+      if (home && isAbsolute(home)) return home
+    }
+    if (platform === 'darwin') {
+      const out = execFileSync(
+        'dscl',
+        ['.', '-read', '/Users/' + user.username, 'NFSHomeDirectory'],
+        { encoding: 'utf8' },
+      )
+      const home = out.replace(/^NFSHomeDirectory:\s*/, '').trim()
+      if (home && isAbsolute(home)) return home
+    }
+  } catch {}
+  return user.homedir
+}
+
 export interface ServiceOptions {
   name: string
   configDir: string
@@ -53,7 +80,7 @@ export function servicePlan(opts: ServiceOptions) {
   const platform = opts.platform ?? process.platform,
     // The OS account's home, not $HOME: launchd and systemd look there even
     // when the CLI runs with a different HOME (e.g. a dedicated runner home).
-    home = opts.home ?? userInfo().homedir,
+    home = opts.home ?? accountHome(platform),
     exe = resolve(opts.executable ?? process.execPath),
     root = resolve(opts.configDir),
     id = 'gild.runner.' + opts.name
