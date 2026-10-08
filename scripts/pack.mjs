@@ -62,7 +62,10 @@ for (const t of TARGETS) {
         os: [t.os],
         cpu: [t.cpu],
         files: ['bin'],
-        repository: { type: 'git', url: 'git+https://github.com/gildforge/cli.git' },
+        repository: {
+          type: 'git',
+          url: 'git+https://github.com/gildforge/cli.git',
+        },
         publishConfig: { access: 'public' },
       },
       null,
@@ -112,7 +115,10 @@ writeFileSync(
       bin: { gild: 'bin/gild.js', 'gild-server': 'bin/gild-server.js' },
       files: ['bin'],
       license: 'MIT',
-      repository: { type: 'git', url: 'git+https://github.com/gildforge/cli.git' },
+      repository: {
+        type: 'git',
+        url: 'git+https://github.com/gildforge/cli.git',
+      },
       publishConfig: { access: 'public' },
       optionalDependencies: {
         ...Object.fromEntries(
