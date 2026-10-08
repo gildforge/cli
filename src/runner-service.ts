@@ -1,5 +1,6 @@
 import { mkdir, writeFile, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname, isAbsolute } from 'node:path'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 export interface ServiceOptions {
@@ -10,6 +11,8 @@ export interface ServiceOptions {
   executable?: string
   execute?: (file: string, args: string[]) => void
   uid?: number
+  findTool?: (tool: string) => string | null
+  report?: (message: string) => void
 }
 const xml = (s: string) =>
   s
@@ -22,6 +25,22 @@ const unit = (s: string) =>
   '"' +
   s.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%') +
   '"'
+export function servicePath(
+  findTool: (tool: string) => string | null = (tool) => Bun.which(tool),
+) {
+  const dirs = ['node', 'bun', 'git'].flatMap((tool) => {
+    const path = findTool(tool)
+    if (!path) return []
+    if (!isAbsolute(path) || /[:\r\n\0]/.test(path))
+      throw Error(
+        'Tool path must be absolute and contain no PATH separators or control characters',
+      )
+    return [dirname(path)]
+  })
+  // Preserve the resolved tool precedence, without unrelated installer paths.
+  return [...new Set([...dirs, '/usr/bin', '/bin'])].join(':')
+}
+
 export function servicePlan(opts: ServiceOptions) {
   if (!/^[a-zA-Z0-9][\w.-]{0,63}$/.test(opts.name))
     throw Error('Invalid runner name')
@@ -65,7 +84,7 @@ export function servicePlan(opts: ServiceOptions) {
   }
   if (platform === 'linux') {
     const file = join(home, '.config', 'systemd', 'user', id + '.service')
-    const content = `[Unit]\nDescription=Gild runner ${opts.name}\nAfter=network-online.target\n\n[Service]\nEnvironment=${unit('PATH=' + (process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'))}\nExecStart=${command.map(unit).join(' ')}\nWorkingDirectory=${unit(home)}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`
+    const content = `[Unit]\nDescription=Gild runner ${opts.name}\nAfter=network-online.target\n\n[Service]\nEnvironment=${unit('PATH=' + servicePath(opts.findTool))}\nExecStart=${command.map(unit).join(' ')}\nWorkingDirectory=${unit(home)}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`
     return {
       platform,
       file,
@@ -86,7 +105,7 @@ export function servicePlan(opts: ServiceOptions) {
         .map((x) => '"' + x.replaceAll('"', '\\"') + '"')
         .join(' ')
     const source = `using System;using System.Diagnostics;using System.ServiceProcess;public class GildRunnerService:ServiceBase {Process child;public GildRunnerService(){ServiceName=${esc(id)};}protected override void OnStart(string[] a){child=Process.Start(new ProcessStartInfo(${esc(command[0])},${esc(args)}){UseShellExecute=false,WorkingDirectory=${esc(home)}});child.EnableRaisingEvents=true;child.Exited+=(sender,e)=>Environment.Exit(1);}protected override void OnStop(){if(child!=null&&!child.HasExited){Process.Start(new ProcessStartInfo("taskkill.exe", "/PID "+child.Id+" /T /F"){UseShellExecute=false,CreateNoWindow=true}).WaitForExit();child.WaitForExit();}}public static void Main(){ServiceBase.Run(new GildRunnerService());}}`
-    const install = `Add-Type -TypeDefinition ${ps(source)} -ReferencedAssemblies System.ServiceProcess -OutputAssembly ${ps(file)} -OutputType WindowsApplication; $credential=Get-Credential -UserName ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -Message 'Runner service account'; New-Service -Name ${ps(id)} -BinaryPathName ${ps('"' + file + '"')} -DisplayName ${ps('Gild runner ' + opts.name)} -StartupType Automatic -Credential $credential; sc.exe failure ${ps(id)} reset= 86400 actions= restart/5000; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; Start-Service -Name ${ps(id)}`
+    const install = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition ${ps(source)} -ReferencedAssemblies System.ServiceProcess -OutputAssembly ${ps(file)} -OutputType WindowsApplication; $credential=Get-Credential -UserName ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -Message 'Runner service account'; New-Service -Name ${ps(id)} -BinaryPathName ${ps('"' + file + '"')} -DisplayName ${ps('Gild runner ' + opts.name)} -StartupType Automatic -Credential $credential; sc.exe failure ${ps(id)} reset= 86400 actions= restart/5000; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; Start-Service -Name ${ps(id)}`
     return {
       platform,
       file,
@@ -118,18 +137,65 @@ export async function runnerService(
       ((file, args) => {
         execFileSync(file, args, { stdio: 'inherit' })
       })
+  const report = opts.report ?? console.log
   if (action === 'install') {
     await mkdir(join(plan.file, '..'), { recursive: true })
+    if (existsSync(plan.file))
+      throw Error('Service definition already exists; uninstall it first')
     if (plan.content)
       await writeFile(plan.file, plan.content, { mode: 0o600, flag: 'wx' })
+    try {
+      if (plan.platform === 'linux')
+        execute('systemctl', ['--user', 'daemon-reload'])
+      execute(plan.install[0], plan.install.slice(1))
+    } catch (error) {
+      // Roll back only the definition created by this invocation. Manager
+      // cleanup is best effort; its failure must not prevent file cleanup.
+      try {
+        execute(plan.uninstall[0], plan.uninstall.slice(1))
+      } catch {}
+      await rm(plan.file, { force: true })
+      if (plan.platform === 'linux') {
+        try {
+          execute('systemctl', ['--user', 'daemon-reload'])
+        } catch {}
+      }
+      throw Error(
+        'Service install failed; the written definition was removed',
+        { cause: error },
+      )
+    }
     if (plan.platform === 'linux')
-      execute('systemctl', ['--user', 'daemon-reload'])
-  }
-  execute(plan[action][0], plan[action].slice(1))
-  if (action === 'uninstall') {
-    await rm(plan.file, { force: true })
-    if (plan.platform === 'linux')
-      execute('systemctl', ['--user', 'daemon-reload'])
-  }
+      report(
+        'To keep the runner running after logout and start at boot, run `loginctl enable-linger` as this service user (subject to system policy).',
+      )
+  } else if (action === 'uninstall') {
+    let failure: unknown
+    let removed = false
+    try {
+      execute(plan.uninstall[0], plan.uninstall.slice(1))
+    } catch (error) {
+      failure = error
+    }
+    try {
+      await rm(plan.file, { force: true })
+      removed = true
+      if (plan.platform === 'linux')
+        execute('systemctl', ['--user', 'daemon-reload'])
+    } catch (error) {
+      failure ??= error
+    } finally {
+      report(
+        `Runner config remains at ${join(resolve(opts.configDir), 'runners', opts.name + '.json')}, including its gro_/gr_ token. Run \`gild runner remove ${opts.name}\` with the same --config-dir to revoke the runner and delete that config.`,
+      )
+    }
+    if (failure)
+      throw Error(
+        removed
+          ? 'Service manager command failed; the service definition was removed. Check service status before reinstalling.'
+          : 'Service uninstall failed; the service definition could not be removed.',
+        { cause: failure },
+      )
+  } else execute(plan.status[0], plan.status.slice(1))
   return plan.file
 }

@@ -1121,7 +1121,7 @@ export function runnerCommands(
       .requiredOption('--name <name>')
       .option('--config-dir <path>', 'gild config directory', configRoot())
       .action(async (opts) => {
-        await loadRunner(opts.configDir, opts.name)
+        if (action === 'install') await loadRunner(opts.configDir, opts.name)
         await runnerService(action, {
           name: opts.name,
           configDir: opts.configDir,
