@@ -124,3 +124,121 @@ test('runner default bash fails a failed pipeline even when the final command su
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('runner request maps GET, POST and DELETE to canonical encoded routes', async () => {
+  const { request } = await import('./runner')
+  const { fixture } = await import('./test-cli')
+  const calls: string[] = []
+  const f = await fixture(async (req) => {
+    calls.push(req.method + ' ' + new URL(req.url).pathname)
+    expect(req.headers.get('authorization')).toBe('Bearer gr_fixture')
+    if (req.method === 'GET')
+      return Response.json({ total_count: 0, runners: [] })
+    if (req.method === 'POST') {
+      expect(await req.json()).toEqual({ job: null, lease: null })
+      return Response.json({ cancel: false })
+    }
+    return Response.json({ ok: true })
+  })
+  try {
+    const c = { server: f.origin, repo: 'acme/demo', token: 'gr_fixture' }
+    expect(await request(c, '', undefined, 'GET')).toEqual({
+      total_count: 0,
+      runners: [],
+    })
+    expect(
+      await request(c, 'runners/heartbeat', { job: null, lease: null }),
+    ).toEqual({ cancel: false })
+    expect(await request(c, 'runners/fixture-id', undefined, 'DELETE')).toEqual(
+      { ok: true },
+    )
+    expect(calls).toEqual([
+      'GET /api/v1/repos/acme/demo/actions/runners',
+      'POST /api/v1/repos/acme/demo/actions/runners/heartbeat',
+      'DELETE /api/v1/repos/acme/demo/actions/runners/fixture-id',
+    ])
+  } finally {
+    await f.close()
+  }
+})
+
+test('runner list shows the active run number through typed overview and jobs', async () => {
+  const { fixture, cli } = await import('./test-cli')
+  const runner = {
+    id: 5,
+    gild_id: 'fixture-runner',
+    name: 'test',
+    os: 'linux',
+    status: 'online',
+    busy: true,
+    labels: [],
+  }
+  const run = {
+    id: 42,
+    name: 'build',
+    head_branch: 'main',
+    head_sha: 'a'.repeat(40),
+    event: 'push',
+    status: 'in_progress',
+    conclusion: null,
+    run_number: 42,
+    created_at: 'now',
+    updated_at: 'now',
+    html_url: 'https://forge.test/run',
+    url: 'https://forge.test/run',
+    workflow_id: 1,
+    actor: {
+      login: 'alice',
+      id: 1,
+      type: 'User',
+      html_url: 'https://forge.test/alice',
+    },
+  }
+  const f = await fixture((req) => {
+    const path = new URL(req.url).pathname
+    if (path.endsWith('/runners'))
+      return Response.json({ total_count: 1, runners: [runner] })
+    if (path.endsWith('/jobs'))
+      return Response.json({
+        total_count: 1,
+        jobs: [
+          {
+            id: 1,
+            run_id: 42,
+            name: 'build',
+            head_sha: 'a'.repeat(40),
+            status: 'in_progress',
+            conclusion: null,
+            started_at: 'now',
+            completed_at: null,
+            runner_id: 5,
+            runner_name: 'test',
+            steps: [],
+          },
+        ],
+      })
+    return Response.json({
+      workflow_runs: [run],
+      runners: [runner],
+      required: [],
+    })
+  })
+  try {
+    await saveRunner(f.root, {
+      schema: 1,
+      id: 'fixture-runner',
+      token: 'gr_fixture',
+      name: 'test',
+      repo: 'acme/demo',
+      server: f.origin,
+      os: 'linux',
+      arch: 'x64',
+      labels: [],
+    })
+    const result = await cli(f.root, ['runner', 'list'])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain('busy · run #42')
+  } finally {
+    await f.close()
+  }
+})
