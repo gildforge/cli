@@ -25,6 +25,8 @@ test('native import preserves full history, branches, annotated tags, default br
     git(source, '-c', 'commit.gpgsign=false', 'commit', '-m', `commit ${i}`)
   }
   git(source, 'branch', 'topic/x')
+  git(source, 'branch', 'import/pr/2', 'HEAD~1')
+  git(source, 'update-ref', 'refs/pull/2/head', 'HEAD')
   git(source, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v1', '-m', 'tag')
   git(source, 'switch', '--orphan', '_meta')
   await writeFile(join(source, 'ACL'), 'source')
@@ -98,13 +100,14 @@ test('native import preserves full history, branches, annotated tags, default br
     })
     expect(await importer.fetch()).toBe('trunk')
     const stats = await importer.push()
-    expect(stats.branches).toBe(3)
+    expect(stats.branches).toBe(4)
     expect(stats.tags).toBe(1)
     expect(stats.commits).toBe(5)
     expect(git(target, 'rev-parse', '_meta')).toBe(protectedMeta)
     for (const ref of [
       'refs/heads/trunk',
       'refs/heads/topic/x',
+      'refs/heads/import/pr/2',
       'refs/tags/v1',
     ])
       expect(git(target, 'rev-parse', ref)).toBe(git(source, 'rev-parse', ref))
@@ -119,6 +122,14 @@ test('native import preserves full history, branches, annotated tags, default br
     expect(
       await readFile(join(root, 'mirror.git/config'), 'utf8'),
     ).not.toContain('import-marker')
+    const importedHead = await importer.head('refs/pull/2/head', 2)
+    expect(git(target, 'rev-parse', 'import/pr/2')).toBe(
+      git(source, 'rev-parse', 'import/pr/2'),
+    )
+    expect(importedHead).toBe('import/pr_/2')
+    expect(git(target, 'rev-parse', 'import/pr_/2')).toBe(
+      git(source, 'rev-parse', 'trunk'),
+    )
     const first = git(target, 'rev-parse', 'trunk')
     expect(await importer.fetch()).toBe('trunk')
     await importer.push()

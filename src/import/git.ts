@@ -21,6 +21,7 @@ export interface GitTransport {
 export class NativeImport {
   private addresses: string[] = []
   private metaBranch = 'import/source/_meta'
+  private pullPrefix = 'import/pr'
   branch(ref: string) {
     return ref === '_meta' ? this.metaBranch : ref
   }
@@ -166,6 +167,15 @@ export class NativeImport {
     let reserved = 'refs/heads/import/source/_meta'
     while (refs.some((r) => r.ref === reserved)) reserved += '_'
     this.metaBranch = reserved.replace('refs/heads/', '')
+    this.pullPrefix = 'import/pr'
+    while (
+      refs.some(
+        (r) =>
+          r.ref === 'refs/heads/' + this.pullPrefix ||
+          r.ref.startsWith('refs/heads/' + this.pullPrefix + '/'),
+      )
+    )
+      this.pullPrefix += '_'
     const expected = refs.map((r) => ({
       ...r,
       ref: r === sourceMeta ? reserved : r.ref,
@@ -181,7 +191,7 @@ export class NativeImport {
         (ref) =>
           (ref.startsWith('refs/heads/') || ref.startsWith('refs/tags/')) &&
           ref !== 'refs/heads/_meta' &&
-          !ref.startsWith('refs/heads/import/pr/') &&
+          !ref.startsWith('refs/heads/' + this.pullPrefix + '/') &&
           !expected.some((r) => r.ref === ref),
       )
       .map((ref) => ':' + ref)
@@ -228,7 +238,7 @@ export class NativeImport {
   async head(ref: string, number: number) {
     if (!/^refs\/(pull|merge-requests)\/[1-9][0-9]*\/head$/.test(ref))
       throw Error('Invalid source pull request ref')
-    const head = `import/pr/${number}`
+    const head = `${this.pullPrefix}/${number}`
     if (
       (await this.git(
         ['fetch', '--force', 'origin', `+${ref}:refs/heads/${head}`],
