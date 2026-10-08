@@ -69,6 +69,43 @@ if (import.meta.main) {
         'events tail uses joined server',
       ),
     )
+  if (existsSync('src/session.test.ts')) {
+    evidence.push(
+      prove(
+        'client-redaction',
+        'src/session-redaction.ts',
+        (source) => {
+          const start = source.indexOf('export function redactSession')
+          return (
+            source.slice(0, start) +
+            `export function redactSession(receipt) {return receipt}\n`
+          )
+        },
+        'src/session.test.ts',
+        'session record redacts before upload',
+      ),
+    )
+    evidence.push(
+      prove(
+        'agent-session-routing',
+        'src/gild.ts',
+        (source) => {
+          const start = source.indexOf('const sessionCmd')
+          return (
+            source.slice(0, start) +
+            source
+              .slice(start)
+              .replaceAll(
+                'agentServer(agent, opts.server)',
+                'opts.server ?? agent.server',
+              )
+          )
+        },
+        'src/session.test.ts',
+        'session record/list refuse another server',
+      ),
+    )
+  }
   mkdirSync('docs', { recursive: true })
   writeFileSync(
     'docs/review-api-revert-evidence.json',

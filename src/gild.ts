@@ -28,6 +28,8 @@ import { dirname, join } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { tailEvents } from './events-tail'
+import { sessionInput } from './api/sessions-contract'
+import { redactSession } from './session-redaction'
 
 // ---------- identity storage (~/.config/gild/identity.json, mode 0600) ----------
 
@@ -156,15 +158,20 @@ export function ensureGitHelper(server = 'https://gild.gg'): boolean {
 
 // ---------- commands ----------
 
-const program = new Command()
+export const program = new Command()
   .option('--config-dir <path>', 'identity directory (default: ~/.config/gild)')
   .hook('preAction', (_, command) => {
     identityDirectory = command.optsWithGlobals().configDir
-    if (command.parent?.name() === 'runner')
-      command.setOptionValue(
-        'configDir',
-        identityDirectory ?? join(homedir(), '.config', 'gild'),
-      )
+    // Commander parses the global option at every depth. Propagate it to
+    // runner group/service leaves as well as direct runner subcommands.
+    for (let parent = command.parent; parent; parent = parent.parent)
+      if (parent.name() === 'runner') {
+        command.setOptionValue(
+          'configDir',
+          identityDirectory ?? join(homedir(), '.config', 'gild'),
+        )
+        break
+      }
   })
 program
   .name('gild')
@@ -884,6 +891,97 @@ program
       process.removeListener('SIGINT', stop)
       process.removeListener('SIGTERM', stop)
     }
+  })
+
+const sessionCmd = program
+  .command('session')
+  .description('report or inspect an agent session receipt')
+function sessionTarget(opts: { repo: string; pull?: string; commit?: string }) {
+  const [owner, repo, ...extra] = opts.repo.split('/')
+  if (!owner || !repo || extra.length) throw Error('Use --repo owner/repo')
+  if (Boolean(opts.pull) === Boolean(opts.commit))
+    throw Error('Choose exactly one of --pull or --commit')
+  if (opts.pull && !/^[1-9][0-9]*$/.test(opts.pull))
+    throw Error('Pull number must be positive')
+  if (opts.commit && !/^[a-f0-9]{40}$/.test(opts.commit))
+    throw Error('Commit must be a full SHA')
+  return {
+    owner,
+    repo,
+    ...(opts.pull ? { number: opts.pull } : { sha: opts.commit! }),
+  }
+}
+sessionCmd
+  .command('record')
+  .requiredOption('--repo <owner/repo>')
+  .option('--pull <number>')
+  .option('--commit <sha>')
+  .requiredOption('--agent <label>')
+  .requiredOption('--file <path>', 'session JSON file')
+  .option(
+    '--server <url>',
+    'forge base URL (defaults to the joined server for agents)',
+  )
+  .action(async (opts) => {
+    const params = sessionTarget(opts),
+      agent = await loadAgent(opts.agent)
+    if (!agent?.token) throw Error('Use an approved local agent token')
+    const body = redactSession(
+        sessionInput.parse(JSON.parse(await readFile(opts.file, 'utf8'))),
+      ),
+      client = new GildClient(
+        agentServer(agent, opts.server) + '/api/v1',
+        agent.token,
+      )
+    const options = {
+      idempotencyKey:
+        'receipt:' +
+        createHash('sha256').update(JSON.stringify(body)).digest('hex'),
+    }
+    const receipt = opts.pull
+      ? await client.request(
+          'createPullSession',
+          params,
+          body,
+          undefined,
+          options,
+        )
+      : await client.request(
+          'createCommitSession',
+          params,
+          body,
+          undefined,
+          options,
+        )
+    console.log(JSON.stringify(receipt))
+  })
+sessionCmd
+  .command('list')
+  .requiredOption('--repo <owner/repo>')
+  .option('--pull <number>')
+  .option('--commit <sha>')
+  .option('--agent <label>')
+  .option(
+    '--server <url>',
+    'forge base URL (defaults to the joined server for agents)',
+  )
+  .action(async (opts) => {
+    const params = sessionTarget(opts),
+      agent = opts.agent ? await loadAgent(opts.agent) : null,
+      identity = opts.agent ? null : await loadIdentity()
+    if (opts.agent && !agent?.token)
+      throw Error('Use an approved local agent token')
+    if (!opts.agent && !identity) throw Error('Run gild auth init first')
+    const client = agent?.token
+      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token)
+      : await clientFor(opts.server ?? 'https://gild.gg', identity!)
+    console.log(
+      JSON.stringify(
+        opts.pull
+          ? await client.request('pullSessions', params)
+          : await client.request('commitSessions', params),
+      ),
+    )
   })
 
 runnerCommands(program, loadIdentity)
