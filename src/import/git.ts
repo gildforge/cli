@@ -49,7 +49,7 @@ export class NativeImport {
         settings['http.curloptResolve'] =
           `${source.hostname}:${source.port || (source.protocol === 'https:' ? '443' : '80')}:${this.addresses.map((ip) => (ip.includes(':') ? '[' + ip + ']' : ip)).join(',')}`
     }
-    if (o.sourceToken)
+    if (o.sourceToken && new URL(o.source).protocol === 'https:')
       settings[`http.${o.source}.extraHeader`] =
         'Authorization: Basic ' +
         Buffer.from(`oauth2:${o.sourceToken}`).toString('base64')

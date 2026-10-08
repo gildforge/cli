@@ -16,7 +16,7 @@ export function sourceURL(input:string, forge?:Forge):Source {
   forge ??= u.hostname==='github.com'?'github':u.hostname==='gitlab.com'?'gitlab':'git'
   if (forge==='github' && u.hostname!=='github.com') throw Error('GitHub metadata currently requires github.com')
   if (forge==='github' && project.split('/').length!==2) throw Error('Use a GitHub owner/repository URL')
-  const api=forge==='github'?`https://api.github.com/repos/${project}`:(u.protocol==='ssh:'?`https://${u.host}`:u.origin)+`/api/v4/projects/${encodeURIComponent(project)}`
+  const api=forge==='github'?`https://api.github.com/repos/${project}`:(u.protocol==='ssh:'?`https://${u.hostname}`:u.origin)+`/api/v4/projects/${encodeURIComponent(project)}`
   return { url:u.toString().replace(/\/$/,''),forge,project,api,name:project.split('/').at(-1)! }
 }
 export function importedAuthor(forge:Forge, login:string) { return `${forge}:${login || 'ghost'}` }
@@ -27,7 +27,7 @@ export function authorLabel(author:string) {
 export function mappedNumber(forge:Forge, kind:'issue'|'pull', n:number) { return forge==='gitlab'?n*2-(kind==='issue'?1:0):n }
 export function rewriteLinks(body:string, source:Source, destination:string) {
   const escape=(s:string)=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
-  const u=new URL(source.url),web=`${u.protocol==='ssh:'?'https:':u.protocol}//${u.host}/${source.project}`
+  const u=new URL(source.url),web=`${u.protocol==='ssh:'?'https:':u.protocol}//${u.protocol==='ssh:'?u.hostname:u.host}/${source.project}`
   return body.replace(new RegExp(escape(web)+(source.forge==='gitlab'?'/-/':'/')+'(issues|pull|merge_requests)/(\\d+)(#[^\\s)]+)?','g'),(_all,kind,n,anchor)=>`${destination}/${kind==='issues'?'issues':'pulls'}/${mappedNumber(source.forge,kind==='issues'?'issue':'pull',Number(n))}${anchor??''}`)
 }
 export interface SourceOptions {
@@ -70,7 +70,7 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
   const body=(v:unknown)=>{let text=typeof v==='string'?v:'';for(const project of projects.values())text=rewriteLinks(text,project,destination);return text}
   const provenance=(x:any,id:string)=>{
     const link=x.html_url??x.web_url
-    if(link){const web=new URL(link),project=(gh?/^\/([^/]+\/[^/]+)\/(?:issues|pull)\//:/^\/(.+)\/-\/(?:issues|merge_requests)\//).exec(web.pathname)?.[1];if(project && web.host===new URL(source.url).host)projects.set(project,{...source,project,url:web.origin+'/'+project})}
+    if(link){const web=new URL(link),origin=new URL(source.url),project=(gh?/^\/([^/]+\/[^/]+)\/(?:issues|pull)\//:/^\/(.+)\/-\/(?:issues|merge_requests)\//).exec(web.pathname)?.[1];if(project && web.host===(origin.protocol==='ssh:'?origin.hostname:origin.host))projects.set(project,{...source,project,url:web.origin+'/'+project})}
     return {forge:source.forge as 'github'|'gitlab',url:x.html_url??x.web_url??`https://${new URL(source.url).hostname}/${source.project}`,author:x.user?.login??x.author?.username??'ghost',id,updatedAt:x.updated_at??x.submitted_at??x.created_at,state:x.state,closedAt:x.closed_at,mergedAt:x.merged_at}}
   let resume:{stage:number;page:number;index:number}={stage:0,page:1,index:0}
   if(options.checkpoint) {

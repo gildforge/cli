@@ -278,6 +278,50 @@ test('source REST refuses literal internal destinations before opening a connect
   )
 })
 
+test('SSH imports keep their REST credential out of Git transport configuration', async () => {
+  await mkdir('.tmp', { recursive: true })
+  const root = await mkdtemp(resolve('.tmp/import-ssh-auth-'))
+  const options = {
+    source: 'ssh://git@gitlab.example:2222/team/repo.git',
+    sourceToken: 'disposable-metadata-token',
+    directory: root,
+    signal: new AbortController().signal,
+    credentials: async () => ({
+      url: 'https://gild.example/o/r.git',
+      token: 'fixture',
+    }),
+    progress: () => {},
+  }
+  try {
+    const native = new NativeImport(options)
+    await native.git(['init', '--bare'])
+    expect(
+      await native.git(
+        ['config', '--get-urlmatch', 'http.extraHeader', options.source],
+        undefined,
+        true,
+      ),
+    ).toBeNull()
+    const https = new NativeImport({
+      ...options,
+      source: 'https://gitlab.example/team/repo.git',
+    })
+    expect(
+      await https.git([
+        'config',
+        '--get-urlmatch',
+        'http.extraHeader',
+        https.options.source,
+      ]),
+    ).toContain('Authorization: Basic ')
+    expect(await readFile(join(root, 'config'), 'utf8')).not.toContain(
+      'extraHeader',
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('SSH source hostnames stay literal arguments even with shell metacharacters', async () => {
   await mkdir('.tmp', { recursive: true })
   const root = await mkdtemp(resolve('.tmp/import-ssh-')),
