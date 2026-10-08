@@ -53,6 +53,8 @@ test('redaction strips prefixed, AWS, Cloudflare-looking and quoted assignment c
     expect(safe).not.toContain(secret)
   expect(safe).toContain('[redacted]')
   expect(redact('bun test --filter core')).toBe('bun test --filter core')
+  expect(redact(`PASSWORD="secret's spaced value"`)).toBe('PASSWORD=[redacted]')
+  expect(redact(String.raw`KEY="secret\"escaped value"`)).toBe('KEY=[redacted]')
 })
 
 test('session record redacts before upload and hashing; record/list use joined server for pulls and commits', async () => {

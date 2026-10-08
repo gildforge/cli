@@ -22,7 +22,7 @@ export function redact(value: string, cap = 4096) {
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, REDACTED)
     .replace(
-      /((?:\b[\w-]*(?:token|secret|password|credential|(?:api[_-]?)?key)[\w-]*\s*[=:]\s*|\bBearer\s+))(?:("|')([^"']*)\2|[^\s"']+)/gi,
+      /((?:\b[\w-]*(?:token|secret|password|credential|(?:api[_-]?)?key)[\w-]*\s*[=:]\s*|\bBearer\s+))(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"']+)/gi,
       '$1' + REDACTED,
     )
     .replace(/[A-Za-z0-9_+\/-]{24,}={0,2}/g, (v) =>
