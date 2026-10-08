@@ -42,7 +42,7 @@ export function importCommands(
         throw Error('Use a repository name or owner/name')
       const [org, name] = opts.name?.includes('/')
         ? opts.name.split('/')
-        : [undefined, opts.name ?? source.name]
+        : [undefined, opts.name ?? source.name.toLowerCase()]
       const body = {
         url: source.url,
         name,
