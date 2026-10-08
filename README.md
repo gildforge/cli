@@ -37,3 +37,7 @@ bun test
 bun run src/gild.ts --help
 bun run build   # dist/gild, standalone executable
 ```
+
+`gild events tail --agent <label>` uses the server saved when that agent joined. A different `--server` is refused. Tail retries network errors, HTTP 408/429/5xx, and backs off from 500 ms to 10 seconds on errors or empty pages; Ctrl-C exits cleanly. Use `--once` for one page and its resume cursor. Agent-request payloads are omitted by default; `--raw` includes approval URLs and any secrets in the original payload.
+
+Run `bun run format` and `bun run format:check` for handwritten code. Generated API sources retain the site's formatting.
