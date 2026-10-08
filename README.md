@@ -18,6 +18,8 @@ gild auth sign <challenge>    # sign a browser sign-in challenge
 gild auth setup-git   # wire git's credential helper (done automatically by init/token)
 
 gild repo create [org/]<name> # new repo (personal or under an org)
+gild repo import <url> [--name [owner/]<name>] [--private] [--mirror]
+gild repo import-status|resume|cutover <owner/name>
 gild repo clone <owner/name>  # clone with push wired (alias: gild clone)
 gild org create|list|add-member
 ```
@@ -57,3 +59,17 @@ Run `bun run format` and `bun run format:check` for handwritten code. Generated 
 Session record/list with `--agent` use that agent's saved server; a different `--server` is refused. Before upload the CLI redacts commands, notes, model names and file paths, then computes the idempotency key from the sanitized report. Rules mirror the site's redactor and include bearer/API credentials, AWS access keys, opaque Cloudflare-like credentials and secret assignments (`--token=`, `KEY=`, passwords). Raw receipt files stay local.
 
 Service install removes the newly written unit/plist/host if the native manager fails. Uninstall removes the definition even when disable/bootout reports that it is already unloaded, and still reports manager failures. The private runner config and its `gro_`/`gr_` token remain; `gild runner remove <name>` (with the same `--config-dir`) revokes the runner and deletes the config. Uninstall alone does not revoke credentials.
+
+## Repository import
+
+`gild repo import https://github.com/owner/repository.git --private` transfers every code branch, tag and reachable commit with native Git, then imports GitHub issues, PRs, comments, submitted reviews, labels and milestones. GitLab issues, merge requests and discussions are also supported; use `--forge gitlab` for a self-hosted instance. Other forges support complete Git import with `--forge git`. Git LFS objects, release assets and wikis are separate source services and are outside this command.
+
+Use `--source-token` for a masked prompt or `--source-token-file <path>` for a token file. A token is recommended for public metadata too, because forge REST limits can interrupt larger imports. Credentials are passed to Git internally and never saved in the mirror's config. The server encrypts a pending source credential with its Actions key, discards it when a one-shot import finishes or fails, and retains it in mirror mode until cutover. A failed private one-shot import needs a token again when resumed.
+
+`--mirror` schedules hourly source synchronization through an eligible owner runner. The CLI performs the first transfer locally; later syncs require a running user/org machine whose group permits this repository. Repo-scoped Actions runners cannot claim owner imports. `gild repo resume owner/name` retries an interrupted import using the disk mirror and durable metadata checkpoint; use `--source-token-file` when needed. `gild repo cutover owner/name` stops synchronization and records the source as a read-only reference.
+
+Source authors and timestamps are retained with explicit imported attribution. Historical reviews never approve a Gild merge. PR heads use `import/pr/<number>`; a missing head produces a closed PR with its source patch. GitLab's separate issue/MR number spaces map to odd/even Gild numbers; GitHub numbers remain unchanged. A source `_meta` branch is retained under `import/source/_meta` (with a suffix if necessary), preserving Gild's access metadata. Actions compatibility warnings come from the same support contract used by execution. Imports do not execute source workflows.
+
+Git packs stay on disk and stream through a live repository-scoped import credential. Native Git is required. Request batches stay bounded; interrupted item IDs replay safely. Generated import contracts, source adapters and Actions support come from the site repository.
+
+-codex
