@@ -1,7 +1,7 @@
 import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { join, resolve, dirname, isAbsolute } from 'node:path'
 import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { userInfo } from 'node:os'
 import { execFileSync } from 'node:child_process'
 export interface ServiceOptions {
   name: string
@@ -51,7 +51,9 @@ export function servicePlan(opts: ServiceOptions) {
   )
     throw Error('Service paths must not contain control characters')
   const platform = opts.platform ?? process.platform,
-    home = opts.home ?? homedir(),
+    // The OS account's home, not $HOME: launchd and systemd look there even
+    // when the CLI runs with a different HOME (e.g. a dedicated runner home).
+    home = opts.home ?? userInfo().homedir,
     exe = resolve(opts.executable ?? process.execPath),
     root = resolve(opts.configDir),
     id = 'gild.runner.' + opts.name
@@ -140,6 +142,8 @@ export async function runnerService(
   const report = opts.report ?? console.log
   if (action === 'install') {
     await mkdir(join(plan.file, '..'), { recursive: true })
+    // launchd/systemd don't create the log directory themselves.
+    await mkdir(join(resolve(opts.configDir), 'runners'), { recursive: true })
     if (existsSync(plan.file))
       throw Error('Service definition already exists; uninstall it first')
     if (plan.content)
