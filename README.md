@@ -53,3 +53,5 @@ Service implementation references: [Microsoft New-Service](https://learn.microso
 
 Run `bun run format` and `bun run format:check` for handwritten code. Generated API sources retain the site's formatting.
 
+
+Session record/list with `--agent` use that agent's saved server; a different `--server` is refused. Before upload the CLI redacts commands, notes, model names and file paths, then computes the idempotency key from the sanitized report. Rules mirror the site's redactor and include bearer/API credentials, AWS access keys, opaque Cloudflare-like credentials and secret assignments (`--token=`, `KEY=`, passwords). Raw receipt files stay local.

@@ -28,6 +28,8 @@ import { dirname, join } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { tailEvents } from './events-tail'
+import { sessionInput } from './api/sessions-contract'
+import { redactSession } from './session-redaction'
 
 // ---------- identity storage (~/.config/gild/identity.json, mode 0600) ----------
 
@@ -916,14 +918,19 @@ sessionCmd
   .option('--commit <sha>')
   .requiredOption('--agent <label>')
   .requiredOption('--file <path>', 'session JSON file')
-  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .option(
+    '--server <url>',
+    'forge base URL (defaults to the joined server for agents)',
+  )
   .action(async (opts) => {
     const params = sessionTarget(opts),
       agent = await loadAgent(opts.agent)
     if (!agent?.token) throw Error('Use an approved local agent token')
-    const body = JSON.parse(await readFile(opts.file, 'utf8')),
+    const body = redactSession(
+        sessionInput.parse(JSON.parse(await readFile(opts.file, 'utf8'))),
+      ),
       client = new GildClient(
-        opts.server.replace(/\/$/, '') + '/api/v1',
+        agentServer(agent, opts.server) + '/api/v1',
         agent.token,
       )
     const options = {
@@ -954,17 +961,20 @@ sessionCmd
   .option('--pull <number>')
   .option('--commit <sha>')
   .option('--agent <label>')
-  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .option(
+    '--server <url>',
+    'forge base URL (defaults to the joined server for agents)',
+  )
   .action(async (opts) => {
     const params = sessionTarget(opts),
       agent = opts.agent ? await loadAgent(opts.agent) : null,
-      identity = await loadIdentity()
+      identity = opts.agent ? null : await loadIdentity()
     if (opts.agent && !agent?.token)
       throw Error('Use an approved local agent token')
     if (!opts.agent && !identity) throw Error('Run gild auth init first')
     const client = agent?.token
-      ? new GildClient(opts.server.replace(/\/$/, '') + '/api/v1', agent.token)
-      : await clientFor(opts.server, identity!)
+      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token)
+      : await clientFor(opts.server ?? 'https://gild.gg', identity!)
     console.log(
       JSON.stringify(
         opts.pull
