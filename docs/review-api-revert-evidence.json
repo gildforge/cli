@@ -1,0 +1,22 @@
+[
+  {
+    "behavior": "token-routing",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "agent-event-routing",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "client-redaction",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "agent-session-routing",
+    "exit": 1,
+    "assertionFailure": true
+  }
+]

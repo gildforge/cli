@@ -120,7 +120,8 @@ export async function runnerService(
       })
   if (action === 'install') {
     await mkdir(join(plan.file, '..'), { recursive: true })
-    if (plan.content) await writeFile(plan.file, plan.content, { mode: 0o600, flag: 'wx' })
+    if (plan.content)
+      await writeFile(plan.file, plan.content, { mode: 0o600, flag: 'wx' })
     if (plan.platform === 'linux')
       execute('systemctl', ['--user', 'daemon-reload'])
   }

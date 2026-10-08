@@ -164,7 +164,13 @@ test('production nested runner command honors global config-dir and edits the re
   const root = await mkdtemp(resolve('.tmp/owner-controls-'))
   const original = globalThis.fetch,
     calls: any[] = []
-  await writeFile(join(root, 'identity.json'), JSON.stringify({ apiToken: 'gf_fixture' }), { mode: 0o600 })
+  await writeFile(
+    join(root, 'identity.json'),
+    JSON.stringify({
+      apiToken: { server: 'https://gild.gg', token: 'gf_fixture' },
+    }),
+    { mode: 0o600 },
+  )
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({
@@ -172,19 +178,36 @@ test('production nested runner command honors global config-dir and edits the re
         authorization: new Headers(init?.headers).get('authorization'),
         body: JSON.parse(String(init?.body)),
       })
-      return Response.json({
-        id: 'builds', name: 'builds', visibility: 'selected',
-        allow_public_repositories: false, repositories: [],
-      }, { status: 201 })
+      return Response.json(
+        {
+          id: 'builds',
+          name: 'builds',
+          visibility: 'selected',
+          allow_public_repositories: false,
+          repositories: [],
+        },
+        { status: 201 },
+      )
     },
     { preconnect: original.preconnect },
   )
   try {
     await program.parseAsync(
-      ['runner', 'group', 'create', 'builds', '--org', 'acme', '--config-dir', root],
+      [
+        'runner',
+        'group',
+        'create',
+        'builds',
+        '--org',
+        'acme',
+        '--config-dir',
+        root,
+      ],
       { from: 'user' },
     )
-    expect(calls[0].url).toBe('https://gild.gg/api/v1/orgs/acme/actions/runner-groups')
+    expect(calls[0].url).toBe(
+      'https://gild.gg/api/v1/orgs/acme/actions/runner-groups',
+    )
     expect(calls[0].authorization).toBe('Bearer gf_fixture')
     expect(calls[0].body.name).toBe('builds')
   } finally {
