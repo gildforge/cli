@@ -113,7 +113,7 @@ export function servicePlan(opts: ServiceOptions) {
   }
   if (platform === 'linux') {
     const file = join(home, '.config', 'systemd', 'user', id + '.service')
-    const content = `[Unit]\nDescription=Gild runner ${opts.name}\nAfter=network-online.target\n\n[Service]\nEnvironment=${unit('PATH=' + servicePath(opts.findTool))}\nExecStart=${command.map(unit).join(' ')}\nWorkingDirectory=${unit(home)}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`
+    const content = `[Unit]\nDescription=Gild runner ${opts.name}\nAfter=network-online.target\n\n[Service]\nEnvironment=${unit('PATH=' + servicePath(opts.findTool))}\nExecStart=${command.map(unit).join(' ')}\nWorkingDirectory=${home}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`
     return {
       platform,
       file,
