@@ -17,6 +17,14 @@ const git = (cwd: string, ...args: string[]) =>
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    // CI machines have no git identity; commits and annotated tags need one.
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Import Test',
+      GIT_AUTHOR_EMAIL: 'import-test@gild.invalid',
+      GIT_COMMITTER_NAME: 'Import Test',
+      GIT_COMMITTER_EMAIL: 'import-test@gild.invalid',
+    },
   }).trim()
 test('native import preserves full history, branches, annotated tags, default branch and source _meta without replacing gild ACL', async () => {
   await mkdir('.tmp', { recursive: true })
