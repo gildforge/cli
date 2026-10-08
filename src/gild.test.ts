@@ -9,18 +9,24 @@ const identity = {
   apiToken: null,
   device: 'test',
   publicKey: `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`,
-  secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
+  secretKey: privateKey
+    .export({ format: 'der', type: 'pkcs8' })
+    .toString('base64'),
   createdAt: new Date().toISOString(),
 }
 
 test('a signed challenge verifies against the public key', () => {
   const signature = signChallenge(identity, 'gild-challenge-123')
-  expect(verifyChallenge(identity.publicKey, 'gild-challenge-123', signature)).toBe(true)
+  expect(
+    verifyChallenge(identity.publicKey, 'gild-challenge-123', signature),
+  ).toBe(true)
 })
 
 test('a wrong challenge fails verification', () => {
   const signature = signChallenge(identity, 'gild-challenge-123')
-  expect(verifyChallenge(identity.publicKey, 'gild-challenge-456', signature)).toBe(false)
+  expect(
+    verifyChallenge(identity.publicKey, 'gild-challenge-456', signature),
+  ).toBe(false)
 })
 
 test('a different key fails verification', () => {
@@ -38,6 +44,10 @@ test('fingerprint is stable and short', () => {
 test('an agent join signature verifies against the key it filed', async () => {
   const { agentJoinChallenge } = await import('./gild')
   const signature = signChallenge(identity, agentJoinChallenge('abc123'))
-  expect(verifyChallenge(identity.publicKey, 'gild-agent-join:abc123', signature)).toBe(true)
-  expect(verifyChallenge(identity.publicKey, 'gild-agent-join:other', signature)).toBe(false)
+  expect(
+    verifyChallenge(identity.publicKey, 'gild-agent-join:abc123', signature),
+  ).toBe(true)
+  expect(
+    verifyChallenge(identity.publicKey, 'gild-agent-join:other', signature),
+  ).toBe(false)
 })

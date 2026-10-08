@@ -1,4 +1,10 @@
 import { runnerService } from './runner-service'
+import {
+  serverTokenSchema,
+  tokenForServer,
+  type ServerToken,
+} from './server-token'
+
 import { GildClient, requestPath } from './api/client'
 import {
   chmod,
@@ -126,6 +132,7 @@ export async function request(
     client,
     method,
     `${config.scope === 'org' ? '/orgs/' + config.owner : config.scope === 'user' ? '/users/' + config.owner : '/repos/' + config.repo}/actions/${path || 'runners'}`,
+
     body,
   )
 }
@@ -805,18 +812,23 @@ export async function startRunner(
 }
 async function runnerIdentity(
   root: string,
-  load: () => Promise<{ apiToken?: string | null } | null>,
+  load: () => Promise<{ apiToken?: ServerToken | null } | null>,
 ) {
   if (resolve(root) === resolve(configRoot())) return load()
   const file = join(root, 'identity.json')
-  await chmod(file, 0o600)
-  return z
-    .object({ apiToken: z.string().startsWith('gf_') })
-    .parse(JSON.parse(await readFile(file, 'utf8')))
+  try {
+    await chmod(file, 0o600)
+    return z
+      .object({ apiToken: serverTokenSchema })
+      .parse(JSON.parse(await readFile(file, 'utf8')))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
 }
 export function runnerCommands(
   program: Command,
-  loadIdentity: () => Promise<{ apiToken?: string | null } | null>,
+  loadIdentity: () => Promise<{ apiToken?: ServerToken | null } | null>,
 ) {
   const runner = program
     .command('runner')
@@ -850,7 +862,8 @@ export function runnerCommands(
       const identity = opts.token
         ? null
         : await runnerIdentity(opts.configDir, loadIdentity)
-      const registrationToken = opts.token ?? identity?.apiToken
+      const registrationToken =
+        opts.token ?? tokenForServer(identity?.apiToken, opts.server)
       if (!registrationToken)
         throw new Error('Use --token or run gild auth token first')
       const server = new URL(opts.server)
@@ -957,7 +970,7 @@ export function runnerCommands(
                 server: opts.server,
                 scope: opts.org ? 'org' : 'user',
                 owner: opts.org ?? opts.user,
-                token: identity.apiToken,
+                token: tokenForServer(identity.apiToken, opts.server),
               },
               'runners',
               undefined,
@@ -971,17 +984,47 @@ export function runnerCommands(
       }
       for (const r of await listRunners(opts.configDir)) {
         const identity = await runnerIdentity(opts.configDir, loadIdentity)
-        const view = await request(
-            { ...r, token: identity?.apiToken ?? r.token },
-            '',
-            undefined,
-            'GET',
-          ),
+        const token =
+          identity?.apiToken?.server === r.server
+            ? tokenForServer(identity.apiToken, r.server)
+            : r.token
+        const view = await request({ ...r, token }, '', undefined, 'GET'),
           live = view.runners.find(
             (x: { gild_id: string }) => x.gild_id === r.id,
           )
+        let run: number | undefined
+        if (live?.busy && r.repo) {
+          const [owner, repo] = r.repo.split('/')
+          const client = new GildClient(
+            r.server.replace(/\/$/, '') + '/api/v1',
+            token,
+          )
+          const overview = await client.request('actionOverview', {
+            owner,
+            repo,
+          })
+          for (const active of overview.workflow_runs.filter(
+            (x: { status: string }) => x.status === 'in_progress',
+          )) {
+            const jobs = await client.request('actionJobs', {
+              owner,
+              repo,
+              run: active.id,
+            })
+            if (
+              jobs.jobs.some(
+                (job: { status: string; runner_id: number | null }) =>
+                  job.status === 'in_progress' && job.runner_id === live.id,
+              )
+            ) {
+              run = active.run_number
+              break
+            }
+          }
+        }
+
         console.log(
-          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? 'busy' : 'idle') : 'removed'}`,
+          `${r.name}  ${r.repo}  ${r.os} · ${r.arch}  ${live ? (live.busy ? `busy${run === undefined ? '' : ` · run #${run}`}` : 'idle') : 'removed'}`,
         )
       }
     })
@@ -993,7 +1036,7 @@ export function runnerCommands(
         identity = await runnerIdentity(opts.configDir, loadIdentity)
       if (!identity?.apiToken) throw new Error('run gild auth token first')
       await request(
-        { ...config, token: identity.apiToken },
+        { ...config, token: tokenForServer(identity.apiToken, config.server) },
         `runners/${config.id}`,
         undefined,
         'DELETE',
@@ -1030,7 +1073,7 @@ export function runnerCommands(
           server: opts.server,
           scope: opts.org ? ('org' as const) : ('user' as const),
           owner,
-          token: identity.apiToken,
+          token: tokenForServer(identity.apiToken, opts.server),
         }
       const path =
         action === 'ls' || action === 'create'

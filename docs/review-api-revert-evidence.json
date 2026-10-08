@@ -1,0 +1,12 @@
+[
+  {
+    "behavior": "token-routing",
+    "exit": 1,
+    "assertionFailure": true
+  },
+  {
+    "behavior": "agent-event-routing",
+    "exit": 1,
+    "assertionFailure": true
+  }
+]
