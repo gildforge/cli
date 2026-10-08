@@ -5,13 +5,24 @@
 //   packages/gild-linux-x64
 // No postinstall anywhere: npm's optionalDependencies + os/cpu fields pick the
 // right package, and the launcher just execs the binary it finds.
-import { mkdirSync, writeFileSync, copyFileSync, chmodSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  chmodSync,
+  rmSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import pkg from '../package.json'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const TARGETS = [
-  { name: 'cli-darwin-arm64', bun: 'bun-darwin-arm64', os: 'darwin', cpu: 'arm64' },
+  {
+    name: 'cli-darwin-arm64',
+    bun: 'bun-darwin-arm64',
+    os: 'darwin',
+    cpu: 'arm64',
+  },
   { name: 'cli-darwin-x64', bun: 'bun-darwin-x64', os: 'darwin', cpu: 'x64' },
   { name: 'cli-linux-x64', bun: 'bun-linux-x64', os: 'linux', cpu: 'x64' },
 ]
@@ -22,19 +33,41 @@ for (const t of TARGETS) {
   const dir = join(ROOT, 'packages', t.name)
   mkdirSync(join(dir, 'bin'), { recursive: true })
   const out = join(dir, 'bin', 'gild')
-  const build = Bun.spawnSync(['bun', 'build', '--compile', '--minify', `--target=${t.bun}`, 'src/gild.ts', '--outfile', out], { cwd: ROOT })
-  if (build.exitCode !== 0) { console.error(t.name, 'build failed:', build.stderr.toString()); process.exit(1) }
+  const build = Bun.spawnSync(
+    [
+      'bun',
+      'build',
+      '--compile',
+      '--minify',
+      `--target=${t.bun}`,
+      'src/gild.ts',
+      '--outfile',
+      out,
+    ],
+    { cwd: ROOT },
+  )
+  if (build.exitCode !== 0) {
+    console.error(t.name, 'build failed:', build.stderr.toString())
+    process.exit(1)
+  }
   chmodSync(out, 0o755)
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({
-    name: `@gildforge/${t.name}`,
-    version: pkg.version,
-    description: `gild CLI binary (${t.os} ${t.cpu})`,
-    type: 'module',
-    os: [t.os],
-    cpu: [t.cpu],
-    files: ['bin'],
-    publishConfig: { access: 'public' },
-  }, null, 2) + '\n')
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify(
+      {
+        name: `@gildforge/${t.name}`,
+        version: pkg.version,
+        description: `gild CLI binary (${t.os} ${t.cpu})`,
+        type: 'module',
+        os: [t.os],
+        cpu: [t.cpu],
+        files: ['bin'],
+        publishConfig: { access: 'public' },
+      },
+      null,
+      2,
+    ) + '\n',
+  )
   console.log(`built ${t.name}`)
 }
 
@@ -60,21 +93,39 @@ mkdirSync(join(main, 'bin'), { recursive: true })
 // (the self-hosted backend). The server binaries come from gildforge/server's
 // own releases; the umbrella tracks them loosely so either can ship alone.
 writeFileSync(join(main, 'bin', 'gild.js'), launcher('cli', 'gild'))
-writeFileSync(join(main, 'bin', 'gild-server.js'), launcher('server', 'gild-server'))
+writeFileSync(
+  join(main, 'bin', 'gild-server.js'),
+  launcher('server', 'gild-server'),
+)
 chmodSync(join(main, 'bin', 'gild.js'), 0o755)
 chmodSync(join(main, 'bin', 'gild-server.js'), 0o755)
-writeFileSync(join(main, 'package.json'), JSON.stringify({
-  name: 'gildforge',
-  version: pkg.version,
-  description: 'gildforge — key-first identity for the gild forge (installs gild and gild-server)',
-  type: 'module',
-  bin: { gild: 'bin/gild.js', 'gild-server': 'bin/gild-server.js' },
-  files: ['bin'],
-  license: 'MIT',
-  publishConfig: { access: 'public' },
-  optionalDependencies: {
-    ...Object.fromEntries(TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version])),
-    ...Object.fromEntries(TARGETS.map((t) => [`@gildforge/server-${t.name.replace('cli-', '')}`, '*'])),
-  },
-}, null, 2) + '\n')
+writeFileSync(
+  join(main, 'package.json'),
+  JSON.stringify(
+    {
+      name: 'gildforge',
+      version: pkg.version,
+      description:
+        'gildforge — key-first identity for the gild forge (installs gild and gild-server)',
+      type: 'module',
+      bin: { gild: 'bin/gild.js', 'gild-server': 'bin/gild-server.js' },
+      files: ['bin'],
+      license: 'MIT',
+      publishConfig: { access: 'public' },
+      optionalDependencies: {
+        ...Object.fromEntries(
+          TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version]),
+        ),
+        ...Object.fromEntries(
+          TARGETS.map((t) => [
+            `@gildforge/server-${t.name.replace('cli-', '')}`,
+            '*',
+          ]),
+        ),
+      },
+    },
+    null,
+    2,
+  ) + '\n',
+)
 console.log('assembled packages/gildforge')
