@@ -92,7 +92,7 @@ test('recorded native Claude hooks translate and capture session metadata defens
     .split('\n')
     .map((line) => JSON.parse(line))
   const types: Record<string, AgentEvent['type']> = {
-    SessionStart: 'busy',
+    SessionStart: 'idle',
     UserPromptSubmit: 'busy',
     PreToolUse: 'tool_start',
     PostToolUse: 'tool_end',
@@ -114,6 +114,15 @@ test('recorded native Claude hooks translate and capture session metadata defens
     expect(observed.has(type)).toBe(true)
   expect(state.agentSessionId).toBe('recorded-session')
   expect(state.transcriptPath).toBe('/fixture/transcript.jsonl')
+  const notification = (notification_type: string) =>
+    claudeAdapter.translate('test', {
+      hook_event_name: 'Notification',
+      notification_type,
+    })!.type
+  // Ready for an injected prompt only at the prompt, never at a question.
+  expect(notification('idle_prompt')).toBe('idle')
+  expect(notification('permission_prompt')).toBe('waiting')
+  expect(notification('elicitation_dialog')).toBe('waiting')
   for (const raw of [
     null,
     [],

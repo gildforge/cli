@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     stream=None;second=None;second_m=None;second_s=None
     try:
         wait(lambda:b'"ready": true' in buf)
-        assert status()['state']=='busy'
+        assert status()['state']=='idle' # a new session waits at its prompt
         if profile_mode:
             ready=next(json.loads(l) for l in buf.splitlines() if l.startswith(b'{') and json.loads(l).get('ready'))
             assert ready['cwd']==str(cwd),ready
@@ -101,8 +101,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert all(x['profile']=='fixture' and x['cwd']==str(cwd) for x in sessions),sessions
             with socket.socket(socket.AF_UNIX) as c:
                 c.connect(str(home/'.gild/sessions/fixture-2.sock'));c.sendall(b'{"type":"info"}\n')
-                assert json.loads(c.recv(65536))['state']=='busy'
-            subprocess.run(CLI+['hook','--session','fixture-2'],input=b'{"hook_event_name":"Stop"}',env=env,check=True,capture_output=True)
+                assert json.loads(c.recv(65536))['state']=='idle'
+            # Delivered straight after start: no turn has to finish first.
             sent=subprocess.run(CLI+['send','fixture-2','second session'],env=env,capture_output=True,timeout=8)
             assert sent.returncode==0,sent.stderr
             deadline=time.monotonic()+8
@@ -117,6 +117,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True)
             assert 'fixture-scoped-token' not in argv
         stream=socket.socket(socket.AF_UNIX);stream.connect(str(path));stream.sendall(b'{"type":"subscribe"}\n')
+        hook('UserPromptSubmit',prompt='human turn')
         send('first');send('second');read(.2);assert lines()==[]
         os.write(m,b'draft');hook('Stop');read(.3);assert lines()==[]
         os.write(m,b'\x15');wait(lambda:lines()==['first'])
