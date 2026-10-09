@@ -11,6 +11,7 @@ const cases = [
   'idle',
   'sanitize',
   'env',
+  'stale-start',
   'kill',
   'hangup',
   'parent-death',

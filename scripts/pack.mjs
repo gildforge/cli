@@ -90,7 +90,8 @@ if (!existsSync(binPath)) { console.error(\`${bin}: \${pkg} is installed but has
 ${
   family === 'cli'
     ? `const child = spawn(binPath, process.argv.slice(2), { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] })
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGWINCH']) process.on(signal, () => child.kill(signal))
+for (const signal of ['SIGTERM', 'SIGHUP', 'SIGWINCH']) process.on(signal, () => child.kill(signal))
+process.on('SIGINT', () => {})
 child.on('error', (error) => { console.error(error.message); process.exit(1) })
 child.on('exit', (code, signal) => process.exit(code ?? ({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[signal] ?? 1)))`
     : `const { status } = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' })

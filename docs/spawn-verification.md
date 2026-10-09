@@ -33,8 +33,26 @@ The macOS x64 binary and copied npm package layout run the integration suite.
 Linux execution and arm64 execution are not local evidence from this Intel
 Mac; CI now repeats the PTY suite through its Linux npm layout. Linux's native
 addon needs the upstream build tools because 1.1.0 has no Linux prebuild.
-Standalone downloads without the optional addon cannot run `spawn`; other
-commands retain their standalone distribution.
+When Node, node-pty, or PTY creation is unavailable, `spawn` silently launches
+the original agent with inherited stdio and its exit status. Windows and
+pipes/redirects also take this native path, without hooks, injection or a socket.
+`GILD_DEBUG` is a tooling-only diagnostic for fallback reasons.
+
+Only explicit nested-session markers are removed: `CLAUDECODE`, `CLAUDE_PID`,
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_PARENT_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`,
+`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`,
+`CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SESSION_ID`
+and `CODEX_THREAD_ID`. Authentication, provider and effort configuration is kept.
+cqx-desktop currently uses a broader prefix filter; the alias intentionally
+does not inherit that filter because it would remove user configuration.
+
+The native child shares the terminal process group; gild consumes its own SIGINT
+without forwarding a second copy. The worker probes a colliding named socket
+and reclaims only a refused socket with an unchanged inode/device.
+
+`node scripts/spawn-review-revert.mjs` verifies eight independent review
+regressions fail with their fixes disabled and restores each source afterward.
 
 ## Real-agent transcript excerpts
 

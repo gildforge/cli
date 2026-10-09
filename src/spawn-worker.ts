@@ -1,3 +1,9 @@
+import {
+  agentEnvironment,
+  runNative,
+  debugFallback,
+  supportsPty,
+} from './spawn-native'
 import { createRequire } from 'node:module'
 import { chmodSync, unlinkSync } from 'node:fs'
 import { chmod } from 'node:fs/promises'
@@ -7,6 +13,7 @@ import type { IPty } from 'node-pty'
 import { InjectionQueue } from './spawn-queue'
 import {
   MAX_MESSAGE_BYTES,
+  removeDeadSocket,
   privateSessionsDirectory,
   socketPath,
   type LocalSession,
@@ -27,6 +34,7 @@ let ownsSocket = false
 let closing = false
 const sockets = new Set<Socket>()
 const wasRaw = process.stdin.isRaw ?? false
+let rawOwned = false
 const server = createServer()
 
 function killGroup(signal: NodeJS.Signals) {
@@ -40,7 +48,10 @@ function killGroup(signal: NodeJS.Signals) {
 }
 function restore() {
   process.stdin.pause()
-  if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw)
+  if (rawOwned) {
+    process.stdin.setRawMode(wasRaw)
+    rawOwned = false
+  }
   queue?.close()
   for (const socket of sockets) socket.destroy()
   server.close()
@@ -88,9 +99,55 @@ process.on('exit', () => {
   } catch {}
 })
 
+async function fallback(error: unknown) {
+  debugFallback(error)
+  restore()
+  ownsSocket = false
+  closing = true
+  // Native stdio belongs to the child; PTY lifecycle handlers must not exit first.
+  process.removeAllListeners('SIGINT')
+  process.removeAllListeners('SIGTERM')
+  process.removeAllListeners('SIGHUP')
+  const code = await runNative(options.agent, options.args)
+  process.exit(code)
+}
 async function main() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY)
-    throw new Error('spawn requires an interactive terminal')
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+    return fallback('PTY unavailable')
+  let pty: typeof import('node-pty')
+  try {
+    let nodePty: string | undefined
+    for (const from of options.resolveFrom) {
+      try {
+        nodePty = createRequire(from).resolve('node-pty')
+        break
+      } catch {}
+    }
+    if (!nodePty)
+      throw new Error(
+        'spawn needs the optional node-pty dependency. Install gildforge with npm (without --omit=optional); standalone downloads do not include node-pty.',
+      )
+    const require = createRequire(nodePty)
+    // npm 1.1.0's macOS prebuild helper arrives without its executable bit.
+    const ptyRoot = dirname(nodePty)
+    if (process.platform === 'darwin') {
+      const helper = join(
+        ptyRoot,
+        '..',
+        'prebuilds',
+        `${process.platform}-${process.arch}`,
+        'spawn-helper',
+      )
+      try {
+        chmodSync(helper, 0o755)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    pty = require(nodePty)
+  } catch (error) {
+    return fallback(error)
+  }
   const directory = await privateSessionsDirectory()
   path = socketPath(options.id, directory)
   server.on('connection', (socket) => {
@@ -136,71 +193,43 @@ async function main() {
       }
     })
   })
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(path, () => {
-      ownsSocket = true
-      resolve()
-    })
-  }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE')
-      throw new Error(
-        `Session ${options.id} already exists; use another --name or run gild sessions to remove stale sockets`,
-      )
-    throw error
-  })
-  await chmod(path, 0o600)
-  server.on('error', failed)
-  let nodePty: string | undefined
-  for (const from of options.resolveFrom) {
+  for (let attempt = 0; ; attempt++) {
     try {
-      nodePty = createRequire(from).resolve('node-pty')
+      await new Promise<void>((resolve, reject) => {
+        const error = (e: Error) => reject(e)
+        server.once('error', error)
+        server.listen(path, () => {
+          server.off('error', error)
+          ownsSocket = true
+          resolve()
+        })
+      })
       break
-    } catch {}
-  }
-  if (!nodePty)
-    throw new Error(
-      'spawn needs the optional node-pty dependency. Install gildforge with npm (without --omit=optional); standalone downloads do not include node-pty.',
-    )
-  const require = createRequire(nodePty)
-  // npm 1.1.0's macOS prebuild helper arrives without its executable bit.
-  const ptyRoot = dirname(nodePty)
-  if (process.platform === 'darwin') {
-    const helper = join(
-      ptyRoot,
-      '..',
-      'prebuilds',
-      `${process.platform}-${process.arch}`,
-      'spawn-helper',
-    )
-    try {
-      chmodSync(helper, 0o755)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
+      if (attempt === 0 && (await removeDeadSocket(path))) continue
+      throw new Error(
+        `Session ${options.id} already exists; use another --name`,
+      )
     }
   }
-  const pty: typeof import('node-pty') = require(nodePty)
-  const env: Record<string, string> = {}
-  for (const [name, value] of Object.entries(process.env)) {
-    if (
-      value === undefined ||
-      /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CODEX_SESSION_ID|CODEX_THREAD_ID)$/.test(
-        name,
-      ) ||
-      name.startsWith('CLAUDE_CODE_')
-    )
-      continue
-    env[name] = value
+  await chmod(path, 0o600)
+  server.on('error', failed)
+  const env = agentEnvironment()
+  try {
+    child = pty.spawn(options.agent, options.args, {
+      name: 'xterm-256color',
+      cols: process.stdout.columns,
+      rows: process.stdout.rows,
+      cwd: process.cwd(),
+      env,
+      encoding: null,
+    })
+  } catch (error) {
+    return fallback(error)
   }
   process.stdin.setRawMode(true)
-  child = pty.spawn(options.agent, options.args, {
-    name: 'xterm-256color',
-    cols: process.stdout.columns,
-    rows: process.stdout.rows,
-    cwd: process.cwd(),
-    env,
-    encoding: null,
-  })
+  rawOwned = true
   queue = new InjectionQueue((data) => child!.write(data), options.idleMs)
   process.stdin.on('data', (data: Buffer) => {
     queue!.userInput()

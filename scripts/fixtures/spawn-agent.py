@@ -16,7 +16,7 @@ if mode == 'jobs':
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         while True: signal.pause()
     output({'job': pid, 'group': os.getpgrp()})
-output({'ready': True, 'pid': os.getpid(), 'env': {k: v for k, v in os.environ.items() if k.startswith(('CLAUDE', 'CODEX', 'KEEP_'))}, 'term': os.environ.get('TERM')})
+output({'ready': True, 'pid': os.getpid(), 'env': {k: v for k, v in os.environ.items() if k in ('CLAUDECODE','CLAUDE_PID','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID','CLAUDE_CODE_MESSAGING_TOKEN','CLAUDE_EFFORT','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CODEX_SESSION_ID','CODEX_THREAD_ID','KEEP_TEST','CLAUDE_OTHER','CODEX_OTHER')}, 'term': os.environ.get('TERM')})
 resized()
 if mode == 'bytes':
     expected = bytes([0, 1, 3, 9, 10, 13, 27, 127, 128, 255]) + '🦊'.encode()

@@ -6,7 +6,7 @@ CLI = json.loads(os.environ['TEST_GILD_COMMAND'])
 CASE = sys.argv[1]
 
 class Session:
-    def __init__(self, mode='lines', idle=150, name='test', extra=None):
+    def __init__(self, mode='lines', idle=150, name='test', extra=None, stale=False):
         self.home = tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='s-')
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
@@ -14,8 +14,12 @@ class Session:
         attrs[1] &= ~termios.OPOST
         termios.tcsetattr(self.slave, termios.TCSANOW, attrs)
         self.original = termios.tcgetattr(self.slave)
-        self.env = {**os.environ, 'HOME': self.home.name, 'CLAUDECODE': 'outer', 'CLAUDE_PID': '123', 'CLAUDE_EFFORT': 'high', 'CLAUDE_CODE_TEST': 'outer', 'CODEX_SESSION_ID': 'outer', 'CODEX_THREAD_ID': 'outer', 'KEEP_TEST': 'kept', 'CLAUDE_OTHER': 'kept', 'CODEX_OTHER': 'kept'}
+        self.env = {**os.environ, 'HOME': self.home.name, 'CLAUDE_CODE_SESSION_ID': 'fixture-session', 'CLAUDE_CODE_MESSAGING_TOKEN': 'fixture-session-marker', 'CLAUDECODE': 'outer', 'CLAUDE_PID': '123', 'CLAUDE_EFFORT': 'high', 'CLAUDE_CODE_CHILD_SESSION': 'outer', 'CLAUDE_CODE_OAUTH_TOKEN': 'fixture-config', 'CLAUDE_CODE_USE_BEDROCK': '1', 'CODEX_SESSION_ID': 'outer', 'CODEX_THREAD_ID': 'outer', 'KEEP_TEST': 'kept', 'CLAUDE_OTHER': 'kept', 'CODEX_OTHER': 'kept'}
         command = CLI + ['spawn', '--name', name, '--idle-ms', str(idle), str(ROOT / 'scripts/fixtures/spawn-agent.py'), mode]
+        if stale:
+            path = pathlib.Path(self.home.name)/'.gild/sessions'/ (name+'.sock')
+            path.parent.mkdir(parents=True)
+            old = socket.socket(socket.AF_UNIX); old.bind(str(path)); old.close()
         self.proc = subprocess.Popen(command, stdin=self.slave, stdout=self.slave, stderr=self.slave, cwd=ROOT, env=self.env, start_new_session=True)
         self.buffer = b''
         self.events = []
@@ -105,7 +109,7 @@ try:
         assert termios.tcgetattr(s.slave) == s.original
         assert not s.path.exists()
     elif CASE in ('send', 'paste', 'idle', 'sanitize'):
-        s = Session(idle=700 if CASE == 'idle' else 150)
+        s = Session(idle=2500 if CASE == 'idle' else 150)
         if CASE == 'send':
             s.send('hello')
             s.wait_event('line', 'hello')
@@ -126,11 +130,17 @@ try:
             s.read(0.25)
             assert not any(e.get('line') == 'hello' for e in s.events), s.events
             s.wait_event('line', 'hello')
+    elif CASE == 'stale-start':
+        s = Session(stale=True)
+        s.send('reclaimed'); s.wait_event('line', 'reclaimed')
     elif CASE == 'env':
         s = Session()
-        markers = ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_TEST', 'CODEX_SESSION_ID', 'CODEX_THREAD_ID']
+        markers = ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CODEX_SESSION_ID', 'CODEX_THREAD_ID']
         assert not any(k in s.ready['env'] for k in markers), s.ready
         assert all(s.ready['env'][k] == 'kept' for k in ['KEEP_TEST', 'CLAUDE_OTHER', 'CODEX_OTHER']), s.ready
+        assert s.ready['env']['CLAUDE_EFFORT'] == 'high'
+        assert s.ready['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'fixture-config'
+        assert s.ready['env']['CLAUDE_CODE_USE_BEDROCK'] == '1'
         assert s.ready['term'] == 'xterm-256color'
     elif CASE in ('kill', 'hangup', 'parent-death'):
         s = Session('jobs')

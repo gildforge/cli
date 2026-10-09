@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Command, InvalidArgumentError } from 'commander'
@@ -7,7 +8,6 @@ import {
   liveSessions,
   localRequest,
   privateSessionsDirectory,
-  requireUnix,
   socketPath,
   MAX_MESSAGE_BYTES,
 } from './spawn-sessions'
@@ -36,7 +36,10 @@ export function spawnCommands(program: Command) {
         args: string[],
         opts: { name?: string; idleMs: number },
       ) => {
-        requireUnix()
+        if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
+          process.exitCode = await runNative(agent, args)
+          return
+        }
         const id = opts.name ?? `agent-${randomBytes(3).toString('hex')}`
         socketPath(id)
         const resolveFrom = [
@@ -65,25 +68,16 @@ export function spawnCommands(program: Command) {
             stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
           },
         )
-        const signals: NodeJS.Signals[] = [
-          'SIGTERM',
-          'SIGHUP',
-          'SIGINT',
-          'SIGWINCH',
-        ]
+        const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
+        const interrupted = () => {}
+        process.on('SIGINT', interrupted)
         const disconnected = () => worker.kill('SIGHUP')
         process.on('disconnect', disconnected)
         const handlers = signals.map((signal) => () => worker.kill(signal))
         signals.forEach((signal, index) => process.on(signal, handlers[index]))
         try {
           process.exitCode = await new Promise<number>((resolve, reject) => {
-            worker.once('error', () =>
-              reject(
-                new Error(
-                  'spawn requires Node.js on PATH (install Node.js, then retry)',
-                ),
-              ),
-            )
+            worker.once('error', reject)
             worker.once('exit', (code, signal) =>
               resolve(
                 code ??
@@ -91,7 +85,11 @@ export function spawnCommands(program: Command) {
               ),
             )
           })
+        } catch (error) {
+          debugFallback(error)
+          process.exitCode = await runNative(agent, args)
         } finally {
+          process.off('SIGINT', interrupted)
           process.off('disconnect', disconnected)
           signals.forEach((signal, index) =>
             process.off(signal, handlers[index]),
