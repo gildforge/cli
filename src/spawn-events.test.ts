@@ -147,15 +147,31 @@ test('Codex notify translates only turn completion; generated spawn config is na
     raw,
   })
   expect(codexAdapter.translate('test', { type: 'future' })).toBeNull()
-  const prepared = await codexAdapter.prepare(
-    { id: 'test', directory: '/fixture', command: ['/gild'] },
-    ['--resume'],
-  )
-  expect(prepared.args).toEqual([
-    '-c',
-    'notify=["/gild","hook","--session","test","--agent","codex"]',
-    '--resume',
-  ])
+  const home = await mkdtemp(resolve('.tmp/codex-env-'))
+  try {
+    const prepared = await codexAdapter.prepare(
+      {
+        id: 'test',
+        directory: '/fixture',
+        command: ['/gild'],
+        // A private Codex home keeps a machine's real ~/.codex notify setting
+        // out of the generated config; CODEX_HOME is what the Codex CLI honours.
+        environment: {
+          ...process.env,
+          HOME: home,
+          CODEX_HOME: join(home, '.codex'),
+        },
+      },
+      ['--resume'],
+    )
+    expect(prepared.args).toEqual([
+      '-c',
+      'notify=["/gild","hook","--session","test","--agent","codex"]',
+      '--resume',
+    ])
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
 })
 
 test('structured injection queues busy turns and unsent drafts, resumes FIFO on idle and clear', async () => {

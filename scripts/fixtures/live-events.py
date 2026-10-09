@@ -1,8 +1,14 @@
 """Real Claude Code TUI against a deterministic local Messages API; no credentials or windows."""
-import http.server,threading,json,os,pathlib,tempfile,subprocess,sys,pty,select,time,socket,signal,fcntl,struct,termios,hashlib
+import http.server,threading,json,os,pathlib,tempfile,subprocess,sys,pty,select,time,socket,signal,fcntl,struct,termios,hashlib,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2];CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server.HTTPServer.server_bind resolves the host with socket.getfqdn,
+        # a reverse DNS lookup that hangs where the resolver is slow; tests bind 127.0.0.1.
+        socketserver.TCPServer.server_bind(self);self.server_name=self.server_address[0];self.server_port=self.server_address[1]
 class API(http.server.BaseHTTPRequestHandler):
     def log_message(self,*a):pass
+    def address_string(self):return self.client_address[0]
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or b'{}')
         tool_done=any(any(b.get('type')=='tool_result' for b in m.get('content',[]) if isinstance(b,dict)) for m in body.get('messages',[]) if isinstance(m.get('content'),list))
@@ -20,7 +26,7 @@ class API(http.server.BaseHTTPRequestHandler):
             events.extend([('message_delta',{'type':'message_delta','delta':{'stop_reason':message['stop_reason'],'stop_sequence':None},'usage':{'output_tokens':1}}),('message_stop',{'type':'message_stop'})])
             for e,d in events:self.wfile.write(f'event: {e}\ndata: {json.dumps(d)}\n\n'.encode());self.wfile.flush()
         else:self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(message).encode())
-server=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=server.serve_forever,daemon=True).start()
+server=Server(('127.0.0.1',0),API);threading.Thread(target=server.serve_forever,daemon=True).start()
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
     d=pathlib.Path(tmp);config=d/'config';config.mkdir();project=d/'project';(project/'.claude').mkdir(parents=True)
     rec=ROOT/'scripts/fixtures/record-hook.py';record=d/'native.jsonl'

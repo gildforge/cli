@@ -3,10 +3,15 @@
 alice carries `--on issues.labeled:triage`; bob is a plain channel agent. Labeling
 an issue wakes alice once; her unprompted `chat send "@bob ..."` wakes bob.
 """
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 AGENTS={'fixture-token-alice':'owner/alice','fixture-token-bob':'owner/bob'}
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server.HTTPServer.server_bind resolves the host with socket.getfqdn,
+        # a reverse DNS lookup that hangs where the resolver is slow; tests bind 127.0.0.1.
+        socketserver.TCPServer.server_bind(self);self.server_name=self.server_address[0];self.server_port=self.server_address[1]
 (ROOT/'.tmp').mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py')
@@ -29,6 +34,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         return message
     class API(http.server.BaseHTTPRequestHandler):
         def log_message(self,*a):pass
+        def address_string(self):return self.client_address[0]
         def do_GET(self):
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert url.path=='/api/v1/events',url.path
@@ -60,7 +66,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
                     mention(cursor,body['body'],f'owner/{match[1]}',name,mid=f'm{cursor}-{match[1]}')
             self.send_response(201);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps(message).encode())
-    api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
+    api=Server(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
     origin=f'http://127.0.0.1:{api.server_port}'
     for label,token in [('alice','fixture-token-alice'),('bob','fixture-token-bob')]:
         agent_file=home/f'.config/gild/agents/{label}.json';agent_file.parent.mkdir(parents=True,exist_ok=True)

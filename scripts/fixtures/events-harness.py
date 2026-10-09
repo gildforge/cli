@@ -1,6 +1,11 @@
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,hashlib,http.server,threading
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,hashlib,http.server,threading,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server.HTTPServer.server_bind resolves the host with socket.getfqdn,
+        # a reverse DNS lookup that hangs where the resolver is slow; tests bind 127.0.0.1.
+        socketserver.TCPServer.server_bind(self);self.server_name=self.server_address[0];self.server_port=self.server_address[1]
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py')
     configs=[home/'.claude/settings.json',home/'project/.claude/settings.json',home/'project/.claude/settings.local.json']
@@ -16,13 +21,14 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     if reporting:
         class API(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
+            def address_string(self):return self.client_address[0]
             def do_POST(self):
                 assert self.headers.get('Authorization')=='Bearer fixture-scoped-token'
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 reports.append({'at':time.monotonic(),'body':body})
                 self.send_response(201);self.send_header('Content-Type','application/json');self.end_headers()
                 self.wfile.write(json.dumps({**body,'repository':'owner/demo','target':'commit:'+sha,'created_at':body['started_at'],'updated_at':body['started_at'],'version':len(reports),'closed':body['ended_at'] is not None,'reported_by':'agent'}).encode())
-        api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
+        api=Server(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
         cwd=home/'repo';cwd.mkdir()
         subprocess.run(['git','init','-q',str(cwd)],check=True)
         subprocess.run(['git','-C',str(cwd),'fetch','-q',str(ROOT),'HEAD','--depth=1'],check=True)
