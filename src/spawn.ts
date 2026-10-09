@@ -6,9 +6,18 @@ import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
+import { DEFAULT_COLS, DEFAULT_ROWS } from './spawn-detach'
+import {
+  detachCommands,
+  detachedReady,
+  detachedSpawn,
+  dimension,
+} from './spawn-attach'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { loadHostConfig, parseLevel, statusLines } from './isolation'
 import { Command, InvalidArgumentError } from 'commander'
 import { spawnWorkerSource } from './spawn-bundle' with { type: 'macro' }
 import {
@@ -71,6 +80,15 @@ export function spawnCommands(
         return [...previous, value]
       },
     )
+    .option(
+      '--vm',
+      'run the agent inside a Firecracker microVM (needs isolation.json)',
+    )
+    .option(
+      '--config-dir <path>',
+      'gild config directory (isolation.json)',
+      join(homedir(), '.config', 'gild'),
+    )
     .option('--name <id>', 'memorable local session name')
     .option(
       '--idle-ms <ms>',
@@ -78,6 +96,12 @@ export function spawnCommands(
       idleMilliseconds,
       1500,
     )
+    .option(
+      '--detach',
+      'run in the background with no terminal; prints the session id (see gild attach, gild stop)',
+    )
+    .option('--cols <n>', 'detached terminal width', dimension, DEFAULT_COLS)
+    .option('--rows <n>', 'detached terminal height', dimension, DEFAULT_ROWS)
     .allowUnknownOption()
     .action(
       async (
@@ -89,6 +113,11 @@ export function spawnCommands(
           as?: string
           printId?: boolean
           nudge?: string[]
+          detach?: boolean
+          cols: number
+          rows: number
+          vm?: boolean
+          configDir: string
         },
       ) => {
         const resolved =
@@ -107,7 +136,23 @@ export function spawnCommands(
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
         const binary = realAgent(agent, cwd)
-        if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
+        if (opts.detach && opts.vm)
+          throw Error('--detach does not support --vm yet')
+        if (opts.detach && !supportsPty())
+          throw Error(
+            'Detached sessions need a PTY, unavailable on this platform',
+          )
+        if (
+          opts.vm &&
+          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+        )
+          throw Error(
+            '--vm needs an interactive terminal; it never falls back to running on the host',
+          )
+        if (
+          !opts.detach &&
+          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+        ) {
           process.exitCode = await runNative(
             binary,
             args,
@@ -161,33 +206,47 @@ export function spawnCommands(
               id,
               idleMs: opts.idleMs,
               resolveFrom,
-              hookCommand: import.meta.url.includes('$bunfs')
-                ? [process.execPath]
-                : [
-                    process.execPath,
-                    'run',
-                    new URL('./gild.ts', import.meta.url).pathname,
-                  ],
+              vm: opts.vm ? { configDir: opts.configDir } : undefined,
+              // Inside the guest the hook is the guest agent, which relays over vsock.
+              hookCommand: opts.vm
+                ? ['/usr/local/bin/gild-guest-agent']
+                : import.meta.url.includes('$bunfs')
+                  ? [process.execPath]
+                  : [
+                      process.execPath,
+                      'run',
+                      new URL('./gild.ts', import.meta.url).pathname,
+                    ],
               reporting: !!report,
               bridging: !!bridge,
               identity: identity?.agent,
               printId: opts.printId,
               profile: profile
-                ? { name: profile.name, channels: profile.channels }
+                ? {
+                    name: profile.name,
+                    channels: profile.channels,
+                    on: profile.on,
+                  }
                 : undefined,
               envAllowlist: profile?.env,
               nudges,
+              detach: opts.detach
+                ? { cols: opts.cols, rows: opts.rows }
+                : undefined,
             }),
           ],
-          {
-            cwd,
-            stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-          },
+          opts.detach
+            ? detachedSpawn(cwd)
+            : {
+                cwd,
+                stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+              },
         )
         if (report)
           worker.once('spawn', () => worker.send({ type: 'report', report }))
         if (bridge)
           worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
+        if (opts.detach) return console.log(await detachedReady(worker))
         const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
         const interrupted = () => {}
         process.on('SIGINT', interrupted)
@@ -206,6 +265,7 @@ export function spawnCommands(
             )
           })
         } catch (error) {
+          if (opts.vm) throw error
           debugFallback(error)
           process.exitCode = await runNative(
             realAgent(agent, cwd),
@@ -246,9 +306,47 @@ export function spawnCommands(
       console.log(`queued for ${id}`)
     })
   program
-    .command('status <id>')
-    .description('inspect a live local agent session')
+    .command('sync <id>')
+    .description(
+      "copy a --vm session's working-directory changes back to the host now (also done when it exits)",
+    )
     .action(async (id: string) => {
+      const r = await localRequest(
+        socketPath(id, await privateSessionsDirectory()),
+        { type: 'sync' },
+        10 * 60_000,
+      )
+      console.log(
+        `${id}: ${r.written} written, ${r.deleted} deleted, ${r.conflicts.length} conflicts${r.rejected ? `, ${r.rejected} rejected` : ''}`,
+      )
+      for (const c of r.conflicts)
+        console.log(
+          `  kept host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+        )
+    })
+  program
+    .command('status [id]')
+    .description(
+      "inspect a live local agent session, or (no id) show this machine's isolation",
+    )
+    .option(
+      '--isolation <level>',
+      'with no id: show the outcome of this request',
+    )
+    .option(
+      '--config-dir <path>',
+      'gild config directory',
+      join(homedir(), '.config', 'gild'),
+    )
+    .action(async (id: string | undefined, opts) => {
+      if (!id) {
+        const host = await loadHostConfig(opts.configDir)
+        for (const line of statusLines(host, {
+          flag: parseLevel(opts.isolation, '--isolation'),
+        }))
+          console.log(line)
+        return
+      }
       const directory = await privateSessionsDirectory()
       console.log(
         JSON.stringify(
@@ -256,6 +354,7 @@ export function spawnCommands(
         ),
       )
     })
+  detachCommands(program)
   program
     .command('sessions')
     .description('list live local agent sessions and remove stale sockets')
