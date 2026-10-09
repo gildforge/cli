@@ -41,7 +41,7 @@ function machine(have: {
 }): Probes {
   return {
     platform: have.platform ?? 'linux',
-    firecracker: () => !!have.vm,
+    vm: () => !!have.vm,
     oci: () => !!have.oci,
     colima: () =>
       have.colima ?? {
@@ -63,6 +63,7 @@ function machine(have: {
 const everything: HostConfig = {
   vm: {
     firecracker: 'firecracker',
+    vz: 'gild-vz',
     kernel: '/k',
     rootfs: '/r',
     memoryMiB: 512,
@@ -162,6 +163,23 @@ describe('gild status reports each backend honestly', () => {
     const text = statusLines(everything, {}, p).join('\n')
     expect(text).toContain('colima: running (vz, x86_64, virtiofs mounts')
     expect(text).toContain('isolation: container (oci in Colima VM)')
+  })
+
+  test('macOS: the vm level is the vz backend, preferred over Colima, and its network is reported', () => {
+    const p = machine({
+      platform: 'darwin',
+      vm: true,
+      oci: true,
+      colima: colimaUp,
+    })
+    expect(detect(everything, p).levels).toEqual(['vm', 'container', 'none'])
+    const auto = { ...everything, vm: { ...everything.vm!, egress: 'auto' } }
+    const text = statusLines(auto as HostConfig, {}, p).join('\n')
+    expect(text).toContain('isolation: vm (vz), requested by auto')
+    expect(text).toMatch(/^vm network: none \(.*VZ NAT would reach the LAN/m)
+    expect(
+      statusLines(everything, {}, machine({ vm: true })).join('\n'),
+    ).toContain('isolation: vm (firecracker), requested by auto')
   })
 
   test('macOS: Colima down means no container level, and status says how to start it', () => {

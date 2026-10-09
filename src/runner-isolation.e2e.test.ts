@@ -161,6 +161,11 @@ describe.skipIf(!hostDir)('runner isolation end to end', () => {
     return { status, results, logs }
   }
 
+  // A TCP connect that works on every host, so the `none` control is a real
+  // control: macOS has no coreutils `timeout` and its bash 3.2 hangs on /dev/tcp.
+  const connect = (hostPort: string, seconds: number) =>
+    `if command -v curl >/dev/null; then curl -s -o /dev/null -m ${seconds} http://${hostPort}/; ` +
+    `else timeout ${seconds} bash -c 'exec 3<>/dev/tcp/${hostPort.replace(':', '/')}'; fi`
   const probes = [
     { name: 'checkout is present', run: 'test -f hello.txt && echo $PWD' },
     { name: 'write inside checkout', run: 'echo x > new.txt && cat new.txt' },
@@ -174,11 +179,11 @@ describe.skipIf(!hostDir)('runner isolation end to end', () => {
     },
     {
       name: 'reach LAN',
-      run: `timeout 4 bash -c 'exec 3<>/dev/tcp/${(lanAddr ?? '').replace(':', '/')}'`,
+      run: connect(lanAddr ?? '', 4),
     },
     {
       name: 'reach metadata address',
-      run: "timeout 3 bash -c 'exec 3<>/dev/tcp/169.254.169.254/80'",
+      run: connect('169.254.169.254:80', 3),
     },
     {
       name: 'secret via env',
