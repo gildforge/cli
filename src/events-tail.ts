@@ -1,4 +1,5 @@
 import { ApiRequestError, type GildClient } from './api/client'
+import type { StreamEvent } from './api/events-contract'
 
 export function waitForEvents(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
@@ -14,7 +15,17 @@ export function waitForEvents(ms: number, signal: AbortSignal) {
 }
 export async function tailEvents(
   client: Pick<GildClient, 'request'>,
-  opts: { repo?: string; since?: string; once?: boolean; raw?: boolean },
+  opts: {
+    repo?: string
+    since?: string
+    once?: boolean
+    raw?: boolean
+    /** Sees every page (even an empty one) before the loop moves on. */
+    onPage?: (page: {
+      events: StreamEvent[]
+      cursor: string
+    }) => void | Promise<void>
+  },
   signal: AbortSignal,
   output: (line: string) => void = console.log,
   cursorOutput: (line: string) => void = console.error,
@@ -31,6 +42,7 @@ export async function tailEvents(
         { repos: opts.repo, since, wait: opts.once ? 0 : 20000 },
         { signal },
       )
+      await opts.onPage?.(page)
       for (const event of page.events)
         output(
           JSON.stringify(

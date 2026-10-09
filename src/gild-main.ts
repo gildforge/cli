@@ -6,6 +6,8 @@ import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
 /** gild — key-first identity for the forge. One Bun/TypeScript entry point,
  *  also compiled into a standalone executable (bun build --compile). */
 import type { ReportTarget } from './spawn-report'
+import type { BridgeTarget } from './spawn-bridge'
+import { chatCommands } from './chat'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
 import chalk from 'chalk'
@@ -1097,6 +1099,21 @@ sessionCmd
     )
   })
 
+/** The human identity, or an approved agent's token with --agent. */
+async function chatClient(opts: { agent?: string; server?: string }) {
+  if (opts.agent) {
+    const agent = await loadAgent(opts.agent)
+    if (!agent?.token) throw Error('Agent token is not approved here yet')
+    return new GildClient(
+      agentServer(agent, opts.server) + '/api/v1',
+      agent.token,
+    )
+  }
+  const identity = await loadIdentity()
+  if (!identity) throw Error('Run gild auth init first')
+  return clientFor(opts.server ?? 'https://gild.gg', identity)
+}
+chatCommands(program, chatClient)
 runnerCommands(program, loadIdentity)
 spawnCommands(
   program,
@@ -1104,7 +1121,11 @@ spawnCommands(
     label,
     cwd,
     localProfile,
-  ): Promise<{ agent: string; report?: ReportTarget }> => {
+  ): Promise<{
+    agent: string
+    report?: ReportTarget
+    bridge?: BridgeTarget
+  }> => {
     if (!/^[a-zA-Z0-9_-]+$/.test(label)) throw Error('Invalid agent label')
     const agent = await loadAgent(label)
     if (!agent?.token) throw Error('Use an approved local agent token')
@@ -1117,6 +1138,7 @@ spawnCommands(
       encoding: 'utf8',
     })
     const server = agentServer(agent)
+    const bridge = { server, token: agent.token, agent: agent.name }
     let remote: URL | undefined
     try {
       const value = origin.stdout?.trim() ?? ''
@@ -1138,13 +1160,14 @@ spawnCommands(
       !/^[a-f0-9]{40}$/.test(sha.stdout.trim())
     ) {
       // Profiles link an approved identity even outside a forge repository.
-      if (localProfile) return { agent: agent.name }
+      if (localProfile) return { agent: agent.name, bridge }
       throw Error(
         '--as requires a repository with an origin on the joined gild server and a committed HEAD',
       )
     }
     return {
       agent: agent.name,
+      bridge,
       report: {
         server,
         token: agent.token,
