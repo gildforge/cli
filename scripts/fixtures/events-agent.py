@@ -11,13 +11,14 @@ def hook(name,**extra):
             assert p.returncode==0 and not p.stdout and not p.stderr
     return payload
 def emit(data): os.write(1,(json.dumps(data)+'\n').encode())
-hook('SessionStart');emit({'ready':True})
+hook('SessionStart');emit({'ready':True,'argv':sys.argv[1:],'cwd':os.getcwd(),'env':{k:v for k,v in os.environ.items() if k.startswith('KEEP_')}})
 buffer=b''
 while True:
     b=os.read(0,1)
     if b in [b'\x15',b'\x03']: buffer=b'';continue
     if b==b'\r':
-        line=buffer.decode();buffer=b'';emit({'line':line})
+        line=buffer.decode();buffer=b''
+        if line!='quit':hook('UserPromptSubmit',prompt=line)
+        emit({'line':line})
         if line=='quit':sys.exit(0)
-        hook('UserPromptSubmit',prompt=line)
     else:buffer+=b

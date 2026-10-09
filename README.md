@@ -125,6 +125,20 @@ coalesce to at most one per second, and finish with ended. Prompts, arguments,
 commands and file paths stay local. Channel mention subscriptions remain a
 future source for the same injection queue.
 
-See [adapter experiments, live evidence and validation](docs/spawn-events.md).
+Local profiles make a gild label runnable with `gild spawn agent ava`:
+
+```sh
+gild agent add ava --runtime claude --model claude-opus-5-5 --effort high --dir /path/to/repo
+gild agent ls
+gild spawn agent ava --continue
+gild send ava "Review the README"
+```
+
+Interactive launches use the existing approved identity for that label. The
+profile stores runtime settings separately from credentials. Duplicate profile
+sessions become `ava`, `ava-2`; sessions show both profile and runtime. Profile
+arguments precede invocation arguments and use the existing events adapters.
+See [profile management and verified flags](docs/agent-profiles.md) and
+[adapter experiments, live evidence and validation](docs/spawn-events.md).
 
 -codex

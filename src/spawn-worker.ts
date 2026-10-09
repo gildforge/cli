@@ -25,6 +25,10 @@ type Options = {
   resolveFrom: string[]
   hookCommand: string[]
   reporting?: boolean
+  identity?: string
+  printId?: boolean
+  profile?: { name: string; channels?: string[] }
+  envAllowlist?: string[]
 }
 const options: Options = JSON.parse(process.argv[1])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
@@ -202,6 +206,13 @@ async function main() {
           const info: LocalSession = {
             id: options.id,
             agent: options.agent,
+            ...(options.identity ? { identity: options.identity } : {}),
+            ...(options.profile
+              ? {
+                  profile: options.profile.name,
+                  channels: options.profile.channels,
+                }
+              : {}),
             cwd: process.cwd(),
             pid: process.pid,
             childPid: child.pid,
@@ -237,19 +248,32 @@ async function main() {
       }
     })
   })
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(path, () => {
-      ownsSocket = true
-      resolve()
-    })
-  }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE')
+  for (let suffix = 1; ; suffix++) {
+    path = socketPath(options.id, directory)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const error = (e: Error) => reject(e)
+        server.once('error', error)
+        server.listen(path, () => {
+          server.off('error', error)
+          ownsSocket = true
+          resolve()
+        })
+      })
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
+      // The bind is the reservation, so concurrent profile launches cannot race.
+      if (options.profile && suffix < 999999) {
+        options.id = `${options.profile.name}-${suffix + 1}`
+        continue
+      }
       throw new Error(
         `Session ${options.id} already exists; use another --name or run gild sessions to remove stale sockets`,
       )
-    throw error
-  })
+    }
+  }
+  if (options.printId) console.error(options.id)
   await chmod(path, 0o600)
   server.on('error', failed)
   let nodePty: string | undefined
@@ -282,7 +306,7 @@ async function main() {
   }
   const pty: typeof import('node-pty') = require(nodePty)
   const binary = realAgent(options.agent)
-  const env = agentEnvironment(binary)
+  const env = agentEnvironment(binary, options.envAllowlist)
   const prepared = await adapter?.prepare(
     {
       id: options.id,

@@ -4,6 +4,14 @@ import { CodexLogs } from './codex-logs'
 import { event, payload, type AgentAdapter } from './types'
 export const codexAdapter: AgentAdapter = {
   name: 'codex',
+  profileArgs({ model, effort }) {
+    return [
+      ...(model ? ['-m', model] : []),
+      ...(effort
+        ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`]
+        : []),
+    ]
+  },
   async prepare(context, args) {
     const command = [
       ...context.command,

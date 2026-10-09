@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { basename, delimiter, resolve } from 'node:path'
 /** Resolve PATH without executing shims; aliases are expanded by the caller's shell. */
-export function realAgent(agent: string): string {
+export function realAgent(agent: string, cwd = process.cwd()): string {
   let visited: string[] = []
   try {
     const chain = JSON.parse(process.env.GILD_SPAWN_CHAIN ?? '[]')
@@ -16,10 +16,10 @@ export function realAgent(agent: string): string {
       visited = chain.filter((p): p is string => typeof p === 'string')
   } catch {}
   const candidates = agent.includes('/')
-    ? [resolve(agent)]
+    ? [resolve(cwd, agent)]
     : (process.env.PATH ?? '')
         .split(delimiter)
-        .map((dir) => resolve(dir || '.', agent))
+        .map((dir) => resolve(cwd, dir || '.', agent))
   for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK)
@@ -47,11 +47,12 @@ export function realAgent(agent: string): string {
     `No native ${agent} executable found on PATH (gild spawn wrappers are skipped)`,
   )
 }
-export function agentEnvironment(binary?: string) {
+export function agentEnvironment(binary?: string, allowlist?: string[]) {
   const env: Record<string, string> = {}
   for (const [name, value] of Object.entries(process.env)) {
     if (
       value === undefined ||
+      (allowlist !== undefined && !allowlist.includes(name)) ||
       /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CODEX_SESSION_ID|CODEX_THREAD_ID)$/.test(
         name,
       ) ||

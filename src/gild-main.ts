@@ -31,6 +31,7 @@ import { dirname, join } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { spawnCommands, localEvents } from './spawn'
+import { profileCommands } from './agent-profiles'
 import { tailEvents } from './events-tail'
 import { sessionInput } from './api/sessions-contract'
 import { redactSession } from './session-redaction'
@@ -792,6 +793,8 @@ const agentCmd = program
     'agent accounts: an agent asks to join, a person approves (like adding a machine to a tailnet)',
   )
 
+profileCommands(agentCmd)
+
 agentCmd
   .command('join <label>')
   .description(
@@ -1095,47 +1098,64 @@ sessionCmd
   })
 
 runnerCommands(program, loadIdentity)
-spawnCommands(program, async (label): Promise<ReportTarget> => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(label)) throw Error('Invalid agent label')
-  const agent = await loadAgent(label)
-  if (!agent?.token) throw Error('Use an approved local agent token')
-  const origin = spawnSync('git', ['remote', 'get-url', 'origin'], {
-    encoding: 'utf8',
-  })
-  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' })
-  const server = agentServer(agent)
-  let remote: URL | undefined
-  try {
-    const value = origin.stdout?.trim() ?? ''
-    remote = new URL(
-      value.startsWith('git@')
-        ? value.replace(/^git@([^:]+):/, 'ssh://git@$1/')
-        : value,
+spawnCommands(
+  program,
+  async (
+    label,
+    cwd,
+    localProfile,
+  ): Promise<{ agent: string; report?: ReportTarget }> => {
+    if (!/^[a-zA-Z0-9_-]+$/.test(label)) throw Error('Invalid agent label')
+    const agent = await loadAgent(label)
+    if (!agent?.token) throw Error('Use an approved local agent token')
+    const origin = spawnSync('git', ['remote', 'get-url', 'origin'], {
+      cwd,
+      encoding: 'utf8',
+    })
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd,
+      encoding: 'utf8',
+    })
+    const server = agentServer(agent)
+    let remote: URL | undefined
+    try {
+      const value = origin.stdout?.trim() ?? ''
+      remote = new URL(
+        value.startsWith('git@')
+          ? value.replace(/^git@([^:]+):/, 'ssh://git@$1/')
+          : value,
+      )
+    } catch {}
+    const repo = remote?.pathname.match(
+      /^\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/,
     )
-  } catch {}
-  const repo = remote?.pathname.match(
-    /^\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/,
-  )
-  if (
-    !remote ||
-    !repo ||
-    remote.hostname !== new URL(server).hostname ||
-    (remote.protocol !== 'ssh:' && remote.origin !== server) ||
-    sha.status !== 0 ||
-    !/^[a-f0-9]{40}$/.test(sha.stdout.trim())
-  )
-    throw Error(
-      '--as requires a repository with an origin on the joined gild server and a committed HEAD',
-    )
-  return {
-    server,
-    token: agent.token,
-    agent: agent.name,
-    owner: repo[1],
-    repo: repo[2],
-    sha: sha.stdout.trim(),
-  }
-})
+    if (
+      !remote ||
+      !repo ||
+      remote.hostname !== new URL(server).hostname ||
+      (remote.protocol !== 'ssh:' && remote.origin !== server) ||
+      sha.status !== 0 ||
+      !/^[a-f0-9]{40}$/.test(sha.stdout.trim())
+    ) {
+      // Profiles link an approved identity even outside a forge repository.
+      if (localProfile) return { agent: agent.name }
+      throw Error(
+        '--as requires a repository with an origin on the joined gild server and a committed HEAD',
+      )
+    }
+    return {
+      agent: agent.name,
+      report: {
+        server,
+        token: agent.token,
+        agent: agent.name,
+        owner: repo[1],
+        repo: repo[2],
+        sha: sha.stdout.trim(),
+      },
+    }
+  },
+)
 
 export function main() {
   return program.parseAsync().catch((error) => {

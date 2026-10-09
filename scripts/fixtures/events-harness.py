@@ -7,7 +7,10 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     for p in configs:p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"hooks":{}}')
     before=[hashlib.sha256(p.read_bytes()).hexdigest() for p in configs]
     env={**os.environ,'HOME':d,'PATH':str(bin)+os.pathsep+os.environ['PATH']}
-    reporting='--report' in sys.argv
+    names_mode='--profile-names' in sys.argv
+    local_mode='--profile-local' in sys.argv
+    profile_mode='--profile' in sys.argv or names_mode or local_mode
+    reporting='--report' in sys.argv or profile_mode
     reports=[];api=None;cwd=ROOT;extra=[]
     if reporting:
         class API(http.server.BaseHTTPRequestHandler):
@@ -29,9 +32,18 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         agent_file=home/'.config/gild/agents/fixture.json';agent_file.parent.mkdir(parents=True)
         agent_file.write_text(json.dumps({'schema':1,'name':'owner/fixture','server':origin,'token':'fixture-scoped-token','publicKey':'test-public','secretKey':'test-private','requestId':'test-request','createdAt':'2026-10-08T00:00:00Z'}));agent_file.chmod(0o600)
         extra=['--as','fixture']
+    if local_mode:
+        cwd=home/'workspace';cwd.mkdir()
+    session='fixture' if profile_mode else 'events'
+    native=['claude']
+    if profile_mode:
+        profile_file=home/'.gild/agents/fixture.json';profile_file.parent.mkdir(parents=True)
+        profile_file.write_text(json.dumps({'name':'fixture','runtime':'claude','model':'claude-opus-5-5','effort':'high','directory':str(cwd),'args':['--allowedTools','Read'],'channels':['owner/demo'],'env':['PATH','HOME','KEEP_TEST']}))
+        env.update({'KEEP_TEST':'allowed','KEEP_DROP':'blocked'})
+        extra=[];native=['agent','fixture','--resume','a b','--','--as','literal']
     m,s=pty.openpty();fcntl.ioctl(s,termios_TIOCSWINSZ:=getattr(__import__('termios'),'TIOCSWINSZ'),struct.pack('HHHH',24,80,0,0))
-    proc=subprocess.Popen(CLI+['spawn','--name','events']+extra+['claude'],stdin=s,stdout=s,stderr=s,env=env,cwd=cwd,start_new_session=True)
-    path=home/'.gild/sessions/events.sock';buf=b''
+    proc=subprocess.Popen(CLI+['spawn']+([] if profile_mode else ['--name','events'])+extra+native,stdin=s,stdout=s,stderr=s,env=env,cwd=ROOT if profile_mode else cwd,start_new_session=True)
+    path=home/f'.gild/sessions/{session}.sock';buf=b''
     def read(t=.1):
         global buf
         until=time.monotonic()+t
@@ -49,16 +61,54 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             if check():return
         raise AssertionError(buf)
     def hook(name,**extra):
-        p=subprocess.run(CLI+['hook','--session','events'],input=json.dumps({'hook_event_name':name,**extra}).encode(),env=env,capture_output=True,timeout=2)
+        p=subprocess.run(CLI+['hook','--session',session],input=json.dumps({'hook_event_name':name,**extra}).encode(),env=env,capture_output=True,timeout=2)
         assert p.returncode==0 and p.stdout==b'' and p.stderr==b''
     def send(text):
-        p=subprocess.run(CLI+['send','events',text],env=env,capture_output=True);assert p.returncode==0,p.stderr
+        p=subprocess.run(CLI+['send',session,text],env=env,capture_output=True);assert p.returncode==0,p.stderr
     def lines():
         return [json.loads(l)['line'] for l in buf.splitlines() if l.startswith(b'{') and 'line' in json.loads(l)]
-    stream=None
+    stream=None;second=None;second_m=None;second_s=None
     try:
         wait(lambda:b'"ready": true' in buf)
         assert status()['state']=='busy'
+        if profile_mode:
+            ready=next(json.loads(l) for l in buf.splitlines() if l.startswith(b'{') and json.loads(l).get('ready'))
+            assert ready['cwd']==str(cwd),ready
+            assert ready['env']=={'KEEP_TEST':'allowed'},ready
+            assert ready['argv'][2:]==['--model','claude-opus-5-5','--effort','high','--allowedTools','Read','--resume','a b','--','--as','literal'],ready
+            assert status()['profile']=='fixture' and status()['id']=='fixture'
+            assert status()['identity']=='owner/fixture'
+            assert status()['channels']==['owner/demo']
+            assert 'fixture-scoped-token' not in profile_file.read_text()
+
+        if names_mode:
+            second_m,second_s=pty.openpty()
+            second=subprocess.Popen(CLI+['spawn','--print-id','agent','fixture'],stdin=second_s,stdout=second_s,stderr=second_s,env=env,cwd=ROOT,start_new_session=True)
+            second_buf=b'';deadline=time.monotonic()+8
+            while b'"ready": true' not in second_buf and time.monotonic()<deadline:
+                if select.select([second_m],[],[],.05)[0]:second_buf+=os.read(second_m,65536)
+                if second.poll() is not None:break
+            assert b'"ready": true' in second_buf,second_buf
+            assert b'fixture-2\r\n' in second_buf or b'fixture-2\n' in second_buf,second_buf
+            listed=subprocess.run(CLI+['sessions','--json'],env=env,capture_output=True,timeout=8)
+            assert listed.returncode==0,listed.stderr
+            sessions=json.loads(listed.stdout)
+            assert {x['id'] for x in sessions}=={'fixture','fixture-2'},sessions
+            assert all(x['profile']=='fixture' and x['cwd']==str(cwd) for x in sessions),sessions
+            with socket.socket(socket.AF_UNIX) as c:
+                c.connect(str(home/'.gild/sessions/fixture-2.sock'));c.sendall(b'{"type":"info"}\n')
+                assert json.loads(c.recv(65536))['state']=='busy'
+            subprocess.run(CLI+['hook','--session','fixture-2'],input=b'{"hook_event_name":"Stop"}',env=env,check=True,capture_output=True)
+            sent=subprocess.run(CLI+['send','fixture-2','second session'],env=env,capture_output=True,timeout=8)
+            assert sent.returncode==0,sent.stderr
+            deadline=time.monotonic()+8
+            while b'"line": "second session"' not in second_buf and time.monotonic()<deadline:
+                if select.select([second_m],[],[],.05)[0]:second_buf+=os.read(second_m,65536)
+            assert b'"line": "second session"' in second_buf,second_buf
+            second.send_signal(signal.SIGTERM);assert second.wait(timeout=8)==143
+            assert not (home/'.gild/sessions/fixture-2.sock').exists()
+            assert not (home/'.gild/sessions/fixture-2/settings.json').exists()
+            reports.clear() # Subsequent assertions concern the original live receipt.
         if reporting:
             argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True)
             assert 'fixture-scoped-token' not in argv
@@ -77,13 +127,14 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         hook('Stop');os.write(m,b'paste\x1b[200~one\ntwo\x1b[201~');send('third');read(.2);assert lines()==['first','second']
         os.write(m,b'\x03');wait(lambda:lines()==['first','second','third'])
         hook('Stop');assert status()['state']=='idle'
-        settings=home/'.gild/sessions/events/settings.json';assert settings.stat().st_mode&0o777==0o600
+        settings=home/f'.gild/sessions/{session}/settings.json';assert settings.stat().st_mode&0o777==0o600
         proc.send_signal(signal.SIGTERM);assert proc.wait(timeout=8)==143
         assert not path.exists() and not settings.exists()
         assert [hashlib.sha256(p.read_bytes()).hexdigest() for p in configs]==before
         stream.settimeout(2);events=stream.recv(65536).decode().splitlines()
         assert any(json.loads(e)['type']=='waiting' for e in events)
-        if reporting:
+        if local_mode:assert reports==[],reports
+        if reporting and not local_mode:
             assert reports and reports[-1]['body']['state']['status']=='ended',reports
             assert reports[-1]['body']['ended_at'] is not None
             assert len({r['body']['id'] for r in reports})==1
@@ -95,6 +146,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         print(json.dumps({'passed':True,'events':[json.loads(e)['type'] for e in events]}))
     finally:
         if proc.poll() is None:proc.terminate();proc.wait(timeout=8)
+        if second is not None and second.poll() is None:second.terminate();second.wait(timeout=8)
+        if second_m is not None:os.close(second_m);os.close(second_s)
         if api:api.shutdown()
         if stream:stream.close()
         os.close(m);os.close(s)
