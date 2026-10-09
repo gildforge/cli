@@ -23,6 +23,14 @@ test.each(['latest', '24', '22'])(
         cwd: repo,
         stdout: 'pipe',
         stderr: 'pipe',
+        // CI machines have no git identity; the fixture brings its own.
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Setup Node fixture',
+          GIT_AUTHOR_EMAIL: 'fixture@example.test',
+          GIT_COMMITTER_NAME: 'Setup Node fixture',
+          GIT_COMMITTER_EMAIL: 'fixture@example.test',
+        },
       })
       expect(r.exitCode, r.stderr.toString()).toBe(0)
       return r.stdout.toString().trim()
