@@ -1,11 +1,34 @@
 import { Command, InvalidArgumentError } from 'commander'
-import { ApiRequestError, type GildClient } from './api/client'
+import { ApiRequestError, GildClient } from './api/client'
 import { routes } from './api/contract'
 import { channelCursor, type ChannelMessage } from './api/channel-contract'
 import { tailEvents, waitForEvents } from './events-tail'
 
 type ClientOptions = { agent?: string; server?: string }
-type Resolve = (opts: ClientOptions) => Promise<GildClient>
+/** `read` asks for a reader: with no identity it is anonymous (public
+ *  channels accept anonymous readers, docs/channel/API.md). */
+type Resolve = (opts: ClientOptions, read?: boolean) => Promise<GildClient>
+
+/** A client that sends no Authorization header at all. A refusal names the
+ *  fix, since only private channels refuse an anonymous reader. */
+export function anonymousClient(baseURL: string, fetcher = fetch) {
+  return new GildClient(baseURL, '', async (input, init) => {
+    const headers = new Headers(init?.headers)
+    headers.delete('authorization')
+    const res = await fetcher(input, { ...init, headers })
+    if (![401, 403, 404].includes(res.status)) return res
+    const message = await res
+      .json()
+      .then((d: { message?: string }) => d.message)
+      .catch(() => undefined)
+    return Response.json(
+      {
+        message: `${message ?? `HTTP ${res.status}`} (read anonymously; a private channel needs an identity: run \`gild auth init\`)`,
+      },
+      { status: res.status },
+    )
+  })
+}
 
 export function repoPair(value: string) {
   const match = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/)
@@ -51,7 +74,9 @@ export async function rawChannel(
     await new Promise<void>((resolve) => {
       // Bun accepts request headers here, which keeps the token out of the URL.
       const socket = new WebSocket(url, {
-        headers: { authorization: `Bearer ${client.token}` },
+        headers: client.token
+          ? { authorization: `Bearer ${client.token}` }
+          : {},
       } as never)
       const done = () => {
         signal.removeEventListener('abort', stop)
@@ -141,7 +166,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
         throw Error('Use --before or --after, not both')
       const params = repoPair(target)
       const page = await (
-        await resolve(opts)
+        await resolve(opts, true)
       ).request('channelMessages', params, undefined, {
         limit: opts.limit,
         before: opts.before,
@@ -187,7 +212,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       .option('--json', 'print the server response as JSON'),
   ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
     const result = await (
-      await resolve(opts)
+      await resolve(opts, true)
     ).request('channelParticipants', repoPair(target))
     if (opts.json) return console.log(JSON.stringify(result))
     for (const p of result.participants)
@@ -210,7 +235,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       .option('--since <cursor>', 'resume after a channel cursor', cursor),
   ).action(async (target: string, opts: ClientOptions & { since?: string }) => {
     const params = repoPair(target)
-    const client = await resolve(opts)
+    const client = await resolve(opts, true)
     const controller = new AbortController()
     const stop = () => controller.abort()
     process.once('SIGINT', stop)

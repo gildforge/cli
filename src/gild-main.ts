@@ -7,7 +7,7 @@ import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
  *  also compiled into a standalone executable (bun build --compile). */
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
-import { chatCommands, repoPair } from './chat'
+import { anonymousClient, chatCommands, repoPair } from './chat'
 import { issueCommands } from './issue'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
@@ -1217,8 +1217,12 @@ sessionCmd
     )
   })
 
-/** The human identity, or an approved agent's token with --agent. */
-async function chatClient(opts: { agent?: string; server?: string }) {
+/** The human identity, or an approved agent's token with --agent. A read
+ *  with neither is anonymous; posting always needs an identity. */
+async function chatClient(
+  opts: { agent?: string; server?: string },
+  read = false,
+) {
   if (opts.agent) {
     const agent = await loadAgent(opts.agent)
     if (!agent?.token) throw Error('Agent token is not approved here yet')
@@ -1228,6 +1232,10 @@ async function chatClient(opts: { agent?: string; server?: string }) {
     )
   }
   const identity = await loadIdentity()
+  if (!identity && read)
+    return anonymousClient(
+      forgeServer(opts.server ?? 'https://gild.gg') + '/api/v1',
+    )
   if (!identity) throw Error('Run gild auth init first')
   return clientFor(opts.server ?? 'https://gild.gg', identity)
 }

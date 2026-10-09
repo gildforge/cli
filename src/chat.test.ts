@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { unlink } from 'node:fs/promises'
 import { cli, fixture, startCLI } from './test-cli'
 
 type Message = {
@@ -12,7 +13,7 @@ type Message = {
   link: null
 }
 /** In-process stand-in for the repo channel routes of gild-site#55. */
-function forge(tokens: string[]) {
+function forge(tokens: string[], anonymousRead = false) {
   const log: Message[] = []
   const seen: { path: string; auth: string | null; body?: unknown }[] = []
   const sockets = new Set<{ send(data: string): void }>()
@@ -36,7 +37,13 @@ function forge(tokens: string[]) {
     const url = new URL(request.url)
     const auth = request.headers.get('authorization')
     seen.push({ path: url.pathname + url.search, auth })
-    if (!tokens.some((t) => auth === `Bearer ${t}`))
+    // A public channel: GETs (and the stream) need no credentials at all.
+    const publicRead =
+      anonymousRead &&
+      auth === null &&
+      request.method === 'GET' &&
+      url.pathname.startsWith('/api/v1/repos/owner/demo/')
+    if (!publicRead && !tokens.some((t) => auth === `Bearer ${t}`))
       return Response.json({ message: 'Bad credentials' }, { status: 401 })
     if (url.pathname === '/api/v1/repos/owner/demo/channel/stream')
       return server.upgrade(request, {
@@ -104,8 +111,11 @@ function forge(tokens: string[]) {
   return { log, seen, sockets, post, handler }
 }
 
-async function setup(tokens = ['gf_fixturetoken', 'gf_agentfixture']) {
-  const state = forge(tokens)
+async function setup(
+  tokens = ['gf_fixturetoken', 'gf_agentfixture'],
+  anonymousRead = false,
+) {
+  const state = forge(tokens, anonymousRead)
   const f = await fixture(() => new Response())
   // The shared fixture owns its server; chat needs websockets, so run our own.
   const server = Bun.serve<{ after: string | null }>({
@@ -383,6 +393,74 @@ test('raw streams channel frames in order, resumes from --since, never exits on 
     expect(s.seen.at(-1)!.path).toContain('after=3')
     second.kill('SIGINT')
     await second.exited
+  } finally {
+    await s.close()
+  }
+}, 30000)
+
+test('history, participants and raw read a public channel with no identity; send still needs one', async () => {
+  const s = await setup(undefined, true)
+  try {
+    await unlink(`${s.root}/identity.json`)
+    s.post('sami', 'public hello')
+    const history = await cli(s.root, [
+      'chat',
+      'history',
+      'owner/demo',
+      '--server',
+      s.origin,
+    ])
+    expect(history).toMatchObject({
+      code: 0,
+      out: '1  2026-10-09T10:00:00.000Z  sami  public hello\n',
+    })
+    const participants = await cli(s.root, [
+      'chat',
+      'participants',
+      'owner/demo',
+      '--server',
+      s.origin,
+    ])
+    expect(participants.code).toBe(0)
+    expect(participants.out).toContain('@sami\thuman\tonline')
+    const raw = startCLI(s.root, [
+      'chat',
+      'raw',
+      'owner/demo',
+      '--server',
+      s.origin,
+    ])
+    const ready = (await lines(raw, 1))[0]
+    expect(ready.messages.map((m: Message) => m.body)).toEqual([
+      'public hello',
+    ])
+    raw.kill('SIGINT')
+    await raw.exited
+    // No header at all, not "Bearer " with an empty token.
+    expect(s.seen.length).toBeGreaterThanOrEqual(3)
+    expect(s.seen.every((r) => r.auth === null)).toBe(true)
+    const send = await cli(s.root, [
+      'chat',
+      'send',
+      'owner/demo',
+      'hi',
+      '--server',
+      s.origin,
+    ])
+    expect(send.code).toBe(1)
+    expect(send.err).toContain('gild auth init')
+    expect(s.log).toHaveLength(1)
+    // A private channel refuses the anonymous reader and names the fix.
+    const priv = await cli(s.root, [
+      'chat',
+      'history',
+      'owner/secret',
+      '--server',
+      s.origin,
+    ])
+    expect(priv.code).toBe(1)
+    expect(priv.err).toContain('Bad credentials')
+    expect(priv.err).toContain('gild auth init')
   } finally {
     await s.close()
   }
