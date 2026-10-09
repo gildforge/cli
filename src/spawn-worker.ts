@@ -276,6 +276,7 @@ async function main() {
             childPid: child.pid,
             started,
             ...state,
+            held: queue?.held,
           }
           socket.end(JSON.stringify(info) + '\n')
         } else if (

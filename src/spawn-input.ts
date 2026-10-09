@@ -1,6 +1,7 @@
 /** Conservative composer tracking; unknown editing controls never authorize injection. */
 export class InputLine {
   dirty = false
+  private cause = ''
   private paste = false
   private escape = ''
   private pasteDirty = false
@@ -57,8 +58,10 @@ export class InputLine {
           !sequence.startsWith('\x1bO') &&
           byte >= 32 &&
           byte !== 127
-        )
+        ) {
           this.dirty = true
+          this.cause = sequence
+        }
         continue
       }
       if (byte === 27) {
@@ -75,12 +78,23 @@ export class InputLine {
         submitted = true
       } else if (byte === 21 || byte === 3) this.dirty = false
       // Backspace/delete and cursor editing are intentionally conservative.
-      else if ((byte >= 32 && byte !== 127) || byte === 9) this.dirty = true
+      else if ((byte >= 32 && byte !== 127) || byte === 9) {
+        this.dirty = true
+        this.cause = byte === 9 ? 'tab' : 'typed'
+      }
     }
     return submitted
   }
   settleEscape() {
     if (this.escape === '\x1b') this.escape = ''
+  }
+  get why() {
+    return {
+      dirty: this.dirty && this.cause,
+      paste: this.paste,
+      escape: this.escape,
+      string: this.string,
+    }
   }
   get unsent() {
     return (
