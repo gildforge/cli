@@ -89,9 +89,16 @@ export function resolveForHost(host: HostConfig, req: Request): Resolved {
   })
 }
 
+const BACKEND: Record<Level, string> = {
+  vm: 'firecracker',
+  container: 'oci',
+  host: 'unprivileged user',
+  none: 'none',
+}
+
 /** One line for `gild status` and job logs. */
 export function describe(resolved: Resolved, backend?: string) {
-  return `isolation: ${labelFor(resolved.level, backend ?? resolved.level)}, requested by ${resolved.source}`
+  return `isolation: ${labelFor(resolved.level, backend ?? BACKEND[resolved.level])}, requested by ${resolved.source}`
 }
 
 export async function startIsolation(
@@ -108,7 +115,7 @@ export async function startIsolation(
   }
   if (level === 'container') {
     const c: OciConfig = host.container!
-    return startOci(c, work)
+    return startOci(c, work, log)
   }
   return null // none: the runner keeps its existing local execution
 }

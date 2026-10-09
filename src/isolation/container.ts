@@ -85,9 +85,22 @@ function execChannel(engine: string, name: string): Channel {
   }
 }
 
-export function startOci(cfg: OciConfig, work: string): Isolation {
+export function startOci(
+  cfg: OciConfig,
+  work: string,
+  log: (line: string) => void = () => {},
+): Isolation {
   const name = 'gild-' + randomBytes(6).toString('hex'),
     me = userInfo()
+  const network = containerNetwork(
+    cfg.egress,
+    cfg.egress !== 'block' && egressNetworkReady(cfg.engine),
+  )
+  log(
+    network === 'none'
+      ? 'container network: none, egress blocked (enable with: sudo scripts/vm-network-setup.sh)'
+      : `container network: ${network}, egress allowed, LAN/host/metadata denied`,
+  )
   execFileSync(
     cfg.engine,
     [
@@ -113,10 +126,7 @@ export function startOci(cfg: OciConfig, work: string): Isolation {
       // No network unless the filtered gild-egress bridge exists (set up by
       // scripts/vm-network-setup.sh); never the default bridge.
       '--network',
-      containerNetwork(
-        cfg.egress,
-        cfg.egress !== 'block' && egressNetworkReady(cfg.engine),
-      ),
+      network,
       '--user',
       `${me.uid}:${me.gid}`,
       '-v',
