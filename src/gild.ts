@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { displayIdentity } from './identity/display'
 import { importCommands } from './import/commands'
 import { ApiRequestError, GildClient } from './api/client'
 import { ProofClient } from './api/bootstrap-contract'
@@ -128,6 +129,7 @@ export async function signedCall(
   })
   return { ok: true, status: 200, data }
 }
+async function requireIdentity() { const identity=await loadIdentity();if(!identity)throw new Error('Run gild auth init first');return identity }
 async function clientFor(server: string, identity: Identity) {
   server = forgeServer(server)
   if (!identity.apiToken || identity.apiToken.server !== server) {
@@ -269,7 +271,7 @@ authCmd
             name: 'openClaim',
             default: true,
             message:
-              'Open gild.gg now to claim your name? (your public key goes along, nothing else)',
+              'Open gild.gg now to choose a temporary handle? (your public key goes along, nothing else)',
           },
         ])
     if (openClaim) {
@@ -282,7 +284,7 @@ authCmd
             : 'xdg-open'
       Bun.spawn([opener, url], { stdout: 'ignore', stderr: 'ignore' })
       console.log(
-        'The claim page is open with your key filled in — pick a name.',
+        'The claim page is open with your key filled in — choose a temporary label.',
       )
     } else {
       console.log(
@@ -387,6 +389,39 @@ authCmd
       console.log(
         'git credential helper active — every clone pushes without prompts.',
       )
+  })
+
+program.command('whoami')
+  .description('show your current DNS handle and verification')
+  .option('--agent <label>', 'show an approved agent identity')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async opts=>{
+    const agent=opts.agent?await loadAgent(opts.agent):null
+    const client=opts.agent?agent?.token?new GildClient(agentServer(agent,opts.server)+'/api/v1',agent.token):null:await clientFor(opts.server,await requireIdentity())
+    if(!client)throw new Error('Agent has not been approved')
+    const current=await client.request('identity')
+    console.log(displayIdentity(current))
+    console.log(current.handle_verified?'Verified':'Temporary handle')
+  })
+const handleCmd=program.command('handle').description('verify a DNS handle')
+handleCmd.command('set <domain>')
+  .description('prepare a DNS TXT verification challenge')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async(domain,opts)=>{
+    const identity=await requireIdentity(),client=await clientFor(opts.server,identity)
+    const proof=await client.request('handleChallenge',{}, {domain})
+    console.log(`TXT ${proof.txt.name}`)
+    console.log(proof.txt.value)
+    console.log('Run gild handle check after adding the proof.')
+  })
+handleCmd.command('check')
+  .description('check domain proof and update your handle')
+  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .action(async opts=>{
+    const identity=await requireIdentity(),client=await clientFor(opts.server,identity)
+    const current=await client.request('handleCheck')
+    identity.name=current.handle;await saveIdentity(identity)
+    console.log(`${displayIdentity(current)} · Verified`)
   })
 
 const repoCmd = program.command('repo').description('forge repositories')
@@ -518,7 +553,7 @@ collaboratorsCmd
     const { client, params } = await repositoryClient(opts),
       result = await client.request('collaborators', params)
     for (const c of result.collaborators)
-      console.log(`@${c.login}  ${c.permission}`)
+      console.log(`${c.display??displayIdentity({id:c.id??c.login,handle:c.handle??c.login,handle_verified:c.handle_verified??false,kind:c.kind??'user',owner:c.owner})}  ${c.permission}`)
     for (const i of result.invitations)
       console.log(`@${i.invitee}  ${i.permission}  pending`)
   })
@@ -598,7 +633,11 @@ const cloneAction = async (
   opts: { server: string },
 ) => {
   const identity = await loadIdentity()
-  const url = `${opts.server}/${repoArg}.git`
+  const [owner,repo,...extra]=repoArg.split('/')
+  if(!owner||!repo||extra.length)throw new Error('Use handle/repo')
+  const client=identity?await clientFor(opts.server,identity):new GildClient(forgeServer(opts.server)+'/api/v1','')
+  const repository=await client.request('repo',{owner,repo})
+  const url=repository.clone_url
   const run = (args: string[], cwd?: string) => {
     const r = Bun.spawnSync(args, { cwd, stdout: 'inherit', stderr: 'inherit' })
     if (r.exitCode !== 0) {
@@ -796,7 +835,7 @@ agentCmd
   )
   .requiredOption(
     '--sponsor <name>',
-    'the person you work for (their gild name)',
+    'the person you work for (their DNS handle)',
   )
   .option('--repo <owner/name>', 'a repo you want to work in')
   .option(
@@ -819,7 +858,7 @@ agentCmd
       if (agent?.token) {
         console.log(
           chalk.yellow(
-            `@${agent.name} has already joined. Its token: gild agent token ${label}`,
+            `${agent.name} has already joined. Its token: gild agent token ${label}`,
           ),
         )
         return
@@ -851,12 +890,12 @@ agentCmd
       }
       await saveAgent(label, agent)
       console.log(
-        `Asked @${opts.sponsor} to approve ${chalk.bold('@' + agent.name)}.`,
+        `Asked @${opts.sponsor} to approve ${chalk.bold(agent.name)}.`,
       )
       console.log(`Approve here: ${chalk.cyan(data.approveUrl)}`)
     } else {
       console.log(
-        `Still waiting on @${agent.name.split('/')[0]}: ${chalk.cyan(`${agent.server}/agents/approve/${agent.requestId}`)}`,
+        `Still waiting for approval: ${chalk.cyan(`${agent.server}/agents/approve/${agent.requestId}`)}`,
       )
     }
     if (opts.wait === false) return
@@ -895,9 +934,10 @@ agentCmd
         throw error
       }
       if (data.status === 'approved' && data.token) {
+        agent.name=data.name??agent.name
         await saveAgent(label, { ...agent, token: data.token })
         console.log(
-          chalk.green(`Approved. You are @${agent.name}.`) +
+          chalk.green(`Approved. You are ${agent.name}.`) +
             (data.repo && data.grants?.length
               ? ` In ${data.repo} you may: ${data.grants.join(', ')}.`
               : ''),
@@ -954,7 +994,7 @@ agentCmd
       const a = await loadAgent(f.replace(/\.json$/, ''))
       if (a)
         console.log(
-          `@${a.name}  ${a.token ? chalk.green('approved') : chalk.yellow('waiting')}  ${fingerprint(a.publicKey)}`,
+          `${a.name}  ${a.token ? chalk.green('approved') : chalk.yellow('waiting')}  ${fingerprint(a.publicKey)}`,
         )
     }
   })
