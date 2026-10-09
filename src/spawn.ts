@@ -5,6 +5,13 @@ import { resolveProfile } from './agent-profiles'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
+import { DEFAULT_COLS, DEFAULT_ROWS } from './spawn-detach'
+import {
+  detachCommands,
+  detachedReady,
+  detachedSpawn,
+  dimension,
+} from './spawn-attach'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -65,12 +72,26 @@ export function spawnCommands(
       idleMilliseconds,
       1500,
     )
+    .option(
+      '--detach',
+      'run in the background with no terminal; prints the session id (see gild attach, gild stop)',
+    )
+    .option('--cols <n>', 'detached terminal width', dimension, DEFAULT_COLS)
+    .option('--rows <n>', 'detached terminal height', dimension, DEFAULT_ROWS)
     .allowUnknownOption()
     .action(
       async (
         agent: string,
         args: string[],
-        opts: { name?: string; idleMs: number; as?: string; printId?: boolean },
+        opts: {
+          name?: string
+          idleMs: number
+          as?: string
+          printId?: boolean
+          detach?: boolean
+          cols: number
+          rows: number
+        },
       ) => {
         const resolved =
           agent === 'agent'
@@ -88,7 +109,14 @@ export function spawnCommands(
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
         const binary = realAgent(agent, cwd)
-        if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
+        if (opts.detach && !supportsPty())
+          throw Error(
+            'Detached sessions need a PTY, unavailable on this platform',
+          )
+        if (
+          !opts.detach &&
+          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+        ) {
           process.exitCode = await runNative(
             binary,
             args,
@@ -140,17 +168,23 @@ export function spawnCommands(
                 ? { name: profile.name, channels: profile.channels }
                 : undefined,
               envAllowlist: profile?.env,
+              detach: opts.detach
+                ? { cols: opts.cols, rows: opts.rows }
+                : undefined,
             }),
           ],
-          {
-            cwd,
-            stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-          },
+          opts.detach
+            ? detachedSpawn(cwd)
+            : {
+                cwd,
+                stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+              },
         )
         if (report)
           worker.once('spawn', () => worker.send({ type: 'report', report }))
         if (bridge)
           worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
+        if (opts.detach) return console.log(await detachedReady(worker))
         const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
         const interrupted = () => {}
         process.on('SIGINT', interrupted)
@@ -219,6 +253,7 @@ export function spawnCommands(
         ),
       )
     })
+  detachCommands(program)
   program
     .command('sessions')
     .description('list live local agent sessions and remove stale sockets')
