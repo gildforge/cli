@@ -40,7 +40,7 @@ export function compareIdentities(a: DisplayIdentity, b: DisplayIdentity) {
 }
 export function resolveMention(value: string, identities: readonly DisplayIdentity[], context: IdentityContext = {}) {
   const query = value.replace(/^@/, '').toLowerCase()
-  const matches = identities.filter(i => i.handle === query || displayIdentity(i, context).replace(/^@/, '').toLowerCase() === query)
+  const matches = identities.filter(i => i.handle === query || unicodeHandle(i.handle).toLowerCase()===query || displayIdentity(i, context).replace(/^@/, '').toLowerCase() === query)
   return matches.length === 1 ? matches[0] : null
 }
 export function identityPrefix(kind:DisplayIdentity['kind']) { return kind==='agent'?'':'@' }

@@ -1,5 +1,9 @@
 [
   {
+    "name": "Unicode full mentions",
+    "exit": 1
+  },
+  {
     "name": "live whoami",
     "exit": 1
   },

@@ -1,3 +1,4 @@
+import {resolveMention} from './identity/display'
 import { join } from 'node:path'
 import { GildClient } from './api/client'
 import { expect,test } from 'bun:test'
@@ -29,7 +30,7 @@ test('clone uses the live canonical remote returned by the API',async()=>{
   const result=await cli(f.root,['clone','alice/demo',target,'--server',f.origin]);expect(result.code).toBe(0)
   expect(Bun.spawnSync(['git','-C',target,'remote','get-url','origin']).stdout.toString().trim()).toBe(source)
  }finally{await f.close()}
-})
+},30000) // Includes a real native Git clone and a separate CLI process.
 test('handle redirects preserve a mutation body and refuse credential forwarding',async()=>{
  const f=await fixture(async req=>{
   const path=new URL(req.url).pathname
@@ -42,4 +43,9 @@ test('handle redirects preserve a mutation body and refuse credential forwarding
   await expect(client.request('setRepoVisibility',{owner:'alice',repo:'demo'},{visibility:'private'})).resolves.toEqual({visibility:'private'})
   await expect(client.request('setRepoVisibility',{owner:'cross',repo:'demo'},{visibility:'private'})).rejects.toThrow()
  }finally{await f.close()}
+})
+
+test('Unicode full mentions resolve even when the organization uses an alias',()=>{
+ const person={id:'stable-id',kind:'user' as const,handle:'xn--bcher-kva.de',handle_verified:true}
+ expect(resolveMention('@bücher.de',[person],{orgs:['org-id'],aliases:[{org:'org-id',id:person.id,alias:'writer'}]})).toEqual(person)
 })

@@ -1,6 +1,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
 const cases=[
+ ['Unicode full mentions','src/identity/display.ts',' || unicodeHandle(i.handle).toLowerCase()===query','','Unicode full mentions'],
  ['live whoami','src/gild.ts','console.log(displayIdentity(current))',"console.log('@legacy')",'whoami reads'],
  ['TXT record','src/gild.ts','console.log(proof.txt.value)',"console.log('disabled proof')",'handle set'],
  ['agent prefix','src/identity/display.ts',"identity.kind === 'agent' ? '' : '@'","'@'",'agent whoami'],
