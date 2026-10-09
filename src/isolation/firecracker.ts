@@ -15,6 +15,7 @@ import {
 } from 'node:fs/promises'
 import { existsSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
+import { bootNetArgs, networkState, planNetwork } from './network'
 import {
   guestExec,
   guestPing,
@@ -33,8 +34,8 @@ export interface FirecrackerConfig {
   vcpus: number
   /** Guest vsock port the agent listens on. */
   port: number
-  /** `block` = no network device at all. */
-  egress: 'block' | 'allow'
+  /** `block` = no network device; `allow` = tap or refuse; `auto` = tap when set up, else none. */
+  egress: 'auto' | 'block' | 'allow'
 }
 
 export const GUEST_WORK = '/workspace'
@@ -152,6 +153,12 @@ export async function startFirecracker(
   })
   const timings: BootTimings = { imageMs: Date.now() - t0, bootToAgentMs: 0 }
 
+  const plan = planNetwork(
+    cfg.egress,
+    networkState(),
+    join(tmpdir(), `gild-vm-slots-${process.getuid?.() ?? 0}`),
+  )
+  log(plan.note)
   const serial = await openFile(join(vmDir, 'serial.log'), 'w', 0o600)
   const fc: ChildProcess = spawn(cfg.firecracker, ['--api-sock', apiSock], {
     stdio: ['ignore', serial.fd, serial.fd],
@@ -160,6 +167,7 @@ export async function startFirecracker(
     try {
       fc.kill('SIGKILL')
     } catch {}
+    plan.release()
   }
   try {
     for (let i = 0; i < 2500 && !existsSync(apiSock); i++) await wait(2)
@@ -172,7 +180,8 @@ export async function startFirecracker(
       kernel_image_path: cfg.kernel,
       // i8042 flags skip a 500 ms keyboard probe; measured 1.2 s -> 0.3 s boot.
       boot_args:
-        'console=ttyS0 reboot=k panic=1 pci=off init=/init-gild.sh i8042.noaux i8042.nokbd i8042.nopnp i8042.dumbkbd quiet loglevel=1',
+        'console=ttyS0 reboot=k panic=1 pci=off init=/init-gild.sh i8042.noaux i8042.nokbd i8042.nopnp i8042.dumbkbd quiet loglevel=1' +
+        (plan.net ? ' ' + bootNetArgs(plan.net) : ''),
     })
     await api(apiSock, 'PUT', '/drives/rootfs', {
       drive_id: 'rootfs',
@@ -191,10 +200,12 @@ export async function startFirecracker(
       guest_cid: 3,
       uds_path: uds,
     })
-    if (cfg.egress === 'allow')
-      throw new Error(
-        'egress=allow needs a tap device and nftables rules (root); run with egress block until the host is set up',
-      )
+    if (plan.net)
+      await api(apiSock, 'PUT', '/network-interfaces/eth0', {
+        iface_id: 'eth0',
+        guest_mac: plan.net.mac,
+        host_dev_name: plan.net.tap,
+      })
     const t1 = Date.now()
     await api(apiSock, 'PUT', '/actions', { action_type: 'InstanceStart' })
     const open: Opener = () => vsockChannel(uds, cfg.port)

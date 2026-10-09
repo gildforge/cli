@@ -6,6 +6,7 @@ import {
   startFirecracker,
   type FirecrackerConfig,
 } from './firecracker'
+import { networkState, networkStatusLine } from './network'
 import { ociAvailable, startOci, type OciConfig } from './container'
 import {
   LEVELS,
@@ -32,7 +33,7 @@ export const hostConfigSchema = z.strictObject({
       rootfs: z.string(),
       memoryMiB: z.number().int().min(128).default(1024),
       vcpus: z.number().int().min(1).default(2),
-      egress: z.enum(['block', 'allow']).default('block'),
+      egress: z.enum(['auto', 'block', 'allow']).default('auto'),
     })
     .optional(),
   container: z
@@ -43,7 +44,7 @@ export const hostConfigSchema = z.strictObject({
       memory: z.string().default('2g'),
       cpus: z.string().default('2'),
       pids: z.number().int().default(512),
-      egress: z.enum(['block', 'allow']).default('block'),
+      egress: z.enum(['auto', 'block', 'allow']).default('auto'),
     })
     .optional(),
 })
@@ -115,6 +116,7 @@ export async function startIsolation(
 export function statusLines(host: HostConfig, requested: Request = {}) {
   const available = availableLevels(host)
   const lines = [
+    ...(host.vm ? [networkStatusLine(host.vm.egress, networkState())] : []),
     `isolation backends available: ${available.filter((l) => l !== 'none').join(', ') || 'none'}`,
     `isolation floor: ${host.floor ?? 'none set'}`,
     `isolation host default: ${host.default ?? 'none set'}`,

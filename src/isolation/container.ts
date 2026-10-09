@@ -21,7 +21,30 @@ export interface OciConfig {
   memory: string
   cpus: string
   pids: number
-  egress: 'block' | 'allow'
+  egress: 'auto' | 'block' | 'allow'
+}
+
+export const EGRESS_NETWORK = 'gild-egress'
+
+function egressNetworkReady(engine: string) {
+  try {
+    execFileSync(engine, ['network', 'inspect', EGRESS_NETWORK], {
+      stdio: 'ignore',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Network the container joins: the filtered bridge, or none. `allow` without setup is an error. */
+export function containerNetwork(mode: OciConfig['egress'], ready: boolean) {
+  if (mode === 'block' || (!ready && mode === 'auto')) return 'none'
+  if (!ready)
+    throw new Error(
+      `egress is set to allow but the ${EGRESS_NETWORK} network is not set up. Needs Sami: sudo scripts/vm-network-setup.sh`,
+    )
+  return EGRESS_NETWORK
 }
 
 export const GUEST_WORK = '/workspace'
@@ -87,10 +110,13 @@ export function startOci(cfg: OciConfig, work: string): Isolation {
       cfg.memory,
       '--cpus',
       cfg.cpus,
-      // No network at all unless egress is allowed; allowed egress still needs
-      // host firewall rules to keep the LAN and metadata address unreachable.
+      // No network unless the filtered gild-egress bridge exists (set up by
+      // scripts/vm-network-setup.sh); never the default bridge.
       '--network',
-      cfg.egress === 'block' ? 'none' : 'bridge',
+      containerNetwork(
+        cfg.egress,
+        cfg.egress !== 'block' && egressNetworkReady(cfg.engine),
+      ),
       '--user',
       `${me.uid}:${me.gid}`,
       '-v',
