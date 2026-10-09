@@ -11,16 +11,34 @@
 # the nftables table `inet gild_vm`. The old `inet gild` table is not touched.
 set -eu
 
-action=up slots=16 persist=0
+action=up slots=16 persist=0 print_unit=0
+installed=/usr/local/libexec/gild-vm-network-setup
 for a in "$@"; do
   case $a in
     up|down) action=$a ;;
     --persist) persist=1 ;;
+    --print-unit) print_unit=1 ;;
     --slots) ;;
     [0-9]*) slots=$a ;;
     *) echo "usage: $0 [up|down] [--slots N] [--persist]" >&2; exit 2 ;;
   esac
 done
+unit() {
+  # Root runs only the root-owned installed copy, never a file in a user-writable checkout.
+  cat <<UNIT
+[Unit]
+Description=gild microVM network
+After=network-online.target docker.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=SUDO_USER=${user:-runner}
+ExecStart=$installed up --slots $slots
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+if [ "$print_unit" = 1 ]; then user=${SUDO_USER:-runner}; unit; exit 0; fi
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 user=${SUDO_USER:-}
 [ -n "$user" ] && [ "$user" != root ] || { echo "run via sudo from the runner user's account (SUDO_USER is unset)" >&2; exit 1; }
@@ -38,7 +56,7 @@ teardown() {
 
 if [ "$action" = down ]; then
   teardown
-  rm -f /etc/sysctl.d/90-gild-vm.conf /etc/systemd/system/gild-vm-network.service
+  rm -f /etc/sysctl.d/90-gild-vm.conf /etc/systemd/system/gild-vm-network.service "$installed"
   echo "gild vm network removed"
   exit 0
 fi
@@ -99,19 +117,9 @@ fi
 
 
 if [ "$persist" = 1 ]; then
-  self=$(readlink -f "$0")
-  cat > /etc/systemd/system/gild-vm-network.service <<UNIT
-[Unit]
-Description=gild microVM network
-After=network-online.target docker.service
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-Environment=SUDO_USER=$user
-ExecStart=$self up --slots $slots
-[Install]
-WantedBy=multi-user.target
-UNIT
+  install -d -o root -g root -m 0755 /usr/local/libexec
+  install -o root -g root -m 0755 "$0" "$installed"
+  unit > /etc/systemd/system/gild-vm-network.service
   systemctl daemon-reload
   systemctl enable gild-vm-network.service >/dev/null
 fi

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { containerNetwork } from './container'
 import {
   bootNetArgs,
@@ -85,4 +85,19 @@ test('container network follows the same rule', () => {
   expect(containerNetwork('auto', true)).toBe('gild-egress')
   expect(containerNetwork('allow', true)).toBe('gild-egress')
   expect(() => containerNetwork('allow', false)).toThrow(/Needs Sami/)
+})
+
+test('--persist unit runs only a root-owned installed copy, never a path in the checkout', async () => {
+  const script = resolve('scripts/vm-network-setup.sh')
+  const p = Bun.spawnSync(['sh', script, '--print-unit'])
+  const unit = new TextDecoder().decode(p.stdout)
+  expect(p.exitCode).toBe(0)
+  const exec = /^ExecStart=(\S+)/m.exec(unit)![1]
+  expect(exec).toBe('/usr/local/libexec/gild-vm-network-setup')
+  expect(exec.startsWith(resolve('.'))).toBe(false)
+  expect(unit).not.toContain(script)
+  // The installer copies it as root with fixed ownership and mode.
+  const text = await Bun.file(script).text()
+  expect(text).toContain('install -o root -g root -m 0755 "$0" "$installed"')
+  expect(text).not.toContain('readlink -f')
 })
