@@ -44,8 +44,19 @@ test('Codex user notify runs after forwarding with its fixed args and identical 
     ]
     const config = `# root user hook; literal strings and multiline TOML\nnotify = [\n${command.map((arg) => `'${arg}'`).join(',\n')},\n]\n[profiles.other]\nmodel = 'fixture'\n`
     await Bun.write(join(root, 'config.toml'), config)
+    await mkdir(join(root, 'wrapper-config'))
+    await Bun.write(
+      join(root, 'wrapper-config/config.toml'),
+      'notify=["/wrong-notifier"]\n',
+    )
+    process.env.CODEX_HOME = join(root, 'wrapper-config')
     const prepared = await codexAdapter.prepare(
-      { id: 'test', directory: root, command: cli() },
+      {
+        id: 'test',
+        directory: root,
+        command: cli(),
+        environment: { HOME: root, CODEX_HOME: root },
+      },
       ['--resume'],
     )
     const generated = JSON.parse(

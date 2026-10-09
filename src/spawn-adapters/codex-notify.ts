@@ -18,8 +18,12 @@ async function config(path: string) {
   }
 }
 /** Resolve notification layers only; project config cannot set notify. */
-export async function originalNotify(args: string[]) {
-  const home = process.env.CODEX_HOME ?? join(homedir(), '.codex')
+export async function originalNotify(
+  args: string[],
+  environment = process.env,
+) {
+  const home =
+    environment.CODEX_HOME ?? join(environment.HOME ?? homedir(), '.codex')
   const system = await config('/etc/codex/config.toml')
   const user = await config(join(home, 'config.toml'))
   let command = notifyCommand(user.notify ?? system.notify)

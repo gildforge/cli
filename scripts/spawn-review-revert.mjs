@@ -68,7 +68,7 @@ const mutations = [
     'stale-start',
   ],
 ]
-if (process.argv[2] === 'events')
+if (['events', 'profiles'].includes(process.argv[2]))
   mutations.push(
     [
       'notify-config',
@@ -117,6 +117,33 @@ if (process.argv[2] === 'events')
       "env.GILD_SPAWN_CHAIN = JSON.stringify(chain); env.GILD_SPAWN_DEPTH = '2'",
       'src/spawn-events.test.ts',
       'safe alias preserves',
+    ],
+  )
+if (process.argv[2] === 'profiles')
+  mutations.push(
+    [
+      'profile-notify-environment',
+      'src/spawn-adapters/codex.ts',
+      'context.environment ?? process.env',
+      'process.env',
+      'src/spawn-notify.test.ts',
+      'Codex user notify',
+    ],
+    [
+      'profile-baseline',
+      'src/spawn-binary.ts',
+      '!baseline.includes(name)',
+      'true',
+      'src/agent-profiles.test.ts',
+      'profile piped spawn',
+    ],
+    [
+      'profile-stale',
+      'src/spawn-worker.ts',
+      '(await removeDeadSocket(path))',
+      'false',
+      'src/agent-profiles.test.ts',
+      'profile PTY: profile-stale',
     ],
   )
 mkdirSync('.tmp', { recursive: true })

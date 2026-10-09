@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
+import { resolveProfile } from './agent-profiles'
 import type { ReportTarget } from './spawn-report'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { readFile, rename, writeFile } from 'node:fs/promises'
@@ -41,7 +42,11 @@ function idleMilliseconds(value: string) {
 }
 export function spawnCommands(
   program: Command,
-  reportTarget?: (label: string) => Promise<ReportTarget>,
+  resolveIdentity?: (
+    label: string,
+    cwd: string,
+    localProfile: boolean,
+  ) => Promise<{ agent: string; report?: ReportTarget }>,
 ) {
   program
     .command('spawn <agent> [args...]')
@@ -66,19 +71,40 @@ export function spawnCommands(
         args: string[],
         opts: { name?: string; idleMs: number; as?: string; printId?: boolean },
       ) => {
-        const binary = realAgent(agent)
+        const resolved =
+          agent === 'agent'
+            ? await resolveProfile(args.shift() ?? '', args)
+            : undefined
+        const profile = resolved?.profile
+        if (profile && opts.as && opts.as !== profile.name)
+          throw Error(
+            'A profile uses its own approved agent label; --as must match the profile name',
+          )
+        if (profile && opts.name)
+          throw Error('Profile sessions are named after the agent; omit --name')
+        agent = profile?.runtime ?? agent
+        args = resolved?.args ?? args
+        const cwd = profile?.directory ?? process.cwd()
+        const label = profile?.name ?? opts.as
+        const binary = realAgent(agent, cwd)
         if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
           process.exitCode = await runNative(
             binary,
             args,
-            process.cwd(),
-            agentEnvironment(binary),
+            cwd,
+            agentEnvironment(binary, profile?.env),
           )
           return
         }
-        const report =
-          opts.as && reportTarget ? await reportTarget(opts.as) : undefined
-        const id = opts.name ?? `agent-${randomBytes(3).toString('hex')}`
+        const identity =
+          label && resolveIdentity
+            ? await resolveIdentity(label, cwd, !!profile)
+            : undefined
+        const report = identity?.report
+        const id =
+          profile?.name ??
+          opts.name ??
+          `agent-${randomBytes(3).toString('hex')}`
         socketPath(id)
         const resolveFrom = [
           ...(!import.meta.url.includes('$bunfs') &&
@@ -105,10 +131,16 @@ export function spawnCommands(
                     new URL('./gild.ts', import.meta.url).pathname,
                   ],
               reporting: !!report,
+              identity: identity?.agent,
               printId: opts.printId,
+              profile: profile
+                ? { name: profile.name, channels: profile.channels }
+                : undefined,
+              envAllowlist: profile?.env,
             }),
           ],
           {
+            cwd,
             stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
           },
         )
@@ -134,10 +166,10 @@ export function spawnCommands(
         } catch (error) {
           debugFallback(error)
           process.exitCode = await runNative(
-            realAgent(agent),
+            realAgent(agent, cwd),
             args,
-            process.cwd(),
-            agentEnvironment(realAgent(agent)),
+            cwd,
+            agentEnvironment(realAgent(agent, cwd), profile?.env),
           )
         } finally {
           process.off('SIGINT', interrupted)
@@ -187,12 +219,15 @@ export function spawnCommands(
       const sessions = await liveSessions()
       if (opts.json) console.log(JSON.stringify(sessions))
       else {
-        console.log('ID\tAGENT\tSTATE\tTOOL\tLAST ACTIVITY\tCWD\tPID\tSTARTED')
+        console.log(
+          'ID\tAGENT\tPROFILE\tSTATE\tTOOL\tLAST ACTIVITY\tCWD\tPID\tSTARTED',
+        )
         for (const session of sessions)
           console.log(
             [
               session.id,
               session.agent,
+              session.profile ?? '',
               session.state === 'tool_start' ? 'running a tool' : session.state,
               session.tool ?? '',
               session.lastActivity,

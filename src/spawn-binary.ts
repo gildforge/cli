@@ -54,8 +54,14 @@ export function realAgent(
     `No native ${agent} executable found on PATH (gild spawn wrappers are skipped)`,
   )
 }
-export function agentEnvironment(binary?: string) {
+export function agentEnvironment(binary?: string, allowlist?: string[]) {
   const env = baseEnvironment()
+  const baseline = ['PATH', 'HOME', 'TERM', 'LANG', 'USER', 'SHELL', 'TMPDIR']
+  for (const name of Object.keys(env)) {
+    if (allowlist && !allowlist.includes(name) && !baseline.includes(name))
+      delete env[name]
+  }
+
   let chain: string[] = []
   try {
     const previous = JSON.parse(process.env.GILD_SPAWN_CHAIN ?? '[]')

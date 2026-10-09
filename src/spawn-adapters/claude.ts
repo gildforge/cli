@@ -20,6 +20,14 @@ const types = {
 } as const
 export const claudeAdapter: AgentAdapter = {
   name: 'claude',
+  profileArgs({ model, effort }) {
+    if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort))
+      throw Error('Claude effort must be low, medium, high, xhigh or max')
+    return [
+      ...(model ? ['--model', model] : []),
+      ...(effort ? ['--effort', effort] : []),
+    ]
+  },
   async prepare(context, args) {
     // Modes explicitly disabling hooks must retain their native semantics.
     if (nativeOptions(args).some((a) => ['--bare', '--safe-mode'].includes(a)))

@@ -3,10 +3,14 @@ export type AdapterContext = {
   id: string
   directory: string
   command: string[]
+  environment?: NodeJS.ProcessEnv
   emit?: (event: AgentEvent) => void
   onCleanup?: (cleanup: () => void) => void
 }
+export type RuntimeSettings = { model?: string; effort?: string }
+export type RuntimeFlags = (settings: RuntimeSettings) => string[]
 export type AgentAdapter = {
+  profileArgs: RuntimeFlags
   name: string
   prepare(
     context: AdapterContext,

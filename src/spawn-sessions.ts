@@ -7,6 +7,9 @@ import { createConnection } from 'node:net'
 export type LocalSession = SessionState & {
   id: string
   agent: string
+  profile?: string
+  identity?: string
+  channels?: string[]
   cwd: string
   pid: number
   childPid: number

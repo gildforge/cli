@@ -28,6 +28,9 @@ type Options = {
   hookCommand: string[]
   printId?: boolean
   reporting?: boolean
+  identity?: string
+  profile?: { name: string; channels?: string[] }
+  envAllowlist?: string[]
 }
 const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
@@ -179,7 +182,7 @@ async function fallback(error: unknown) {
     binary,
     options.args,
     process.cwd(),
-    agentEnvironment(binary),
+    agentEnvironment(binary, options.envAllowlist),
   )
   process.exit(code)
 }
@@ -261,6 +264,13 @@ async function main() {
           const info: LocalSession = {
             id: options.id,
             agent: options.agent,
+            ...(options.identity ? { identity: options.identity } : {}),
+            ...(options.profile
+              ? {
+                  profile: options.profile.name,
+                  channels: options.profile.channels,
+                }
+              : {}),
             cwd: process.cwd(),
             pid: process.pid,
             childPid: child.pid,
@@ -296,7 +306,8 @@ async function main() {
       }
     })
   })
-  for (let attempt = 0; ; attempt++) {
+  for (let suffix = 1, attempt = 0; ;) {
+    path = socketPath(options.id, directory)
     try {
       await new Promise<void>((resolve, reject) => {
         const error = (e: Error) => reject(e)
@@ -310,7 +321,15 @@ async function main() {
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
-      if (attempt === 0 && (await removeDeadSocket(path))) continue
+      if (attempt === 0 && (await removeDeadSocket(path))) {
+        attempt++
+        continue
+      }
+      if (options.profile && suffix < 999999) {
+        options.id = `${options.profile.name}-${++suffix}`
+        attempt = 0
+        continue
+      }
       throw new Error(
         `Session ${options.id} already exists; use another --name`,
       )
@@ -319,7 +338,7 @@ async function main() {
   await chmod(path, 0o600)
   server.on('error', failed)
   const binary = realAgent(options.agent)
-  const env = agentEnvironment(binary)
+  const env = agentEnvironment(binary, options.envAllowlist)
   try {
     const prepared = await adapter?.prepare(
       {
@@ -327,6 +346,7 @@ async function main() {
         directory,
         command: options.hookCommand,
         emit: publish,
+        environment: env,
         onCleanup: (cleanup) => {
           adapterCleanup = cleanup
           if (closing) {

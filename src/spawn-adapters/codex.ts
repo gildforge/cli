@@ -5,8 +5,17 @@ import { CodexLogs } from './codex-logs'
 import { event, payload, type AgentAdapter } from './types'
 export const codexAdapter: AgentAdapter = {
   name: 'codex',
+  profileArgs({ model, effort }) {
+    return [
+      ...(model ? ['-m', model] : []),
+      ...(effort
+        ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`]
+        : []),
+    ]
+  },
   async prepare(context, args) {
-    const original = await originalNotify(args)
+    const environment = context.environment ?? process.env
+    const original = await originalNotify(args, environment)
     const command = [
       ...context.command,
       'hook',
@@ -20,7 +29,11 @@ export const codexAdapter: AgentAdapter = {
     ]
     const logs = context.emit
       ? new CodexLogs(
-          join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions'),
+          join(
+            environment.CODEX_HOME ??
+              join(environment.HOME ?? homedir(), '.codex'),
+            'sessions',
+          ),
           context.id,
           context.emit,
         )

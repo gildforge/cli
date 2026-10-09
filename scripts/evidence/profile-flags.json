@@ -1,0 +1,42 @@
+{
+  "verified_on": "2026-10-08",
+  "runtimes": [
+    {
+      "runtime": "claude",
+      "version": "2.1.295 (Claude Code)",
+      "command": ["claude", "--help"],
+      "flags": [
+        "  --effort <level>                      Effort level for the current session",
+        "                                        (low, medium, high, xhigh, max)",
+        "  --environment <environment_id>        Create a new cloud session that runs on",
+        "  --model <model>                       Model for the current session. Provide",
+        "                                        an alias for the latest model (e.g.",
+        "                                        'fable', 'opus', or 'sonnet') or a"
+      ]
+    },
+    {
+      "runtime": "codex",
+      "version": "codex-cli 0.160.1",
+      "command": ["codex", "--help"],
+      "flags": [
+        "  -c, --config <key=value>",
+        "          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.",
+        "          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed",
+        "  -m, --model <MODEL>",
+        "          Model the agent should use",
+        ""
+      ]
+    },
+    {
+      "runtime": "kimi",
+      "version": "2.1.1",
+      "command": ["kimi", "--help"],
+      "flags": [
+        "  -m, --model <model>           LLM model alias to use for this invocation. Defaults to",
+        "                                default_model in config.toml.",
+        "  -p, --prompt <prompt>         Run one prompt non-interactively and print the response."
+      ]
+    }
+  ],
+  "codex_effort_reference": "https://learn.chatgpt.com/docs/config-file/config-reference"
+}
