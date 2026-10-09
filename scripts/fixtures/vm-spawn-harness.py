@@ -60,8 +60,10 @@ with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vm-') as d:
         assert ready['env'] == {}, ready
         assert 'must-not-reach-the-guest' not in buf.decode(errors='replace')
         assert (project / 'marker.txt').exists()
+        # SessionStart runs inside the guest and arrives over vsock: unknown -> idle.
+        wait(lambda: status()['state'] == 'idle')
         info = status()
-        assert info['state'] == 'idle' and info['childPid'] == -1, info
+        assert info['childPid'] == -1, info
 
         # gild send reaches the agent through the host queue and the pty bridge; the agent's own
         # hook command (inside the guest) comes back over vsock and moves the session state.
