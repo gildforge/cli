@@ -4,13 +4,29 @@ export class InputLine {
   private paste = false
   private escape = ''
   private pasteDirty = false
+  // Terminal replies (OSC colour, DCS version, APC…) arrive on stdin when the
+  // agent queries the terminal. They are not typing, so they never dirty the
+  // line; they end at BEL or ESC \, and a line break ends a malformed one.
+  private string: '' | 'body' | 'escape' = ''
   feed(data: Buffer | string): boolean {
     let submitted = false
     for (const byte of typeof data === 'string' ? Buffer.from(data) : data) {
+      if (this.string && byte !== 10 && byte !== 13) {
+        if (byte === 7 || (this.string === 'escape' && byte === 92))
+          this.string = ''
+        else this.string = byte === 27 ? 'escape' : 'body'
+        continue
+      }
+      this.string = ''
       if (!this.paste && [3, 21, 10, 13].includes(byte)) {
         this.escape = ''
         this.dirty = false
         if (byte === 10 || byte === 13) submitted = true
+        continue
+      }
+      if (this.escape === '\x1b' && [93, 80, 95, 94, 88].includes(byte)) {
+        this.escape = ''
+        this.string = 'body'
         continue
       }
       if (this.escape) {
@@ -67,6 +83,8 @@ export class InputLine {
     if (this.escape === '\x1b') this.escape = ''
   }
   get unsent() {
-    return this.dirty || this.paste || this.escape.length > 0
+    return (
+      this.dirty || this.paste || this.escape.length > 0 || this.string !== ''
+    )
   }
 }
