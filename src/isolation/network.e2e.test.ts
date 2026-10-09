@@ -24,7 +24,7 @@ const tcp = (ip: string, port: number) =>
 async function run(iso: Isolation, cmd: string) {
   const lines: string[] = []
   const code = await iso.exec(['bash', '-c', cmd], {
-    cwd: iso.guestPath(work),
+    cwd: '/',
     env: { PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
     timeoutMs: 30_000,
     signal: new AbortController().signal,
@@ -56,10 +56,14 @@ async function hostControl(cmds: string[]) {
     listener.stop(true)
   }
 }
+// Any HTTP answer proves egress (gild.gg may answer 403 to non-browsers).
 const web = (iso: Isolation) =>
   iso.level === 'vm'
-    ? `python3 -c "import urllib.request as u;print(u.urlopen(u.Request('https://gild.gg',method='HEAD'),timeout=8).status)"`
-    : `curl -sI -m 8 https://gild.gg | head -1`
+    ? `python3 -c "import urllib.request as u,urllib.error as e
+r=u.Request('https://gild.gg',method='HEAD',headers={'User-Agent':'curl/8'})
+try: print(u.urlopen(r,timeout=8).status)
+except e.HTTPError as x: print(x.code)"`
+    : `curl -sI -m 8 https://gild.gg | head -1 | grep -q HTTP`
 
 describe.skipIf(!ready)('filtered network, live', () => {
   const table: Record<string, Record<string, string>> = {}
