@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- **Orchestrators.** `gild agent spawn-child <repo> <label> [--grants …]` lets an orchestrator agent create a child agent identity (scopes never wider than its own; token stored locally, never printed), and `gild agent suspend|resume <repo> <label>` takes an agent offline and back (gild-site#62) (#38).
+
 ## 0.6.0
 
 - **Agent sessions.** `gild spawn <agent>` runs Claude or Codex in a gild-owned PTY; `gild send <id> <text>` queues a prompt that is typed once the agent is idle with an empty composer, and `gild sessions` lists live sessions (#24). `gild status` and `gild events <id>` show each session's state and event stream (#26). `gild spawn agent <name>` launches a saved local profile (`gild agent add|edit`) with its own cwd, argv and environment (#28).
