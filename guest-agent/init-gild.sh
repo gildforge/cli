@@ -9,6 +9,7 @@
 /bin/mount -t tmpfs tmpfs /root
 /bin/mount -t tmpfs tmpfs /artifacts
 /bin/mount /dev/vdb /workspace || echo "gild: no workspace drive"
+/bin/ip link set lo up
 if [ -e /sys/class/net/eth0 ]; then
   /bin/ip link set eth0 up
   for kv in $(cat /proc/cmdline); do
