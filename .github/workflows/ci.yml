@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  setup-node-macos:
+    environment: public-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: bun install --frozen-lockfile
+      - run: bun test src/runner-setup-node.test.ts
   test:
     environment: public-ci
     runs-on: ubuntu-latest

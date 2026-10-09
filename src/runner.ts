@@ -1,4 +1,5 @@
 import { actionSupport } from './actions/support'
+import { setupNode } from './actions/setup-node'
 import { executeImport } from './import/execute'
 import { runnerService } from './runner-service'
 import {
@@ -202,6 +203,22 @@ function envFor(work: string, env: Record<string, string> = {}) {
     RUSTUP_HOME: join(homedir(), '.rustup'),
     LANG: 'C.UTF-8',
     CI: 'true',
+    RUNNER_OS:
+      (
+        { darwin: 'macOS', linux: 'Linux', win32: 'Windows' } as Record<
+          string,
+          string
+        >
+      )[process.platform] ?? process.platform,
+    RUNNER_ARCH:
+      (
+        { x64: 'X64', arm64: 'ARM64', ia32: 'X86', arm: 'ARM' } as Record<
+          string,
+          string
+        >
+      )[process.arch] ?? process.arch,
+    RUNNER_TEMP: join(work, 'tmp'),
+    RUNNER_TOOL_CACHE: join(work, 'tools'),
     ...env,
   }
 }
@@ -483,6 +500,7 @@ export async function executeJob(
   await chmod(work, 0o700)
   await mkdir(join(work, 'home'), { recursive: true })
   await mkdir(join(work, 'tmp'), { recursive: true })
+  await mkdir(join(work, 'tools'), { recursive: true })
   const controller = new AbortController(),
     cancel = () => controller.abort()
   outer.addEventListener('abort', cancel, { once: true })
@@ -583,6 +601,7 @@ export async function executeJob(
     } finally {
       await bootstrap.close()
     }
+    let jobPath = process.env.PATH ?? '/usr/bin:/bin'
     for (let i = 0; i < job.steps.length; i++) {
       const expand = (text: string) =>
         text.replaceAll(job.workspaceToken, checkout)
@@ -623,6 +642,7 @@ export async function executeJob(
         const cwd = await insideWorkspace(checkout, s.directory),
           env = {
             ...envFor(work, s.env),
+            PATH: s.env.PATH ?? jobPath,
             ...Object.fromEntries(
               Object.entries(job.github).map(([k, v]) => [
                 `GITHUB_${k.toUpperCase()}`,
@@ -665,6 +685,30 @@ export async function executeJob(
               `[gild: ${s.uses} is a no-op; artifacts and dependency caches are not uploaded]`,
             )
             exit = 0
+          } else if (action === 'actions/setup-node') {
+            const signal = AbortSignal.any([
+              controller.signal,
+              AbortSignal.timeout(Math.min(s.timeout, job.timeout)),
+            ])
+            const path = await setupNode(
+              s.uses!,
+              s.with,
+              work,
+              env,
+              signal,
+              (args, actionEnv) =>
+                command(
+                  args,
+                  cwd,
+                  actionEnv,
+                  signal,
+                  (line) => log.line(line),
+                  Math.min(s.timeout, job.timeout),
+                ),
+              (line) => log.line(line),
+            )
+            exit = path === null ? 1 : 0
+            if (path !== null) jobPath = path
           } else if (tool) {
             if (s.with.cache)
               await log.line(

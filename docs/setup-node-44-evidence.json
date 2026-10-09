@@ -1,0 +1,48 @@
+{
+  "issue": "gildforge/gild-site#44",
+  "host": "darwin-x64",
+  "runnerCases": {
+    "latest": "v26.11.1",
+    "24": "v24.21.0",
+    "22": "v22.23.3"
+  },
+  "appleSilicon": {
+    "host": "bugsy",
+    "path": "/Users/sami/Projects/codex/gild-cli",
+    "platform": "darwin-arm64",
+    "pass": 3,
+    "fail": 0,
+    "assertions": 63,
+    "seconds": 29.26,
+    "reverted": {
+      "pass": 0,
+      "fail": 3,
+      "seconds": 4.21
+    }
+  },
+  "localGates": [
+    {
+      "gate": "typecheck",
+      "exit": 0,
+      "seconds": 6.7
+    },
+    {
+      "gate": "test",
+      "exit": 0,
+      "seconds": 130.9
+    },
+    {
+      "gate": "build",
+      "exit": 0,
+      "seconds": 4.2
+    },
+    {
+      "gate": "pack",
+      "exit": 0,
+      "seconds": 14.8
+    }
+  ],
+  "npmSmoke": "native darwin-x64 package launcher --version, scratch-HOME auth init --yes and auth status passed",
+  "revert": "baseline runner restored temporarily on both hosts: all three specs fail; fixed source restored; reproducible bun run test:setup-node:revert passes",
+  "release": "Requires a new CLI release by Ava and runner binary upgrade/process restart on bugsy and demon; no release or restart performed"
+}

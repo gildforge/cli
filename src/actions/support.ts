@@ -18,7 +18,7 @@ export function actionSupport(uses:string,values:Record<string,unknown>) {
     const unsupported=Object.keys(values).filter(key=>!allowed.includes(key))
     if(unsupported.length)error=`gild ${action==='actions/checkout'?'checkout':action} does not support: ${unsupported.join(', ')}`
     if((action==='dtolnay/rust-toolchain'||action==='actions-rs/toolchain') && (values.components||values.targets))error='gild toolchain checks do not support components or targets yet'
-    if(action!=='actions/checkout')warnings.push(`${action} checks tools already installed on the runner; tool downloads are unsupported`)
+    if(action!=='actions/checkout' && action!=='actions/setup-node')warnings.push(`${action} checks tools already installed on the runner; tool downloads are unsupported`)
     if(values.cache)warnings.push('dependency cache options are a no-op on this machine')
   }
   return {error,warnings}

@@ -28,13 +28,18 @@ Only registration uses the existing owner/admin API credential. Job operations u
 | `uses:` | Behavior |
 | --- | --- |
 | `actions/checkout@*` | Already checked out exact SHA through gild; fetch-depth/persist-credentials accepted, other inputs fail |
-| Node/Bun/Go setup actions | Verify installed versions (numeric/wildcard selectors); no downloads |
+| `actions/setup-node@v4`, `@v5`, `@v6` (or their pinned SHAs) | Execute the upstream action; download matching Node, including `latest`, majors and semver ranges; carry PATH to following steps |
+| Bun/Go setup actions | Verify installed versions (numeric/wildcard selectors); no downloads |
 | `dtolnay/rust-toolchain`, `actions-rs/toolchain` | Verify installed rustup toolchain; components/targets fail clearly |
 | Upload-artifact/cache | Logged no-op |
 | Anything else | Failed step: `gild doesn't run <action> yet` |
 
+`setup-node` requires a bootstrap Node on the machine (Node 24+ for v5/v6, Node 20+ for v4), `tar`, and HTTPS access to GitHub and nodejs.org. Its action archive is pinned to a commit and SHA-256 verified before execution. `RUNNER_OS` is `macOS`/`Linux`/`Windows`, `RUNNER_ARCH` is `ARM64`/`X64`/`X86`/`ARM`, and `RUNNER_TEMP`/`RUNNER_TOOL_CACHE` point to writable job-owned directories. Node archives use the upstream toolkit’s native `os.platform()`/`os.arch()` mapping, not the uppercase runner labels. The tool cache is disposable and dependency caching remains a logged no-op; no GitHub or forge credential is passed to the action.
+
 Secrets are resolved and logs masked by the forge; they are withheld from PR and agent-push runs. This runner buffers complete lines so split output cannot evade masking. Lines over 32 KiB fail without forwarding a partial tail. Output transport retries use stable per-step sequence counters, including checkout/bootstrap messages. Server retention is bounded at 2 MiB per run. See the companion gild-site PR and [`docs/actions/README.md`](https://github.com/gildforge/gild-site/blob/codex/actions/docs/actions/README.md) for parser compatibility, storage, merge gating, timings and deployment bindings.
 
-Validation: `bun test`, `bun run typecheck`, `bun run build`. With the sibling site checkout, `node ../gild-site/scripts/actions-local.mjs --r2` exercises actual CLI commands against local Wrangler, echo/Node execution, logs/results, races, cancellation/timeouts, lost leases and archive readback. `node scripts/runner-revert.mjs` proves failure when pipefail or shared log sequence counters are removed, then restores the implementation. Evidence is in `docs/runner-revert-evidence.json` and the site's local fixture results. No deployment, bucket creation, secret transfer or npm publication is part of these changes.
+The run page opens failed steps automatically and links to job logs at `/api/repos/owner/name/actions/runs/:run/jobs/:job/logs`. Step chunks remain available at `/runs/:run/logs?job=:job&step=:position&after=:seq`; the canonical API serves all run logs at `/api/v1/repos/owner/name/actions/runs/:run/logs`.
+
+Validation: `bun test src/runner-setup-node.test.ts` executes the compiled runner in a scratch HOME for `latest`, `24` and `22`, checking subsequent Node/npm execution, architecture, the toolkit completion marker and uploaded logs. CI covers Linux x64 and macOS x64/arm64. `bun test`, `bun run typecheck`, `bun run build`. With the sibling site checkout, `node ../gild-site/scripts/actions-local.mjs --r2` exercises actual CLI commands against local Wrangler, echo/Node execution, logs/results, races, cancellation/timeouts, lost leases and archive readback. `node scripts/runner-revert.mjs` proves failure when pipefail or shared log sequence counters are removed, then restores the implementation. Evidence is in `docs/runner-revert-evidence.json` and the site's local fixture results. No deployment, bucket creation, secret transfer or npm publication is part of these changes.
 
 -codex
