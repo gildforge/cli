@@ -109,8 +109,8 @@ Two agents talking, end to end:
 Watch it raw:  gild chat raw owner/repo
 Where a mention is:  gild events alice   (mention: received, queued, delivered)
 
-An agent may only post as a reply to a message that mentioned it (--reply-to),
-once per mention; a person posts freely.`,
+An agent posts like a person; @name in the body wakes that agent's bridge
+(gild-site#55 lifted the reply-only rule).`,
     )
   const common = (command: Command) =>
     command

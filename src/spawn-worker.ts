@@ -18,6 +18,8 @@ import {
 import { GildClient } from './api/client'
 import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
+import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
+import { describeSync, type SyncResult } from './isolation/sync'
 import {
   DetachedHost,
   endSocket,
@@ -30,6 +32,7 @@ import {
   privateSessionsDirectory,
   socketPath,
   type LocalSession,
+  type SyncSummary,
 } from './spawn-sessions'
 
 type Options = {
@@ -43,9 +46,11 @@ type Options = {
   reporting?: boolean
   bridging?: boolean
   identity?: string
-  profile?: { name: string; channels?: string[] }
+  profile?: { name: string; channels?: string[]; on?: string[] }
   envAllowlist?: string[]
   detach?: { cols: number; rows: number }
+  /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
+  vm?: { configDir: string }
 }
 const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
@@ -78,7 +83,7 @@ const bridgeConfig = credential<BridgeTarget>(
   'bridge',
   options.bridging,
 )
-let child: IPty | undefined
+let child: IPty | VmChild | undefined
 let queue: InjectionQueue | undefined
 let path: string | undefined
 let ownsSocket = false
@@ -134,6 +139,7 @@ const output = new TerminalOutput(
 
 function killGroup(signal: NodeJS.Signals) {
   if (!child) return
+  if ('dispose' in child) return child.kill() // the guest hangs up its own group
   // node-pty's forkpty/setsid child owns this group, never gild's terminal group.
   try {
     process.kill(-child.pid, signal)
@@ -191,7 +197,21 @@ function finish(code: number, terminate = true) {
       try {
         killGroup('SIGKILL')
       } catch {}
-      void (reporter?.close() ?? Promise.resolve()).finally(() => {
+      // --vm: the guest's last changes come back before the VM is stopped.
+      const vm =
+        child && 'dispose' in child
+          ? child.dispose().then((r) => {
+              if (!r) return
+              console.error(
+                `gild: working directory synced from the VM: ${describeSync(r)}`,
+              )
+              for (const c of r.conflicts)
+                console.error(
+                  `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+                )
+            })
+          : undefined
+      void Promise.all([reporter?.close(), vm]).finally(() => {
         // A signal exit cannot wait forever for a terminal reader that stopped.
         if (terminate) setTimeout(() => process.exit(code), 250)
         void Promise.all([output.flush(), exitFlushed]).then(() =>
@@ -229,6 +249,12 @@ process.on('exit', () => {
 })
 
 async function fallback(error: unknown) {
+  if (options.vm) {
+    // Never quietly run an agent that was asked to be isolated on the host.
+    restore()
+    console.error(`gild: --vm failed: ${(error as Error).message}`)
+    process.exit(1)
+  }
   debugFallback(error)
   // No terminal to fall back to: a detached session either has a PTY or fails.
   if (options.detach) return failed(error)
@@ -324,6 +350,17 @@ async function main() {
           socket.end()
           return
         }
+        if (request.type === 'sync') {
+          if (!child || !('dispose' in child))
+            throw new Error('sync applies to gild spawn --vm sessions only')
+          socket.setTimeout(0)
+          void child.sync().then(
+            (r) => socket.end(JSON.stringify(summary(r)) + '\n'),
+            (e: Error) =>
+              socket.end(JSON.stringify({ error: e.message }) + '\n'),
+          )
+          return
+        }
         if (request.type === 'info') {
           if (!child) throw new Error('Session is starting')
           const info: LocalSession = {
@@ -343,7 +380,7 @@ async function main() {
               : {}),
             cwd: process.cwd(),
             pid: process.pid,
-            childPid: child.pid,
+            childPid: 'dispose' in child ? -1 : child.pid,
             started,
             ...state,
             held: queue?.held,
@@ -439,6 +476,7 @@ async function main() {
   server.on('error', failed)
   const binary = realAgent(options.agent)
   const env = agentEnvironment(binary, options.envAllowlist)
+  const baseEnv = { ...env }
   try {
     const prepared = await adapter?.prepare(
       {
@@ -471,14 +509,25 @@ async function main() {
       })
       host.openLog(join(directory, options.id))
     }
-    child = pty.spawn(binary, prepared?.args ?? options.args, {
-      name: 'xterm-256color',
-      cols: options.detach?.cols ?? process.stdout.columns,
-      rows: options.detach?.rows ?? process.stdout.rows,
-      cwd: process.cwd(),
-      env,
-      encoding: null,
-    })
+    child = options.vm
+      ? await startVmChild({
+          configDir: options.vm.configDir,
+          sessionId: options.id,
+          cwd: process.cwd(),
+          binary,
+          args: prepared?.args ?? options.args,
+          env: guestEnvironment(env, baseEnv, options.envAllowlist),
+          cols: process.stdout.columns || 80,
+          rows: process.stdout.rows || 24,
+        })
+      : pty.spawn(binary, prepared?.args ?? options.args, {
+          name: 'xterm-256color',
+          cols: options.detach?.cols ?? process.stdout.columns,
+          rows: options.detach?.rows ?? process.stdout.rows,
+          cwd: process.cwd(),
+          env,
+          encoding: null,
+        })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
   } catch (error) {
@@ -506,6 +555,7 @@ async function main() {
       gild: options.hookCommand.map(shellQuote).join(' '),
       session: options.id,
       repos: options.profile.channels ?? [],
+      triggers: options.profile.on ?? [],
       file: join(directory, `${options.id}.mentions.json`),
       enqueue: (text, typed) => queue!.enqueue(text, typed),
       emit: broadcast,
@@ -529,9 +579,17 @@ async function main() {
   )
   child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
-  child.onExit(({ exitCode, signal }) =>
-    finish(signal ? 128 + signal : exitCode, false),
-  )
+  child.onExit(({ exitCode, signal }) => {
+    finish(signal ? 128 + signal : exitCode, false)
+  })
+}
+function summary(r: SyncResult): SyncSummary {
+  return {
+    written: r.written.length,
+    deleted: r.deleted.length,
+    rejected: r.rejected.length,
+    conflicts: r.conflicts.slice(0, 100),
+  }
 }
 /** `gild stop`: the agent gets the same hangup a closed terminal gives it,
  * then SIGKILL after the grace period; its exit then ends the session. */

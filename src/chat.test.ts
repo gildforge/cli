@@ -74,11 +74,7 @@ function forge(tokens: string[]) {
       const body = (await request.json()) as { body: string; reply_to?: string }
       seen.at(-1)!.body = body
       const agent = auth === 'Bearer gf_agentfixture'
-      if (agent && !body.reply_to)
-        return Response.json(
-          { message: 'Agents reply only to messages that mention them' },
-          { status: 403 },
-        )
+      // gild-site#55: agents post unprompted; @name in the body wakes them.
       return Response.json(
         post(agent ? 'alice/test' : 'sami', body.body, body.reply_to ?? null),
         { status: 201 },
@@ -254,16 +250,24 @@ test('send prints the cursor, passes reply_to, and an agent uses its own token w
     expect(
       (s.seen.at(-1)!.body as { reply_to?: string }).reply_to,
     ).toBeUndefined()
-    const refused = await cli(s.root, [
+    // gild-site#55: an agent posts unprompted, e.g. to hand off with @bob.
+    const unprompted = await cli(s.root, [
       'chat',
       'send',
       'owner/demo',
-      'no mention',
+      '@bob take this',
       '--agent',
       'test',
     ])
-    expect(refused.code).toBe(1)
-    expect(refused.err).toContain('reply only to messages that mention them')
+    expect(unprompted).toMatchObject({ code: 0, out: '3\n', err: '' })
+    expect(s.seen.at(-1)).toMatchObject({
+      auth: 'Bearer gf_agentfixture',
+      body: { body: '@bob take this' },
+    })
+    expect(s.log[2]).toMatchObject({
+      reply_to: null,
+      author: { name: 'alice/test', kind: 'agent' },
+    })
     const reply = await cli(s.root, [
       'chat',
       'send',
@@ -274,23 +278,23 @@ test('send prints the cursor, passes reply_to, and an agent uses its own token w
       '--reply-to',
       '1',
     ])
-    expect(reply).toMatchObject({ code: 0, out: '3\n', err: '' })
+    expect(reply).toMatchObject({ code: 0, out: '4\n', err: '' })
     expect(s.seen.at(-1)).toMatchObject({
       auth: 'Bearer gf_agentfixture',
       body: { reply_to: '1' },
     })
-    expect(s.log[2]).toMatchObject({
+    expect(s.log[3]).toMatchObject({
       reply_to: '1',
       author: { name: 'alice/test', kind: 'agent' },
     })
-    for (const run of [human, refused, reply])
+    for (const run of [human, unprompted, reply])
       expect(run.out + run.err).not.toContain('gf_')
     const stdin = await cli(
       s.root,
       ['chat', 'send', 'owner/demo', '-', '--server', s.origin],
       'from stdin',
     )
-    expect(stdin.out).toBe('4\n')
+    expect(stdin.out).toBe('5\n')
   } finally {
     await s.close()
   }

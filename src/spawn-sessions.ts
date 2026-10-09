@@ -63,10 +63,28 @@ export async function privateSessionsDirectory() {
   }
   return directory
 }
+export interface SyncSummary {
+  written: number
+  deleted: number
+  rejected: number
+  conflicts: { path: string; reason: string; saved?: string }[]
+}
+export function localRequest(
+  path: string,
+  request: { type: 'sync' },
+  timeoutMs?: number,
+): Promise<SyncSummary>
 export function localRequest(
   path: string,
   request: { type: 'info' } | { type: 'send'; message: string },
-): Promise<LocalSession | { queued: true }> {
+  timeoutMs?: number,
+): Promise<LocalSession | { queued: true }>
+export function localRequest(
+  path: string,
+  request:
+    { type: 'info' } | { type: 'send'; message: string } | { type: 'sync' },
+  timeoutMs = 3000,
+): Promise<LocalSession | { queued: true } | SyncSummary> {
   const data = JSON.stringify(request) + '\n'
   if (Buffer.byteLength(data) > MAX_MESSAGE_BYTES)
     return Promise.reject(new Error('Message exceeds 64 KiB'))
@@ -78,7 +96,9 @@ export function localRequest(
       reject(error)
     }
     socket.setEncoding('utf8')
-    socket.setTimeout(3000, () => fail(new Error('Session did not respond')))
+    socket.setTimeout(timeoutMs, () =>
+      fail(new Error('Session did not respond')),
+    )
     socket.on('error', fail)
     socket.on('connect', () => socket.write(data))
     socket.on('data', (chunk: string) => {

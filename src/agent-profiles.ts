@@ -21,6 +21,25 @@ const text = z
   .string()
   .min(1)
   .refine((s) => !s.includes('\0'))
+/** `<event>.<action>[:<label>]` against the forge event stream (gild-site#55). */
+export const triggerPattern = /^([a-z][a-z_]*)\.([a-z][a-z_]*)(?::([^\n]+))?$/
+const triggerSchema = z
+  .string()
+  .regex(
+    triggerPattern,
+    'Use <event>.<action>[:<label>], e.g. issues.labeled:triage',
+  )
+export type AgentTrigger = { event: string; action: string; label?: string }
+/** Split a validated trigger spec into its parts; null when the grammar fails. */
+export function parseTrigger(spec: string): AgentTrigger | null {
+  const match = spec.match(triggerPattern)
+  if (!match) return null
+  return {
+    event: match[1],
+    action: match[2],
+    ...(match[3] !== undefined ? { label: match[3] } : {}),
+  }
+}
 export const profileSchema = z.strictObject({
   name: nameSchema,
   runtime: text,
@@ -32,6 +51,7 @@ export const profileSchema = z.strictObject({
   channels: z
     .array(z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/))
     .optional(),
+  on: z.array(triggerSchema).optional(),
 })
 export type AgentProfile = z.infer<typeof profileSchema>
 export const profilesDirectory = () => join(homedir(), '.gild', 'agents')
@@ -61,7 +81,10 @@ export function parseProfile(value: unknown): AgentProfile {
   const result = profileSchema.safeParse(value)
   if (!result.success)
     throw Error(
-      'Invalid agent profile: only name, runtime, model, effort, directory, args, env and channels are allowed; credentials belong in the identity store',
+      'Invalid agent profile: only name, runtime, model, effort, directory, args, env, channels and on are allowed; credentials belong in the identity store' +
+        (result.error.issues[0]
+          ? ` (${result.error.issues[0].path.join('.') || 'profile'}: ${result.error.issues[0].message})`
+          : ''),
     )
   return result.data
 }
@@ -185,9 +208,15 @@ export function profileCommands(agent: Command) {
         'reserved channel mention subscription; repeat',
         collect,
       )
+      .option(
+        '--on <event.action[:label]>',
+        'wake this agent on a forge event, e.g. issues.labeled:triage; repeat',
+        collect,
+      )
       .option('--clear-args', 'clear native arguments')
       .option('--clear-env', 'restore normal environment inheritance')
       .option('--clear-channels', 'clear reserved channels')
+      .option('--clear-on', 'clear event triggers')
       .option('--file <json>', 'read a complete, credential-free profile JSON')
       .action(async (name: string, opts) => {
         profilePath(name)
@@ -233,6 +262,11 @@ export function profileCommands(agent: Command) {
               ? { channels: opts.channel }
               : opts.clearChannels
                 ? { channels: undefined }
+                : {}),
+            ...(opts.on
+              ? { on: opts.on }
+              : opts.clearOn
+                ? { on: undefined }
                 : {}),
           },
           verb === 'add',
