@@ -528,7 +528,10 @@ test('local env and gh auth tokens are only used on source API requests; resume 
       ),
     ).toBe(true)
     const gh = join(f.root, 'gh')
-    await writeFile(gh, '#!/bin/sh\nprintf gh-marker\n')
+    await writeFile(
+      gh,
+      '#!/bin/sh\n[ "$1 $2 $3 $4" = "auth token --hostname github.com" ] || exit 1\nprintf gh-marker\n',
+    )
     await chmod(gh, 0o700)
     const pathBefore = process.env.PATH,
       githubBefore = process.env.GITHUB_TOKEN

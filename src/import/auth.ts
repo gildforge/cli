@@ -6,10 +6,14 @@ export async function githubReadToken(
   env = process.env,
   run: () => Promise<string> = async () =>
     (
-      await promisify(execFile)('gh', ['auth', 'token'], {
-        timeout: 10000,
-        maxBuffer: 65536,
-      })
+      await promisify(execFile)(
+        'gh',
+        ['auth', 'token', '--hostname', 'github.com'],
+        {
+          timeout: 10000,
+          maxBuffer: 65536,
+        },
+      )
     ).stdout,
 ) {
   if (anonymous) return undefined
