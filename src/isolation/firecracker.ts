@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { bootNetArgs, networkState, planNetwork } from './network'
 import {
   guestExec,
+  guestFiles,
   guestPing,
   guestPty,
   readOneMessage,
@@ -261,6 +262,7 @@ export async function startFirecracker(
         ),
       exec: (argv, o) => guestExec(open, argv, o),
       pty: (request) => guestPty(open, request),
+      files: guestFiles(open),
       onGuestMessage: (port, handler) => {
         // Firecracker maps a guest connection to host port N onto <uds>_N.
         const server = createServer((c) => {

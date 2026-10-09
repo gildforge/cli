@@ -239,6 +239,25 @@ export function spawnCommands(
       console.log(`queued for ${id}`)
     })
   program
+    .command('sync <id>')
+    .description(
+      "copy a --vm session's working-directory changes back to the host now (also done when it exits)",
+    )
+    .action(async (id: string) => {
+      const r = await localRequest(
+        socketPath(id, await privateSessionsDirectory()),
+        { type: 'sync' },
+        10 * 60_000,
+      )
+      console.log(
+        `${id}: ${r.written} written, ${r.deleted} deleted, ${r.conflicts.length} conflicts${r.rejected ? `, ${r.rejected} rejected` : ''}`,
+      )
+      for (const c of r.conflicts)
+        console.log(
+          `  kept host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+        )
+    })
+  program
     .command('status [id]')
     .description(
       "inspect a live local agent session, or (no id) show this machine's isolation",

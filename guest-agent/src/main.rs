@@ -6,10 +6,14 @@
 //!   {"op":"put","path":"/workspace/x","mode":384,"content":"<base64>"}
 //!   {"op":"exec","argv":[..],"env":{..},"cwd":"/workspace","timeout_ms":1000}
 //!   {"op":"ping"}
+//!   {"op":"list","root":"/workspace"}       (sync: every entry under root, hashed)
+//!   {"op":"get","path":"/workspace/x"}      (sync: one regular file's bytes)
 //! Agent to host:
 //!   {"t":"out","d":"<base64>"} / {"t":"err","d":"<base64>"}   (exec, streamed)
 //!   {"t":"exit","code":0,"timed_out":false}                   (exec, last frame)
-//!   {"t":"ok"} / {"t":"error","message":".."}                 (put, ping)
+//!   {"t":"ok"} / {"t":"error","message":".."}                 (put, ping; last frame of list/get)
+//!   {"t":"entries","e":[{"p":"a/b","k":"f","m":420,"s":3,"h":"<sha256>"}, ..]}  (list)
+//!   {"t":"out","d":"<base64>"}                                (get, streamed)
 //!
 //! Secrets travel only inside `env` of an exec request, over vsock or the
 //! container's stdio; they are never written to disk or put in argv.
@@ -38,6 +42,8 @@ enum Request {
         rows: Option<u16>,
     },
     Put { path: String, mode: Option<u32>, content: String },
+    List { root: String },
+    Get { path: String },
     Exec {
         argv: Vec<String>,
         #[serde(default)]
@@ -56,6 +62,71 @@ enum Reply<'a> {
     Exit { code: i32, timed_out: bool },
     Ok,
     Error { message: String },
+    Entries { e: Vec<Entry> },
+}
+
+/// One file-system entry under a sync root. `k`: `f` file, `d` directory, `l` symlink.
+/// The host computes the same shape in src/isolation/sync.ts and compares field by field.
+#[derive(Serialize)]
+struct Entry {
+    p: String,
+    k: &'static str,
+    m: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    h: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    t: Option<String>,
+}
+
+fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Walk `root` without following symlinks; sockets, fifos and devices are skipped.
+fn list_tree(root: &std::path::Path) -> std::io::Result<Vec<Entry>> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut names: Vec<_> = std::fs::read_dir(&dir)?.collect::<Result<_, _>>()?;
+        names.sort_by_key(|e| e.file_name());
+        for e in names {
+            let path = e.path();
+            let rel = path.strip_prefix(root).map_err(std::io::Error::other)?;
+            let Ok(p) = std::str::from_utf8(rel.as_os_str().as_bytes()) else { continue };
+            let md = std::fs::symlink_metadata(&path)?;
+            let m = md.permissions().mode() & 0o7777;
+            let ft = md.file_type();
+            let entry = if ft.is_symlink() {
+                let t = std::fs::read_link(&path)?;
+                let Ok(t) = std::str::from_utf8(t.as_os_str().as_bytes()) else { continue };
+                Entry { p: p.into(), k: "l", m: 0, s: None, h: None, t: Some(t.into()) }
+            } else if ft.is_dir() {
+                stack.push(path.clone());
+                Entry { p: p.into(), k: "d", m, s: None, h: None, t: None }
+            } else if ft.is_file() {
+                Entry { p: p.into(), k: "f", m, s: Some(md.len()), h: Some(sha256_file(&path)?), t: None }
+            } else {
+                continue;
+            };
+            out.push(entry);
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Deserialize)]
@@ -174,6 +245,38 @@ fn handle(mut conn: Box<dyn Conn>) {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode.unwrap_or(0o600))).map_err(|e| e.to_string())
             });
             let _ = send(&w, &match res { Ok(()) => Reply::Ok, Err(message) => Reply::Error { message } });
+        }
+        Request::List { root } => match list_tree(std::path::Path::new(&root)) {
+            Ok(entries) => {
+                let mut it = entries.into_iter().peekable();
+                while it.peek().is_some() {
+                    let chunk: Vec<Entry> = it.by_ref().take(512).collect();
+                    if send(&w, &Reply::Entries { e: chunk }).is_err() {
+                        return;
+                    }
+                }
+                let _ = send(&w, &Reply::Ok);
+            }
+            Err(e) => {
+                let _ = send(&w, &Reply::Error { message: format!("list {root}: {e}") });
+            }
+        },
+        Request::Get { path } => {
+            let res = std::fs::symlink_metadata(&path).and_then(|md| {
+                if !md.file_type().is_file() {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
+                let mut f = std::fs::File::open(&path)?;
+                let mut buf = vec![0u8; 1 << 16];
+                loop {
+                    let n = f.read(&mut buf)?;
+                    if n == 0 {
+                        return Ok(());
+                    }
+                    send(&w, &Reply::Out { d: &b64_encode(&buf[..n]) })?;
+                }
+            });
+            let _ = send(&w, &match res { Ok(()) => Reply::Ok, Err(e) => Reply::Error { message: format!("get {path}: {e}") } });
         }
         Request::Exec { argv, env, cwd, timeout_ms } => {
             let Some(prog) = argv.first() else {
@@ -299,9 +402,9 @@ fn run_pty(
     let mut p_env: Vec<*const libc::c_char> = c_env.iter().map(|c| c.as_ptr()).collect();
     p_env.push(std::ptr::null());
     let c_cwd = cwd.and_then(|c| CString::new(c).ok());
-    let ws = libc::winsize { ws_row: rows.unwrap_or(24), ws_col: cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
+    let mut ws = libc::winsize { ws_row: rows.unwrap_or(24), ws_col: cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
     let mut master: libc::c_int = -1;
-    let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &ws) };
+    let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &raw mut ws) };
     if pid < 0 {
         let _ = send(&w, &Reply::Error { message: "forkpty failed".into() });
         return;
@@ -350,8 +453,12 @@ fn run_pty(
     let _ = send(&w, &Reply::Exit { code, timed_out: false });
 }
 
+#[cfg(not(target_os = "linux"))]
+fn hook(_args: &[String]) {}
+
 /// `gild-guest-agent hook --session ID [--agent A] [json]`: the hook command inside the guest.
 /// Forwards the payload to the host over vsock (CID 2, port 9100); never fails the agent.
+#[cfg(target_os = "linux")]
 fn hook(args: &[String]) {
     #[repr(C)]
     struct SockaddrVm { family: u16, reserved: u16, port: u32, cid: u32, flags: u8, zero: [u8; 3] }
@@ -383,6 +490,12 @@ fn hook(args: &[String]) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn vsock_listen(_port: u32) -> std::io::Result<i32> {
+    Err(std::io::Error::other("vsock is only available inside a Linux guest"))
+}
+
+#[cfg(target_os = "linux")]
 fn vsock_listen(port: u32) -> std::io::Result<i32> {
     #[repr(C)]
     struct SockaddrVm { family: u16, reserved: u16, port: u32, cid: u32, flags: u8, zero: [u8; 3] }
@@ -403,7 +516,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("hook") => hook(&args[2..]),
-        Some("--stdio") => handle(Box::new(StdioConn)),
+        Some("--stdio") => {
+            // Host tier: `--shared` keeps everything the step creates readable and
+            // writable by the group the runner user shares with this dedicated user.
+            if args.get(2).map(String::as_str) == Some("--shared") {
+                unsafe { libc::umask(0o007); }
+            }
+            handle(Box::new(StdioConn))
+        }
         Some("--vsock") => {
             let port: u32 = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(9002);
             let fd = match vsock_listen(port) {
@@ -419,7 +539,7 @@ fn main() {
                 std::thread::spawn(move || handle(Box::new(VsockConn(file))));
             }
         }
-        _ => { eprintln!("usage: gild-guest-agent --vsock <port> | --stdio"); std::process::exit(2) }
+        _ => { eprintln!("usage: gild-guest-agent --vsock <port> | --stdio [--shared]"); std::process::exit(2) }
     }
 }
 
@@ -435,6 +555,24 @@ mod tests {
         }
         assert_eq!(b64_encode(b"gild"), "Z2lsZA==");
         assert!(b64_decode("a$b").is_err());
+    }
+
+    #[test]
+    fn lists_files_dirs_and_symlinks_without_following_links() {
+        let root = std::env::temp_dir().join(format!("gga-list-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::write(root.join("d/a.txt"), b"abc").unwrap();
+        std::os::unix::fs::symlink("/etc", root.join("link")).unwrap();
+        let entries = list_tree(&root).unwrap();
+        let got: Vec<(String, &str)> = entries.iter().map(|e| (e.p.clone(), e.k)).collect();
+        assert!(got.contains(&("d".into(), "d")));
+        assert!(got.contains(&("d/a.txt".into(), "f")));
+        assert!(got.contains(&("link".into(), "l")));
+        let a = entries.iter().find(|e| e.p == "d/a.txt").unwrap();
+        assert_eq!(a.h.as_deref(), Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+        assert_eq!(entries.iter().find(|e| e.p == "link").unwrap().t.as_deref(), Some("/etc"));
+        assert!(!got.iter().any(|(p, _)| p.starts_with("link/")));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

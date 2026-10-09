@@ -9,7 +9,13 @@ import { basename, isAbsolute, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { loadHostConfig, type Isolation } from './isolation'
 import { firecrackerAvailable, startFirecracker } from './isolation/firecracker'
-import { socketPath } from './spawn-sessions'
+import { privateSessionsDirectory, socketPath } from './spawn-sessions'
+import {
+  describeSync,
+  hostManifest,
+  syncBack,
+  type SyncResult,
+} from './isolation/sync'
 
 export const GUEST_AGENT = '/usr/local/bin/gild-guest-agent'
 const GUEST_PATH =
@@ -26,8 +32,10 @@ export interface VmChild {
   resume(): void
   /** Hang up the guest session (the agent gets SIGHUP). */
   kill(): void
-  /** Stop the VM. */
-  dispose(): Promise<void>
+  /** Copy the guest's changes to the working directory back to the host now. */
+  sync(): Promise<SyncResult>
+  /** Sync one last time, then stop the VM. Safe to call more than once. */
+  dispose(): Promise<SyncResult | undefined>
 }
 
 /** Env for the guest: a fixed baseline plus only what the adapter or profile added; never the host env. */
@@ -73,6 +81,8 @@ export async function startVmChild(opts: {
     throw new Error(
       `${opts.cwd} is larger than 2 GiB; --vm copies the working directory into the VM`,
     )
+  // What the guest starts from: the baseline every later sync is compared to.
+  const baseline = await hostManifest(opts.cwd)
   const vmDir = await mkdtemp(join(tmpdir(), 'gild-spawn-vm-'))
   const iso: Isolation = await startFirecracker(
     { ...host.vm, port: 9002 },
@@ -146,6 +156,28 @@ export async function startVmChild(opts: {
     })
     let exitCb: (e: { exitCode: number }) => void = () => {}
     pty.onExit((code) => exitCb({ exitCode: code }))
+    const conflictDir = join(
+      await privateSessionsDirectory(),
+      `${opts.sessionId}.conflicts`,
+    )
+    // One sync at a time; each one carries only what changed since the last.
+    let chain: Promise<unknown> = Promise.resolve()
+    const sync = () => {
+      const next = chain.then(async () => {
+        const r = await syncBack({
+          root: opts.cwd,
+          guestRoot: '/workspace',
+          files: iso.files!,
+          baseline,
+          conflictDir,
+        })
+        opts.log?.(`synced ${describeSync(r)}`)
+        return r
+      })
+      chain = next.catch(() => {})
+      return next
+    }
+    let disposed: Promise<SyncResult | undefined> | undefined
     return {
       pid: -1,
       write: (d) => pty.write(d),
@@ -155,7 +187,17 @@ export async function startVmChild(opts: {
       pause() {},
       resume() {},
       kill: () => pty.close(),
-      dispose: () => iso.close(),
+      sync,
+      dispose: () =>
+        (disposed ??= sync()
+          .then(
+            (r) => r,
+            (e) => {
+              opts.log?.(`final sync failed: ${(e as Error).message}`)
+              return undefined
+            },
+          )
+          .finally(() => iso.close())),
     }
   } catch (e) {
     return fail(e)
