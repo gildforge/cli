@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert ready['argv'][2:]==['--model','claude-opus-5-5','--effort','high','--allowedTools','Read','--resume','a b','--','--as','literal'],ready
             assert status()['profile']=='fixture' and status()['id']=='fixture'
             assert status()['identity']=='owner/fixture'
-            assert status()['channels']==['owner/demo']
+            assert status()['channels']==[{'repo':'owner/demo','state':'connecting'}]
             assert 'fixture-scoped-token' not in profile_file.read_text()
 
         if names_mode:

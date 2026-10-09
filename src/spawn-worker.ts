@@ -6,9 +6,16 @@ import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import type { IPty } from 'node-pty'
 import { adapterFor } from './spawn-adapters'
+import { shellQuote } from './spawn-adapters/types'
 import { applyEvent, type AgentEvent, type SessionState } from './spawn-events'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { StateReporter, type ReportTarget } from './spawn-report'
+import {
+  MentionBridge,
+  type BridgeEvent,
+  type BridgeTarget,
+} from './spawn-bridge'
+import { GildClient } from './api/client'
 import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
@@ -29,6 +36,7 @@ type Options = {
   hookCommand: string[]
   printId?: boolean
   reporting?: boolean
+  bridging?: boolean
   identity?: string
   profile?: { name: string; channels?: string[] }
   envAllowlist?: string[]
@@ -37,24 +45,35 @@ type Options = {
 }
 const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
-const reportConfig = options.reporting
-  ? new Promise<ReportTarget>((resolve, reject) => {
-      const timer = setTimeout(
-        () =>
-          reject(new Error('Agent reporting credentials were not delivered')),
-        3000,
-      )
-      process.once(
-        'message',
-        (message: { type?: string; report?: ReportTarget }) => {
-          clearTimeout(timer)
-          if (message.type !== 'report' || !message.report?.token)
-            reject(new Error('Invalid agent reporting configuration'))
-          else resolve(message.report)
-        },
-      )
-    })
-  : undefined
+function credential<T>(type: string, key: string, wanted?: boolean) {
+  if (!wanted) return undefined
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Agent ${type} credentials were not delivered`)),
+      3000,
+    )
+    const receive = (message: Record<string, unknown>) => {
+      if (message.type !== type) return
+      clearTimeout(timer)
+      process.off('message', receive)
+      const value = message[key] as { token?: string } | undefined
+      if (!value?.token)
+        reject(new Error(`Invalid agent ${type} configuration`))
+      else resolve(value as T)
+    }
+    process.on('message', receive)
+  })
+}
+const reportConfig = credential<ReportTarget>(
+  'report',
+  'report',
+  options.reporting,
+)
+const bridgeConfig = credential<BridgeTarget>(
+  'bridge',
+  'bridge',
+  options.bridging,
+)
 let child: IPty | VmChild | undefined
 let queue: InjectionQueue | undefined
 let path: string | undefined
@@ -69,16 +88,22 @@ const state: SessionState = {
 }
 const subscribers = new Set<Socket>()
 let reporter: StateReporter | undefined
+let bridge: MentionBridge | undefined
+const bridgeAbort = new AbortController()
 function publish(event: AgentEvent) {
   applyEvent(state, event)
   queue?.changed()
+  broadcast(event)
+  reporter?.event(event)
+}
+/** Local subscribers only; mention records say nothing about the agent's state. */
+function broadcast(event: AgentEvent | BridgeEvent) {
   const line = JSON.stringify(event) + '\n'
   for (const socket of subscribers) {
     if (socket.writableLength + Buffer.byteLength(line) > 1024 * 1024)
       socket.destroy()
     else socket.write(line)
   }
-  reporter?.event(event)
 }
 function submitted() {
   publish({
@@ -118,6 +143,7 @@ function restore() {
     process.stdin.setRawMode(wasRaw)
     rawOwned = false
   }
+  bridgeAbort.abort()
   queue?.close()
   adapterCleanup?.()
   adapterCleanup = undefined
@@ -278,7 +304,12 @@ async function main() {
             ...(options.profile
               ? {
                   profile: options.profile.name,
-                  channels: options.profile.channels,
+                  channels:
+                    bridge?.channels ??
+                    options.profile.channels?.map((repo) => ({
+                      repo,
+                      state: 'connecting' as const,
+                    })),
                 }
               : {}),
             cwd: process.cwd(),
@@ -299,6 +330,20 @@ async function main() {
         } else if (request.type === 'subscribe') {
           subscribers.add(socket)
           socket.setTimeout(0)
+          // Channel problems that happened before subscribing stay visible.
+          for (const channel of bridge?.channels ?? [])
+            if (channel.state === 'error')
+              socket.write(
+                JSON.stringify({
+                  type: 'channel',
+                  session: options.id,
+                  repo: channel.repo,
+                  state: channel.state,
+                  error: channel.error,
+                  ts: new Date().toISOString(),
+                  snapshot: true,
+                }) + '\n',
+              )
           // An initial snapshot makes subscribing before the next hook useful.
           if (state.state !== 'unknown')
             socket.write(
@@ -408,6 +453,21 @@ async function main() {
     !!adapter,
     submitted,
   )
+  if (bridgeConfig && options.profile) {
+    const target = await bridgeConfig
+    bridge = new MentionBridge({
+      client: new GildClient(target.server + '/api/v1', target.token),
+      agent: target.agent,
+      label: options.profile.name,
+      gild: options.hookCommand.map(shellQuote).join(' '),
+      session: options.id,
+      repos: options.profile.channels ?? [],
+      file: join(directory, `${options.id}.mentions.json`),
+      enqueue: (text, typed) => queue!.enqueue(text, typed),
+      emit: broadcast,
+    })
+    void bridge.start(bridgeAbort.signal)
+  }
   process.stdin.on('data', (data: Buffer) => {
     queue!.userInput(data)
   })

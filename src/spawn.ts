@@ -3,6 +3,7 @@ import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
 import type { ReportTarget } from './spawn-report'
+import type { BridgeTarget } from './spawn-bridge'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
@@ -48,7 +49,7 @@ export function spawnCommands(
     label: string,
     cwd: string,
     localProfile: boolean,
-  ) => Promise<{ agent: string; report?: ReportTarget }>,
+  ) => Promise<{ agent: string; report?: ReportTarget; bridge?: BridgeTarget }>,
 ) {
   program
     .command('spawn <agent> [args...]')
@@ -126,6 +127,7 @@ export function spawnCommands(
             ? await resolveIdentity(label, cwd, !!profile)
             : undefined
         const report = identity?.report
+        const bridge = profile?.channels?.length ? identity?.bridge : undefined
         const id =
           profile?.name ??
           opts.name ??
@@ -160,6 +162,7 @@ export function spawnCommands(
                       new URL('./gild.ts', import.meta.url).pathname,
                     ],
               reporting: !!report,
+              bridging: !!bridge,
               identity: identity?.agent,
               printId: opts.printId,
               profile: profile
@@ -175,6 +178,8 @@ export function spawnCommands(
         )
         if (report)
           worker.once('spawn', () => worker.send({ type: 'report', report }))
+        if (bridge)
+          worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
         const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
         const interrupted = () => {}
         process.on('SIGINT', interrupted)
