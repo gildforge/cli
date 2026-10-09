@@ -2,6 +2,7 @@
 export const SCOPES = [
   'repo:read',
   'repo:write',
+  'channel:write',
   'issues:write',
   'pulls:write',
   'actions',

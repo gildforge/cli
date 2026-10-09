@@ -4,12 +4,18 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
 
+export type ChannelStatus = {
+  repo: string
+  state: 'connecting' | 'listening' | 'error'
+  error?: string
+}
 export type LocalSession = SessionState & {
   id: string
   agent: string
   profile?: string
   identity?: string
-  channels?: string[]
+  channels?: ChannelStatus[]
+  held?: { queued: number; reason: string }
   cwd: string
   pid: number
   childPid: number

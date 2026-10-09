@@ -10,7 +10,7 @@ export function injectedInput(message: string): string {
 export class InjectionQueue {
   readonly input = new InputLine()
   private buffered: Buffer[] = []
-  private pending: string[] = []
+  private pending: { data: string; typed?: () => void }[] = []
   private bytes = 0
   private lastInput = Date.now()
   private timer?: ReturnType<typeof setTimeout>
@@ -57,14 +57,15 @@ export class InjectionQueue {
             : 'scheduled',
     }
   }
-  enqueue(message: string) {
+  /** `typed` runs once the prompt and its Enter have been written to the agent. */
+  enqueue(message: string, typed?: () => void) {
     const data = injectedInput(message)
     if (
       this.pending.length >= 128 ||
       this.bytes + Buffer.byteLength(data) > 1024 * 1024
     )
       throw new Error('Session message queue is full')
-    this.pending.push(data)
+    this.pending.push({ data, typed })
     this.bytes += Buffer.byteLength(data)
     this.schedule()
   }
@@ -85,7 +86,7 @@ export class InjectionQueue {
           if (!this.structured) this.schedule()
           return
         }
-        const data = this.pending.shift()!
+        const { data, typed } = this.pending.shift()!
         this.bytes -= Buffer.byteLength(data)
         // TUIs detect a burst of text as paste. Enter must arrive as a subsequent
         // input event, otherwise Claude/Codex may paste it instead of submitting.
@@ -94,6 +95,7 @@ export class InjectionQueue {
           this.submitTimer = undefined
           this.write('\r')
           if (this.structured) this.submitted()
+          typed?.()
           for (const input of this.buffered.splice(0)) this.userInput(input)
           this.lastInput = Date.now()
           this.schedule()
