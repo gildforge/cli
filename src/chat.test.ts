@@ -431,9 +431,7 @@ test('history, participants and raw read a public channel with no identity; send
       s.origin,
     ])
     const ready = (await lines(raw, 1))[0]
-    expect(ready.messages.map((m: Message) => m.body)).toEqual([
-      'public hello',
-    ])
+    expect(ready.messages.map((m: Message) => m.body)).toEqual(['public hello'])
     raw.kill('SIGINT')
     await raw.exited
     // No header at all, not "Bearer " with an empty token.

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { guestEnvironment } from './spawn-vm'
 
 test('guest env: a fixed baseline, plus only adapter additions and allowlisted names; never the host env', () => {
@@ -21,6 +22,52 @@ test('guest env: a fixed baseline, plus only adapter additions and allowlisted n
   expect(env.HOST_SECRET).toBeUndefined()
   expect(guestEnvironment(adapted, baseline).KEEP_ME).toBeUndefined()
 })
+
+test('spawn --vm --detach starts the VM worker (no TTY needed) and reports why a VM could not start', async () => {
+  await mkdir(resolve('.tmp'), { recursive: true })
+  const home = await mkdtemp(resolve('.tmp/vm-detach-'))
+  try {
+    const config = join(home, 'config')
+    await mkdir(config)
+    const command: string[] = JSON.parse(
+      process.env.TEST_GILD_COMMAND ??
+        JSON.stringify([process.execPath, 'run', resolve('src/gild.ts')]),
+    )
+    const proc = Bun.spawn(
+      [
+        ...command,
+        'spawn',
+        '--vm',
+        '--detach',
+        '--config-dir',
+        config,
+        '--name',
+        'vmdetach',
+        'sh',
+      ],
+      {
+        cwd: home,
+        env: { ...process.env, HOME: home },
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const [code, out, err] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    // The detached worker got as far as booting a VM, and its reason came back.
+    expect(err).toContain('--vm failed: --vm needs a working Firecracker setup')
+    expect({ code, out }).toEqual({ code: 1, out: '' })
+    // Nothing ran on the host instead, and no session was left behind.
+    const sessions = await readdir(join(home, '.gild/sessions')).catch(() => [])
+    expect(sessions.filter((f) => f.startsWith('vmdetach'))).toEqual([])
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+}, 30_000)
 
 // Needs a Firecracker host and a guest image with python3 (see FINDINGS.md).
 const config = process.env.TEST_VM_CONFIG_DIR
@@ -75,4 +122,62 @@ test.skipIf(!config)(
     expect(JSON.parse(out).passed).toBe(true)
   },
   120_000,
+)
+
+test.skipIf(!config)(
+  'spawn --vm --detach: an orchestrator child in a microVM; send, sync, watch and stop, changes back at stop',
+  () => harness('scripts/fixtures/vm-detach-harness.py'),
+  120_000,
+)
+
+// A rootfs whose guest agent predates the handshake (e.g. the 0.6.0 spike image).
+const oldRootfs = process.env.TEST_VM_OLD_ROOTFS
+test.skipIf(!config || !oldRootfs)(
+  'spawn --vm against an outdated guest image fails at connect time with the rebuild command',
+  async () => {
+    await mkdir(resolve('.tmp'), { recursive: true })
+    const home = await mkdtemp(resolve('.tmp/vm-old-'))
+    try {
+      const vm = JSON.parse(
+        await Bun.file(join(config!, 'isolation.json')).text(),
+      ).vm
+      await Bun.write(
+        join(home, 'isolation.json'),
+        JSON.stringify({ vm: { ...vm, rootfs: oldRootfs } }),
+      )
+      const proc = Bun.spawn(
+        [
+          'bun',
+          'run',
+          resolve('src/gild.ts'),
+          'spawn',
+          '--vm',
+          '--detach',
+          '--config-dir',
+          home,
+          '--name',
+          'vmold',
+          'sh',
+        ],
+        {
+          cwd: home,
+          env: { ...process.env, HOME: home },
+          stdin: 'ignore',
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      const [code, err] = await Promise.all([
+        proc.exited,
+        new Response(proc.stderr).text(),
+      ])
+      expect(code).toBe(1)
+      expect(err).toContain(`The guest image ${oldRootfs} is outdated`)
+      expect(err).toContain('speaks protocol 1, this gild needs 2')
+      expect(err).toContain('bun run vm:image')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  },
+  60_000,
 )

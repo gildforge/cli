@@ -5,13 +5,19 @@
 //! Host to agent, one request per connection:
 //!   {"op":"put","path":"/workspace/x","mode":384,"content":"<base64>"}
 //!   {"op":"exec","argv":[..],"env":{..},"cwd":"/workspace","timeout_ms":1000}
-//!   {"op":"ping"}
+//!   {"op":"ping"}                         (also the version handshake, see below)
 //!   {"op":"list","root":"/workspace"}       (sync: every entry under root, hashed)
 //!   {"op":"get","path":"/workspace/x"}      (sync: one regular file's bytes)
 //! Agent to host:
 //!   {"t":"out","d":"<base64>"} / {"t":"err","d":"<base64>"}   (exec, streamed)
 //!   {"t":"exit","code":0,"timed_out":false}                   (exec, last frame)
-//!   {"t":"ok"} / {"t":"error","message":".."}                 (put, ping; last frame of list/get)
+//!   {"t":"ok"} / {"t":"error","message":".."}                 (put; last frame of list/get)
+//!   {"t":"ok","protocol":2,"agent":"0.2.0"}                   (ping)
+//!
+//! Handshake: the host pings before anything else and refuses an agent whose
+//! `protocol` differs from its own (an agent without the field is protocol 1:
+//! ping, pty, put, exec). The number lives in src/isolation/guest-protocol.json,
+//! which the host CLI and this agent both read; bump it with any new op.
 //!   {"t":"entries","e":[{"p":"a/b","k":"f","m":420,"s":3,"h":"<sha256>"}, ..]}  (list)
 //!   {"t":"out","d":"<base64>"}                                (get, streamed)
 //!
@@ -28,6 +34,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const MAX_FRAME: usize = 64 * 1024 * 1024;
+
+/// The wire protocol this agent speaks (shared with the host CLI).
+fn protocol() -> u64 {
+    let shared: serde_json::Value =
+        serde_json::from_str(include_str!("../../src/isolation/guest-protocol.json")).unwrap_or_default();
+    shared["protocol"].as_u64().unwrap_or(0)
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -61,6 +74,9 @@ enum Reply<'a> {
     Err { d: &'a str },
     Exit { code: i32, timed_out: bool },
     Ok,
+    /// The ping reply: `ok` (hosts that predate the handshake only look at `t`), plus versions.
+    #[serde(rename = "ok")]
+    Hello { protocol: u64, agent: &'static str },
     Error { message: String },
     Entries { e: Vec<Entry> },
 }
@@ -232,7 +248,7 @@ fn handle(mut conn: Box<dyn Conn>) {
     let w = Arc::new(Mutex::new(conn));
     match req {
         Request::Ping => {
-            let _ = send(&w, &Reply::Ok);
+            let _ = send(&w, &Reply::Hello { protocol: protocol(), agent: env!("CARGO_PKG_VERSION") });
         }
         Request::Pty { argv, env, cwd, cols, rows } => run_pty(w, reader, argv, env, cwd, cols, rows),
         Request::Put { path, mode, content } => {
@@ -546,6 +562,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ping_reply_carries_the_shared_protocol_number() {
+        let reply = serde_json::to_value(Reply::Hello { protocol: protocol(), agent: env!("CARGO_PKG_VERSION") }).unwrap();
+        let shared: serde_json::Value = serde_json::from_str(include_str!("../../src/isolation/guest-protocol.json")).unwrap();
+        assert_eq!(reply["t"], "ok");
+        assert_eq!(reply["protocol"], shared["protocol"]);
+        assert!(protocol() >= 2);
+    }
 
     #[test]
     fn base64_round_trips_binary() {

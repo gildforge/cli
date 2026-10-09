@@ -257,8 +257,11 @@ process.on('exit', () => {
 async function fallback(error: unknown) {
   if (options.vm) {
     // Never quietly run an agent that was asked to be isolated on the host.
+    const message = `--vm failed: ${(error as Error)?.message ?? error}`
     restore()
-    console.error(`gild: --vm failed: ${(error as Error).message}`)
+    // After restore: `gild spawn --detach` returns on this message, with the session already gone.
+    await reportDetached(options.detach, { type: 'failed', error: message })
+    console.error(`gild: ${message}`)
     process.exit(1)
   }
   debugFallback(error)
@@ -524,8 +527,8 @@ async function main() {
           binary,
           args: prepared?.args ?? options.args,
           env: guestEnvironment(env, baseEnv, options.envAllowlist),
-          cols: process.stdout.columns || 80,
-          rows: process.stdout.rows || 24,
+          cols: options.detach?.cols ?? (process.stdout.columns || 80),
+          rows: options.detach?.rows ?? (process.stdout.rows || 24),
         })
       : pty.spawn(binary, prepared?.args ?? options.args, {
           name: 'xterm-256color',

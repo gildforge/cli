@@ -12,6 +12,7 @@
     "test": "bun test",
     "test:setup-node:revert": "node scripts/setup-node-revert.mjs",
     "pack": "bun run scripts/pack.mjs",
+    "vm:image": "bun run scripts/build-vm-image.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src scripts",
     "format:check": "prettier --check src scripts"

@@ -35,43 +35,53 @@ export type { Isolation } from './session'
 
 const level = z.enum(LEVELS)
 
+/** Where `bun run vm:image` writes the guest kernel and rootfs, and where
+ *  `vm` looks when isolation.json names no other files. */
+export function vmImagePaths(configDir: string) {
+  return {
+    kernel: join(configDir, 'vm', 'vmlinux'),
+    rootfs: join(configDir, 'vm', 'rootfs.ext4'),
+  }
+}
+
 /** `<config dir>/isolation.json`: what the owner set once on this host. */
-export const hostConfigSchema = z.strictObject({
-  floor: level.optional(),
-  default: level.optional(),
-  vm: z
-    .strictObject({
-      firecracker: z.string().default('firecracker'),
-      kernel: z.string(),
-      rootfs: z.string(),
-      memoryMiB: z.number().int().min(128).default(1024),
-      vcpus: z.number().int().min(1).default(2),
-      egress: z.enum(['auto', 'block', 'allow']).default('auto'),
-    })
-    .optional(),
-  container: z
-    .strictObject({
-      engine: z.string().default('docker'),
-      image: z.string().default('ubuntu:24.04'),
-      agent: z.string(),
-      memory: z.string().default('2g'),
-      cpus: z.string().default('2'),
-      pids: z.number().int().default(512),
-      egress: z.enum(['auto', 'block', 'allow']).default('auto'),
-    })
-    .optional(),
-  /** `host` level: the dedicated OS user scripts/host-user-setup.sh created. */
-  host: z
-    .strictObject({
-      user: z.string().regex(/^gild-[a-z0-9-]{1,30}$/),
-    })
-    .optional(),
-})
-export type HostConfig = z.infer<typeof hostConfigSchema>
+export const hostConfigSchema = (configDir: string) =>
+  z.strictObject({
+    floor: level.optional(),
+    default: level.optional(),
+    vm: z
+      .strictObject({
+        firecracker: z.string().default('firecracker'),
+        kernel: z.string().default(vmImagePaths(configDir).kernel),
+        rootfs: z.string().default(vmImagePaths(configDir).rootfs),
+        memoryMiB: z.number().int().min(128).default(1024),
+        vcpus: z.number().int().min(1).default(2),
+        egress: z.enum(['auto', 'block', 'allow']).default('auto'),
+      })
+      .optional(),
+    container: z
+      .strictObject({
+        engine: z.string().default('docker'),
+        image: z.string().default('ubuntu:24.04'),
+        agent: z.string(),
+        memory: z.string().default('2g'),
+        cpus: z.string().default('2'),
+        pids: z.number().int().default(512),
+        egress: z.enum(['auto', 'block', 'allow']).default('auto'),
+      })
+      .optional(),
+    /** `host` level: the dedicated OS user scripts/host-user-setup.sh created. */
+    host: z
+      .strictObject({
+        user: z.string().regex(/^gild-[a-z0-9-]{1,30}$/),
+      })
+      .optional(),
+  })
+export type HostConfig = z.infer<ReturnType<typeof hostConfigSchema>>
 
 export async function loadHostConfig(configDir: string): Promise<HostConfig> {
   try {
-    return hostConfigSchema.parse(
+    return hostConfigSchema(configDir).parse(
       JSON.parse(await readFile(join(configDir, 'isolation.json'), 'utf8')),
     )
   } catch (e) {

@@ -2,6 +2,13 @@
 // A backend only has to open a byte channel to the guest agent; the runner and
 // spawn code talk to `Isolation` and never branch on the backend.
 import type { Level } from './policy'
+import shared from './guest-protocol.json'
+
+/** The guest-agent wire protocol this CLI speaks; guest-agent/src/main.rs reads the same file. */
+export const GUEST_PROTOCOL: number = shared.protocol
+/** Where the guest image is rebuilt from; printed with every mismatch. */
+export const REBUILD_HINT =
+  'Rebuild the guest image from a gildforge/cli checkout at this gild version: `bun run vm:image` (docs/VM.md)'
 
 export interface Channel {
   write(data: Uint8Array): void
@@ -90,7 +97,7 @@ type Reply =
   | { t: 'out' | 'err'; d: string }
   | { t: 'entries'; e: Entry[] }
   | { t: 'exit'; code: number; timed_out: boolean }
-  | { t: 'ok' }
+  | { t: 'ok'; protocol?: number; agent?: string }
   | { t: 'error'; message: string }
 
 /** Send one request and stream replies until `done` returns a value. */
@@ -145,9 +152,34 @@ function converse<T>(
   })
 }
 
-export async function guestPing(open: Opener) {
-  await converse<true>(open, { op: 'ping' }, undefined, (r) =>
-    r.t === 'ok' ? true : undefined,
+export interface GuestHello {
+  /** 1 for agents that predate the handshake (their ping reply has no number). */
+  protocol: number
+  agent?: string
+}
+
+export async function guestPing(open: Opener): Promise<GuestHello> {
+  return converse<GuestHello>(open, { op: 'ping' }, undefined, (r) =>
+    r.t === 'ok'
+      ? {
+          protocol: typeof r.protocol === 'number' ? r.protocol : 1,
+          agent: r.agent,
+        }
+      : undefined,
+  )
+}
+
+export class GuestProtocolError extends Error {}
+
+/** Refuse a guest agent that speaks another protocol, at connect time and
+ *  with the fix, instead of failing mid-session on an op it lacks. */
+export function checkGuestProtocol(hello: GuestHello, image: string) {
+  if (hello.protocol === GUEST_PROTOCOL) return
+  const agent = `gild-guest-agent ${hello.agent ?? '(no version, before 0.2.0)'}`
+  throw new GuestProtocolError(
+    hello.protocol < GUEST_PROTOCOL
+      ? `The guest image ${image} is outdated: its ${agent} speaks protocol ${hello.protocol}, this gild needs ${GUEST_PROTOCOL}. ${REBUILD_HINT}.`
+      : `The guest image ${image} is newer than this gild: its ${agent} speaks protocol ${hello.protocol}, this gild speaks ${GUEST_PROTOCOL}. Update gild, or ${REBUILD_HINT.charAt(0).toLowerCase() + REBUILD_HINT.slice(1)}.`,
   )
 }
 

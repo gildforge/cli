@@ -136,18 +136,18 @@ export function spawnCommands(
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
         const binary = realAgent(agent, cwd)
-        if (opts.detach && opts.vm)
-          throw Error('--detach does not support --vm yet')
         if (opts.detach && !supportsPty())
           throw Error(
             'Detached sessions need a PTY, unavailable on this platform',
           )
+        // Detached, the guest pty is the terminal; attached, it needs a real one.
         if (
           opts.vm &&
+          !opts.detach &&
           (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
         )
           throw Error(
-            '--vm needs an interactive terminal; it never falls back to running on the host',
+            '--vm needs an interactive terminal (or --detach); it never falls back to running on the host',
           )
         if (
           !opts.detach &&

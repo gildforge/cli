@@ -224,7 +224,7 @@ Never copy credential files into the image. Options, best first: (1) host-side b
 
 ## Recommended architecture
 
-- Local Linux: Firecracker as built here; needs `/dev/kvm` access and a kernel+rootfs (`scripts/build-vm-rootfs.sh`). Local Mac: Virtualization.framework (`vz`) via the revived `gild-virt` pattern with the same agent over vsock (VZVirtioSocketDevice); containers via Colima as the fallback tier.
+- Local Linux: Firecracker as built here; needs `/dev/kvm` access and a kernel+rootfs (`bun run vm:image`, docs/VM.md). Local Mac: Virtualization.framework (`vz`) via the revived `gild-virt` pattern with the same agent over vsock (VZVirtioSocketDevice); containers via Colima as the fallback tier.
 - Gild-hosted pool: our own KVM hosts first (a 4-core/26 GB box runs dozens of 0.3 s, ~100 MB VMs; cost is the box, flat), Fly Machines as burst (Firecracker underneath, per-second billing, ~0.3 s start, but egress/LAN policy is theirs and per-job cost scales). Decide with real job volume; the `Isolation` interface is the same for both.
 
 ## Server side, for gild-site (not implemented here)

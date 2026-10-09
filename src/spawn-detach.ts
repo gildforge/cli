@@ -240,9 +240,17 @@ export function endSocket(socket: Socket, last?: string) {
 export type StartMessage =
   { type: 'ready'; id: string } | { type: 'failed'; error: string }
 /** The worker tells `gild spawn --detach` over IPC that it is ready, or why not. */
-export function reportDetached(detach: unknown, message: StartMessage) {
-  if (!detach || !process.send || !process.connected) return
-  try {
-    process.send(message)
-  } catch {}
+export function reportDetached(
+  detach: unknown,
+  message: StartMessage,
+): Promise<void> {
+  if (!detach || !process.send || !process.connected) return Promise.resolve()
+  // Resolves once the message is handed to the IPC channel, so exiting right after cannot drop it.
+  return new Promise((resolve) => {
+    try {
+      process.send!(message, undefined, undefined, () => resolve())
+    } catch {
+      resolve()
+    }
+  })
 }

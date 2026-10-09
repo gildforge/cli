@@ -1,6 +1,6 @@
 [package]
 name = "gild-guest-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Guest side of gild isolation: runs steps inside a microVM or container and streams their output"
 

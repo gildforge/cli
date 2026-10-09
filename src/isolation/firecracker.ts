@@ -22,12 +22,14 @@ import { existsSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import { bootNetArgs, networkState, planNetwork } from './network'
 import {
+  checkGuestProtocol,
   guestExec,
   guestFiles,
   guestPing,
   guestPty,
   readOneMessage,
   guestPut,
+  GuestProtocolError,
   type Channel,
   type Isolation,
   type Opener,
@@ -220,9 +222,10 @@ export async function startFirecracker(
     const open: Opener = () => vsockChannel(uds, cfg.port)
     for (;;) {
       try {
-        await guestPing(open)
+        checkGuestProtocol(await guestPing(open), cfg.rootfs)
         break
       } catch (e) {
+        if (e instanceof GuestProtocolError) throw e
         if (Date.now() - t1 > 20_000)
           throw new Error(
             'microVM agent did not come up: ' + (e as Error).message,

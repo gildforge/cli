@@ -35,3 +35,13 @@ test('malformed isolation.json is an error, not silently ignored', async () => {
   await writeFile(join(dir, 'isolation.json'), '{"floor":"bogus"}')
   await expect(loadHostConfig(dir)).rejects.toThrow(/isolation\.json/)
 })
+
+test('vm without kernel or rootfs uses the image `bun run vm:image` writes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'iso-'))
+  await writeFile(join(dir, 'isolation.json'), JSON.stringify({ vm: {} }))
+  const { vm } = await loadHostConfig(dir)
+  expect(vm).toMatchObject({
+    kernel: join(dir, 'vm', 'vmlinux'),
+    rootfs: join(dir, 'vm', 'rootfs.ext4'),
+  })
+})
