@@ -1,9 +1,14 @@
 """Mention bridge end to end: fake forge + `gild spawn agent` + the PTY fixture agent."""
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 AUTH='--auth' in sys.argv
 TOKEN='fixture-scoped-token'
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server.HTTPServer.server_bind resolves the host with socket.getfqdn,
+        # a reverse DNS lookup that hangs where the resolver is slow; tests bind 127.0.0.1.
+        socketserver.TCPServer.server_bind(self);self.server_name=self.server_address[0];self.server_port=self.server_address[1]
 (ROOT/'.tmp').mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py')
@@ -18,6 +23,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
             forge['events'].append({'id':f'mention:{mid}:{agent}','cursor':str(n),'event':'channel.mention','repository':repo,'created_at':'2026-10-09T00:00:00Z','payload':{'repository':{'full_name':repo},'message':message,'author':message['author'],'agent':agent,'history_cursor':str(cursor)}})
     class API(http.server.BaseHTTPRequestHandler):
         def log_message(self,*a):pass
+        def address_string(self):return self.client_address[0]
         def do_GET(self):
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert url.path=='/api/v1/events',url.path
@@ -35,7 +41,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
                 self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
                 self.wfile.write(json.dumps({'events':page,'cursor':str(since+len(page))}).encode())
             except (BrokenPipeError,ConnectionResetError):pass # the agent exited mid long-poll
-    api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
+    api=Server(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
     origin=f'http://127.0.0.1:{api.server_port}'
     agent_file=home/'.config/gild/agents/fixture.json';agent_file.parent.mkdir(parents=True)
     agent_file.write_text(json.dumps({'schema':1,'name':'owner/fixture','server':origin,'token':TOKEN,'publicKey':'test-public','secretKey':'test-private','requestId':'test-request','createdAt':'2026-10-08T00:00:00Z'}));agent_file.chmod(0o600)
