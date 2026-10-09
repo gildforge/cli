@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { guestEnvironment } from './spawn-vm'
+import { loadHostConfig } from './isolation'
 
 test('guest env: a fixed baseline, plus only adapter additions and allowlisted names; never the host env', () => {
   const baseline = {
@@ -138,9 +139,8 @@ test.skipIf(!config || !oldRootfs)(
     await mkdir(resolve('.tmp'), { recursive: true })
     const home = await mkdtemp(resolve('.tmp/vm-old-'))
     try {
-      const vm = JSON.parse(
-        await Bun.file(join(config!, 'isolation.json')).text(),
-      ).vm
+      // The working kernel and settings, with only the rootfs swapped for the old one.
+      const { vm } = await loadHostConfig(config!)
       await Bun.write(
         join(home, 'isolation.json'),
         JSON.stringify({ vm: { ...vm, rootfs: oldRootfs } }),
@@ -176,6 +176,12 @@ test.skipIf(!config || !oldRootfs)(
       expect(err).toContain('speaks protocol 1, this gild needs 2')
       expect(err).toContain('bun run vm:image')
     } finally {
+      // Should the session have started anyway (no handshake), stop its VM.
+      await Bun.spawn(['bun', 'run', resolve('src/gild.ts'), 'stop', 'vmold'], {
+        env: { ...process.env, HOME: home },
+        stdout: 'ignore',
+        stderr: 'ignore',
+      }).exited
       await rm(home, { recursive: true, force: true })
     }
   },
