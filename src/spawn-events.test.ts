@@ -92,7 +92,7 @@ test('recorded native Claude hooks translate and capture session metadata defens
     .split('\n')
     .map((line) => JSON.parse(line))
   const types: Record<string, AgentEvent['type']> = {
-    SessionStart: 'busy',
+    SessionStart: 'idle',
     UserPromptSubmit: 'busy',
     PreToolUse: 'tool_start',
     PostToolUse: 'tool_end',
@@ -114,6 +114,15 @@ test('recorded native Claude hooks translate and capture session metadata defens
     expect(observed.has(type)).toBe(true)
   expect(state.agentSessionId).toBe('recorded-session')
   expect(state.transcriptPath).toBe('/fixture/transcript.jsonl')
+  const notification = (notification_type: string) =>
+    claudeAdapter.translate('test', {
+      hook_event_name: 'Notification',
+      notification_type,
+    })!.type
+  // Ready for an injected prompt only at the prompt, never at a question.
+  expect(notification('idle_prompt')).toBe('idle')
+  expect(notification('permission_prompt')).toBe('waiting')
+  expect(notification('elicitation_dialog')).toBe('waiting')
   for (const raw of [
     null,
     [],
@@ -209,6 +218,23 @@ test('input tracker handles split bracketed pastes, Escape, controls, cursor key
   input.feed('x')
   input.feed('\x7f')
   expect(input.unsent).toBe(true)
+  expect(input.feed('\r')).toBe(true)
+  expect(input.unsent).toBe(false)
+})
+test('terminal replies to agent queries are not typing', () => {
+  const input = new InputLine()
+  // OSC 11 background colour (BEL and ST forms, split across reads), DCS
+  // XTVERSION, a primary device attributes reply and a focus-in report.
+  input.feed('\x1b]11;rgb:1e1e/1e1e/')
+  expect(input.unsent).toBe(true)
+  input.feed('1e1e\x07')
+  input.feed('\x1b]10;rgb:ffff/ffff/ffff\x1b\\')
+  input.feed('\x1bP>|iTerm2 3.6\x1b\\\x1b[?62;22c\x1b[I')
+  expect(input.unsent).toBe(false)
+  input.feed('x')
+  expect(input.unsent).toBe(true)
+  // A line break still submits after an unterminated reply.
+  input.feed('\x1b]11;rgb')
   expect(input.feed('\r')).toBe(true)
   expect(input.unsent).toBe(false)
 })

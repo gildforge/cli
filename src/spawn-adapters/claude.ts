@@ -8,8 +8,11 @@ import {
   nativeOptions,
   type AgentAdapter,
 } from './types'
+// A new session sits at its prompt, so it starts idle. Claude's idle
+// notification ("waiting for your input") is also ready for a prompt; every
+// other notification (permission, elicitation) still needs the human.
 const types = {
-  SessionStart: 'busy',
+  SessionStart: 'idle',
   UserPromptSubmit: 'busy',
   PreToolUse: 'tool_start',
   PostToolUse: 'tool_end',
@@ -91,7 +94,11 @@ export const claudeAdapter: AgentAdapter = {
       typeof p.agent_id === 'string'
     )
       return null
-    const type = types[p.hook_event_name as keyof typeof types]
+    const type =
+      p.hook_event_name === 'Notification' &&
+      p.notification_type === 'idle_prompt'
+        ? 'idle'
+        : types[p.hook_event_name as keyof typeof types]
     return type
       ? event(
           session,

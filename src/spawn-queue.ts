@@ -43,6 +43,20 @@ export class InjectionQueue {
   changed() {
     this.schedule()
   }
+  /** Why queued messages are not being typed yet, for `gild status`. */
+  get held() {
+    if (!this.pending.length) return undefined
+    return {
+      queued: this.pending.length,
+      reason: this.submitTimer
+        ? 'submitting'
+        : !this.ready()
+          ? 'agent not idle'
+          : this.structured && this.input.unsent
+            ? `unsent draft ${JSON.stringify(this.input.why)}`
+            : 'scheduled',
+    }
+  }
   enqueue(message: string) {
     const data = injectedInput(message)
     if (
