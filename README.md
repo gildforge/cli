@@ -102,7 +102,7 @@ For other agents, state stays unknown and the configurable `--idle-ms` heuristic
 remains (default 1500 ms, range 0–60000). Multi-line injection uses bracketed
 paste and a final Enter; message controls other than newline and tab are
 stripped. `send` acknowledges queue acceptance. Pending messages are discarded
-on exit. Gild does not persist messages or terminal output; local event
+on exit. Attached sessions do not persist messages or terminal output; local event
 subscribers can see raw hook payloads.
 
 Sessions use `~/.gild/sessions/<id>.sock` (0600 in a 0700 directory), accessible
@@ -140,5 +140,30 @@ sessions become `ava`, `ava-2`; sessions show both profile and runtime. Profile
 arguments precede invocation arguments and use the existing events adapters.
 See [profile management and verified flags](docs/agent-profiles.md) and
 [adapter experiments, live evidence and validation](docs/spawn-events.md).
+
+### Detached sessions (for orchestrator agents)
+
+An agent's Bash tool has no terminal. `--detach` starts the session in the
+background on a PTY nobody is attached to, prints its id once the session is
+listening, and returns without holding the caller's stdin, stdout or stderr:
+
+```sh
+gild spawn --detach --name bob claude       # prints: bob
+gild spawn --detach agent ava               # profiles too (prints ava, or ava-2)
+gild send bob "Review the README"
+gild status bob                             # ... "detached":true,"viewers":0 ...
+gild events bob                             # JSONL; ends with {"type":"exited","code":N}
+gild attach bob                             # from a terminal: replay, then live; Ctrl-] detaches
+gild attach --watch bob                     # read-only, alongside one interactive viewer
+gild stop bob                               # hangup, SIGKILL after --grace-ms (3000), prints the exit
+```
+
+The terminal is 120x40 unless `--cols`/`--rows` say otherwise; an interactive
+viewer resizes it while attached. The session keeps the last 256 KiB of output
+for `attach` to replay and appends everything to
+`~/.gild/sessions/<id>/output.log` (0600, 8 MiB, one rotation to `output.log.1`).
+Keystrokes from `attach` go through the same input tracking as an attached
+spawn, so an unsent draft still holds injected messages. Detaching never stops
+the agent; `gild stop` does, and removes the socket, settings and log with it.
 
 -codex

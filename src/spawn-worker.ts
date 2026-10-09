@@ -21,6 +21,12 @@ import { InjectionQueue } from './spawn-queue'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
 import { describeSync, type SyncResult } from './isolation/sync'
 import {
+  DetachedHost,
+  endSocket,
+  exitLine,
+  reportDetached,
+} from './spawn-detach'
+import {
   MAX_MESSAGE_BYTES,
   removeDeadSocket,
   privateSessionsDirectory,
@@ -42,6 +48,7 @@ type Options = {
   identity?: string
   profile?: { name: string; channels?: string[]; on?: string[] }
   envAllowlist?: string[]
+  detach?: { cols: number; rows: number }
   /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
   vm?: { configDir: string }
 }
@@ -81,6 +88,7 @@ let queue: InjectionQueue | undefined
 let path: string | undefined
 let ownsSocket = false
 let closing = false
+let host: DetachedHost | undefined
 let adapterReceive: ((raw: unknown) => void) | undefined
 let adapterCleanup: (() => void) | undefined
 const adapter = adapterFor(options.agent, options.args)
@@ -150,6 +158,7 @@ function restore() {
   adapterCleanup?.()
   adapterCleanup = undefined
   for (const socket of sockets) socket.destroy()
+  host?.cleanup()
   server.close()
   if (ownsSocket && path) {
     try {
@@ -157,9 +166,27 @@ function restore() {
     } catch {}
   }
 }
+/** The final event: subscribers (and a `gild stop` caller) learn the exit
+ * code, and are closed in order before the socket goes. */
+let exitFlushed: Promise<unknown> = Promise.resolve()
+function announceExit(code: number) {
+  const events = [...subscribers]
+  const viewers = host?.endViewers() ?? []
+  subscribers.clear()
+  const line = exitLine(options.id, code)
+  exitFlushed = Promise.race([
+    Promise.all([
+      ...events.map((socket) => endSocket(socket, line)),
+      ...viewers.map((socket) => endSocket(socket)),
+    ]),
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ])
+  for (const socket of [...events, ...viewers]) sockets.delete(socket)
+}
 function finish(code: number, terminate = true) {
   if (closing) return
   closing = true
+  announceExit(code)
   restore()
   // Also terminate descendants on a normal agent exit; they may hold the PTY.
   try {
@@ -187,7 +214,9 @@ function finish(code: number, terminate = true) {
       void Promise.all([reporter?.close(), vm]).finally(() => {
         // A signal exit cannot wait forever for a terminal reader that stopped.
         if (terminate) setTimeout(() => process.exit(code), 250)
-        void output.flush().then(() => process.exit(code))
+        void Promise.all([output.flush(), exitFlushed]).then(() =>
+          process.exit(code),
+        )
       })
     },
     terminate ? 150 : 10,
@@ -195,6 +224,10 @@ function finish(code: number, terminate = true) {
 }
 function failed(error: unknown) {
   if (closing) return
+  reportDetached(options.detach, {
+    type: 'failed',
+    error: String((error as Error)?.message ?? error),
+  })
   console.error(
     `gild spawn: ${error instanceof Error ? error.message : String(error)}`,
   )
@@ -204,7 +237,8 @@ process.on('SIGTERM', () => finish(143))
 process.on('SIGHUP', () => finish(129))
 // Raw-mode Ctrl-C goes down stdin. An externally delivered SIGINT hangs up gild.
 process.on('SIGINT', () => finish(130))
-process.on('disconnect', () => finish(1))
+// A detached worker outlives the `gild spawn --detach` that started it.
+if (!options.detach) process.on('disconnect', () => finish(1))
 process.on('uncaughtException', failed)
 process.on('unhandledRejection', failed)
 process.on('exit', () => {
@@ -222,6 +256,8 @@ async function fallback(error: unknown) {
     process.exit(1)
   }
   debugFallback(error)
+  // No terminal to fall back to: a detached session either has a PTY or fails.
+  if (options.detach) return failed(error)
   restore()
   ownsSocket = false
   closing = true
@@ -239,7 +275,10 @@ async function fallback(error: unknown) {
   process.exit(code)
 }
 async function main() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+  if (
+    !options.detach &&
+    (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+  )
     return fallback('PTY unavailable')
   let pty: typeof import('node-pty')
   try {
@@ -289,7 +328,7 @@ async function main() {
     let data = ''
     let replied = false
     socket.on('data', (chunk: string) => {
-      if (replied) return
+      if (replied) return host?.feed(socket, chunk)
       data += chunk
       if (Buffer.byteLength(data) > MAX_MESSAGE_BYTES) {
         replied = true
@@ -345,6 +384,7 @@ async function main() {
             started,
             ...state,
             held: queue?.held,
+            ...host?.info,
           }
           socket.end(JSON.stringify(info) + '\n')
         } else if (
@@ -354,6 +394,20 @@ async function main() {
           if (!queue) throw new Error('Session is starting')
           queue.enqueue(request.message)
           socket.end('{"queued":true}\n')
+        } else if (request.type === 'attach') {
+          if (!host || !child)
+            throw new Error(
+              host
+                ? 'Session is starting'
+                : 'Only detached sessions can be attached',
+            )
+          host.attach(socket, request)
+          host.feed(socket, data.slice(data.indexOf('\n') + 1))
+        } else if (request.type === 'stop') {
+          if (!child) throw new Error('Session is starting')
+          subscribers.add(socket)
+          socket.setTimeout(0)
+          stop(request.graceMs)
         } else if (request.type === 'subscribe') {
           subscribers.add(socket)
           socket.setTimeout(0)
@@ -447,6 +501,14 @@ async function main() {
       prepared?.cleanup()
       return
     }
+    if (options.detach) {
+      host = new DetachedHost({
+        ...options.detach,
+        resize: (cols, rows) => child?.resize(cols, rows),
+        input: (data) => queue?.userInput(data),
+      })
+      host.openLog(join(directory, options.id))
+    }
     child = options.vm
       ? await startVmChild({
           configDir: options.vm.configDir,
@@ -460,19 +522,23 @@ async function main() {
         })
       : pty.spawn(binary, prepared?.args ?? options.args, {
           name: 'xterm-256color',
-          cols: process.stdout.columns,
-          rows: process.stdout.rows,
+          cols: options.detach?.cols ?? process.stdout.columns,
+          rows: options.detach?.rows ?? process.stdout.rows,
           cwd: process.cwd(),
           env,
           encoding: null,
         })
+    // Output from the first byte on, so attach can replay the start.
+    if (host) child.onData((data) => host!.push(data as unknown as Buffer))
   } catch (error) {
     return fallback(error)
   }
   if (reportConfig) reporter = new StateReporter(await reportConfig!, 'unknown')
-  process.stdin.setRawMode(true)
-  rawOwned = true
-  if (options.printId) console.error(options.id)
+  if (!options.detach) {
+    process.stdin.setRawMode(true)
+    rawOwned = true
+  }
+  if (options.printId && !options.detach) console.error(options.id)
   queue = new InjectionQueue(
     (data) => child!.write(data),
     options.idleMs,
@@ -496,6 +562,13 @@ async function main() {
     })
     void bridge.start(bridgeAbort.signal)
   }
+  if (host) {
+    child.onExit(({ exitCode, signal }) =>
+      finish(signal ? 128 + signal : exitCode, false),
+    )
+    reportDetached(options.detach, { type: 'ready', id: options.id })
+    return
+  }
   process.stdin.on('data', (data: Buffer) => {
     queue!.userInput(data)
   })
@@ -517,6 +590,22 @@ function summary(r: SyncResult): SyncSummary {
     rejected: r.rejected.length,
     conflicts: r.conflicts.slice(0, 100),
   }
+}
+/** `gild stop`: the agent gets the same hangup a closed terminal gives it,
+ * then SIGKILL after the grace period; its exit then ends the session. */
+let stopping: ReturnType<typeof setTimeout> | undefined
+function stop(graceMs: unknown) {
+  if (stopping) return
+  const grace =
+    Number.isSafeInteger(graceMs) && (graceMs as number) >= 0
+      ? Math.min(graceMs as number, 60000)
+      : 3000
+  killGroup('SIGHUP')
+  stopping = setTimeout(() => {
+    killGroup('SIGKILL')
+    // Should the PTY never report the exit, end the session anyway.
+    setTimeout(() => finish(137), 2000)
+  }, grace)
 }
 const started = new Date().toISOString()
 main().catch(failed)

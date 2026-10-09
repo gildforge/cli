@@ -16,6 +16,13 @@ export type LocalSession = SessionState & {
   identity?: string
   channels?: ChannelStatus[]
   held?: { queued: number; reason: string }
+  /** Detached sessions (`gild spawn --detach`) only. */
+  detached?: true
+  viewers?: number
+  interactive?: boolean
+  cols?: number
+  rows?: number
+  log?: string
   cwd: string
   pid: number
   childPid: number
