@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "version": "2.1.295 (Claude Code)",
+  "sequence": [
+    "busy",
+    "busy",
+    "busy",
+    "tool_start",
+    "waiting",
+    "waiting",
+    "busy",
+    "tool_end",
+    "idle",
+    "busy",
+    "busy",
+    "idle"
+  ],
+  "settings_hashes": [
+    "f194ae3e9a1cd1b39c8e3b9320c50416e554035d29c7afbf83b6a1cd7106689a",
+    "65e2884acd1900aca3e4b20d58adf24db41be0b3fab9637b7e30c68f4467056f",
+    "c3a28bfd7588acf5ebc7cafcfd456171a727408b99785b42b21fb926278bcd4f",
+    "a70641db2d7e70b79007189ab9e30fc9a96e7539594163bacf3cc940e7fc700c"
+  ],
+  "observed_statuses": [
+    "busy",
+    "idle",
+    "tool_start",
+    "waiting"
+  ],
+  "queued_prompt_submitted": true,
+  "real_user_settings_unchanged": true,
+  "explicit_settings": true
+}

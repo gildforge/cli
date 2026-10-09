@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process'
+import { constants } from 'node:os'
+import { createConnection } from 'node:net'
+import { realAgent, agentEnvironment } from './spawn-binary'
+import type { ReportTarget } from './spawn-report'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Command, InvalidArgumentError } from 'commander'
@@ -18,10 +22,19 @@ function idleMilliseconds(value: string) {
     throw new InvalidArgumentError('idle-ms must be an integer from 0 to 60000')
   return number
 }
-export function spawnCommands(program: Command) {
+export function spawnCommands(
+  program: Command,
+  reportTarget?: (label: string) => Promise<ReportTarget>,
+) {
   program
     .command('spawn <agent> [args...]')
     .description('run a terminal agent with a private local message endpoint')
+    .passThroughOptions()
+    .option(
+      '--as <label>',
+      'report state with an approved local agent identity',
+    )
+    .option('--print-id', 'print the local session id to stderr')
     .option('--name <id>', 'memorable local session name')
     .option(
       '--idle-ms <ms>',
@@ -34,9 +47,33 @@ export function spawnCommands(program: Command) {
       async (
         agent: string,
         args: string[],
-        opts: { name?: string; idleMs: number },
+        opts: { name?: string; idleMs: number; as?: string; printId?: boolean },
       ) => {
+        // Pipes and redirects get exactly the native process: no hooks, socket or PTY.
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          const binary = realAgent(agent)
+          const child = spawn(binary, args, {
+            stdio: 'inherit',
+            env: agentEnvironment(binary),
+          })
+          const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
+          const handlers = signals.map((signal) => () => child.kill(signal))
+          signals.forEach((signal, i) => process.on(signal, handlers[i]))
+          try {
+            process.exitCode = await new Promise<number>((resolve, reject) => {
+              child.once('error', reject)
+              child.once('exit', (code, signal) =>
+                resolve(code ?? 128 + (signal ? constants.signals[signal] : 0)),
+              )
+            })
+          } finally {
+            signals.forEach((signal, i) => process.off(signal, handlers[i]))
+          }
+          return
+        }
         requireUnix()
+        const report =
+          opts.as && reportTarget ? await reportTarget(opts.as) : undefined
         const id = opts.name ?? `agent-${randomBytes(3).toString('hex')}`
         socketPath(id)
         const resolveFrom = [
@@ -46,6 +83,7 @@ export function spawnCommands(program: Command) {
             : []),
           join(dirname(process.execPath), 'gild.js'),
         ]
+        if (opts.printId) console.error(id)
         const source = await spawnWorkerSource()
         const worker = spawn(
           'node',
@@ -59,12 +97,22 @@ export function spawnCommands(program: Command) {
               id,
               idleMs: opts.idleMs,
               resolveFrom,
+              hookCommand: import.meta.url.includes('$bunfs')
+                ? [process.execPath]
+                : [
+                    process.execPath,
+                    'run',
+                    new URL('./gild.ts', import.meta.url).pathname,
+                  ],
+              reporting: !!report,
             }),
           ],
           {
             stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
           },
         )
+        if (report)
+          worker.once('spawn', () => worker.send({ type: 'report', report }))
         const signals: NodeJS.Signals[] = [
           'SIGTERM',
           'SIGHUP',
@@ -120,6 +168,17 @@ export function spawnCommands(program: Command) {
       await localRequest(socketPath(id, directory), { type: 'send', message })
     })
   program
+    .command('status <id>')
+    .description('inspect a live local agent session')
+    .action(async (id: string) => {
+      const directory = await privateSessionsDirectory()
+      console.log(
+        JSON.stringify(
+          await localRequest(socketPath(id, directory), { type: 'info' }),
+        ),
+      )
+    })
+  program
     .command('sessions')
     .description('list live local agent sessions and remove stale sockets')
     .option('--json', 'print session metadata as JSON')
@@ -127,12 +186,15 @@ export function spawnCommands(program: Command) {
       const sessions = await liveSessions()
       if (opts.json) console.log(JSON.stringify(sessions))
       else {
-        console.log('ID\tAGENT\tCWD\tPID\tSTARTED')
+        console.log('ID\tAGENT\tSTATE\tTOOL\tLAST ACTIVITY\tCWD\tPID\tSTARTED')
         for (const session of sessions)
           console.log(
             [
               session.id,
               session.agent,
+              session.state === 'tool_start' ? 'running a tool' : session.state,
+              session.tool ?? '',
+              session.lastActivity,
               session.cwd,
               session.pid,
               session.started,
@@ -140,4 +202,22 @@ export function spawnCommands(program: Command) {
           )
       }
     })
+}
+
+export async function localEvents(id: string) {
+  const directory = await privateSessionsDirectory()
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection(socketPath(id, directory))
+    socket.on('error', reject)
+    socket.on('connect', () => socket.write('{"type":"subscribe"}\n'))
+    socket.on('data', (data) => {
+      if (!process.stdout.write(data)) socket.pause()
+    })
+    const drain = () => socket.resume()
+    process.stdout.on('drain', drain)
+    socket.on('close', () => {
+      process.stdout.off('drain', drain)
+      resolve()
+    })
+  })
 }

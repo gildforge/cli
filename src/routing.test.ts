@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixture, cli, testIdentity } from './test-cli'
-import { signedCall, verifyChallenge } from './gild'
+import { signedCall, verifyChallenge } from './gild-main'
 
 test('token routing remints on server mismatch and migrates unbound tokens before API use', async () => {
   const received: string[] = []

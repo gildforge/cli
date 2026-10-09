@@ -4,6 +4,11 @@ import { chmod } from 'node:fs/promises'
 import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import type { IPty } from 'node-pty'
+import { adapterFor } from './spawn-adapters'
+import { applyEvent, type AgentEvent, type SessionState } from './spawn-events'
+import { realAgent, agentEnvironment } from './spawn-binary'
+import { StateReporter, type ReportTarget } from './spawn-report'
+import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
 import {
   MAX_MESSAGE_BYTES,
@@ -18,16 +23,74 @@ type Options = {
   id: string
   idleMs: number
   resolveFrom: string[]
+  hookCommand: string[]
+  reporting?: boolean
 }
 const options: Options = JSON.parse(process.argv[1])
+// Scoped credentials travel over IPC, never argv, env, settings or event payloads.
+const reportConfig = options.reporting
+  ? new Promise<ReportTarget>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(new Error('Agent reporting credentials were not delivered')),
+        3000,
+      )
+      process.once(
+        'message',
+        (message: { type?: string; report?: ReportTarget }) => {
+          clearTimeout(timer)
+          if (message.type !== 'report' || !message.report?.token)
+            reject(new Error('Invalid agent reporting configuration'))
+          else resolve(message.report)
+        },
+      )
+    })
+  : undefined
 let child: IPty | undefined
 let queue: InjectionQueue | undefined
 let path: string | undefined
 let ownsSocket = false
 let closing = false
+let adapterReceive: ((raw: unknown) => void) | undefined
+let adapterCleanup: (() => void) | undefined
+const adapter = adapterFor(options.agent, options.args)
+const state: SessionState = {
+  state: 'unknown',
+  lastActivity: new Date().toISOString(),
+}
+const subscribers = new Set<Socket>()
+let reporter: StateReporter | undefined
+function publish(event: AgentEvent) {
+  applyEvent(state, event)
+  queue?.changed()
+  const line = JSON.stringify(event) + '\n'
+  for (const socket of subscribers) {
+    if (socket.writableLength + Buffer.byteLength(line) > 1024 * 1024)
+      socket.destroy()
+    else socket.write(line)
+  }
+  reporter?.event(event)
+}
+function submitted() {
+  publish({
+    session: options.id,
+    agent: adapter!.name,
+    type: 'busy',
+    ts: new Date().toISOString(),
+    raw: { source: 'pty_submit' },
+  })
+}
 const sockets = new Set<Socket>()
 const wasRaw = process.stdin.isRaw ?? false
 const server = createServer()
+const output = new TerminalOutput(
+  process.stdout.fd,
+  () => child?.pause(),
+  () => {
+    if (!closing) child?.resume()
+  },
+  failed,
+)
 
 function killGroup(signal: NodeJS.Signals) {
   if (!child) return
@@ -42,6 +105,8 @@ function restore() {
   process.stdin.pause()
   if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw)
   queue?.close()
+  adapterCleanup?.()
+  adapterCleanup = undefined
   for (const socket of sockets) socket.destroy()
   server.close()
   if (ownsSocket && path) {
@@ -63,12 +128,17 @@ function finish(code: number, terminate = true) {
       try {
         killGroup('SIGKILL')
       } catch {}
-      process.stdout.write('', () => process.exit(code))
+      void (reporter?.close() ?? Promise.resolve()).finally(() => {
+        // A signal exit cannot wait forever for a terminal reader that stopped.
+        if (terminate) setTimeout(() => process.exit(code), 250)
+        void output.flush().then(() => process.exit(code))
+      })
     },
     terminate ? 150 : 10,
   )
 }
 function failed(error: unknown) {
+  if (closing) return
   console.error(
     `gild spawn: ${error instanceof Error ? error.message : String(error)}`,
   )
@@ -95,7 +165,10 @@ async function main() {
   path = socketPath(options.id, directory)
   server.on('connection', (socket) => {
     sockets.add(socket)
-    socket.on('close', () => sockets.delete(socket))
+    socket.on('close', () => {
+      sockets.delete(socket)
+      subscribers.delete(socket)
+    })
     socket.on('error', () => socket.destroy())
     socket.setTimeout(3000, () => socket.destroy())
     socket.setEncoding('utf8')
@@ -113,8 +186,19 @@ async function main() {
       replied = true
       try {
         const request = JSON.parse(data.slice(0, data.indexOf('\n')))
-        if (!child || !queue) throw new Error('Session is starting')
+        if (request.type === 'hook') {
+          if (adapter && request.agent === adapter.name) {
+            const event = adapter.translate(options.id, request.raw)
+            if (event) {
+              publish(event)
+              adapterReceive?.(request.raw)
+            }
+          }
+          socket.end()
+          return
+        }
         if (request.type === 'info') {
+          if (!child) throw new Error('Session is starting')
           const info: LocalSession = {
             id: options.id,
             agent: options.agent,
@@ -122,14 +206,31 @@ async function main() {
             pid: process.pid,
             childPid: child.pid,
             started,
+            ...state,
           }
           socket.end(JSON.stringify(info) + '\n')
         } else if (
           request.type === 'send' &&
           typeof request.message === 'string'
         ) {
+          if (!queue) throw new Error('Session is starting')
           queue.enqueue(request.message)
           socket.end('{"queued":true}\n')
+        } else if (request.type === 'subscribe') {
+          subscribers.add(socket)
+          socket.setTimeout(0)
+          // An initial snapshot makes subscribing before the next hook useful.
+          if (state.state !== 'unknown')
+            socket.write(
+              JSON.stringify({
+                session: options.id,
+                agent: adapter?.name ?? options.agent,
+                type: state.state,
+                tool: state.tool,
+                ts: state.lastActivity,
+                raw: { source: 'snapshot' },
+              }) + '\n',
+            )
         } else throw new Error('Invalid session request')
       } catch (error) {
         socket.end(JSON.stringify({ error: (error as Error).message }) + '\n')
@@ -180,20 +281,33 @@ async function main() {
     }
   }
   const pty: typeof import('node-pty') = require(nodePty)
-  const env: Record<string, string> = {}
-  for (const [name, value] of Object.entries(process.env)) {
-    if (
-      value === undefined ||
-      /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CODEX_SESSION_ID|CODEX_THREAD_ID)$/.test(
-        name,
-      ) ||
-      name.startsWith('CLAUDE_CODE_')
-    )
-      continue
-    env[name] = value
+  const binary = realAgent(options.agent)
+  const env = agentEnvironment(binary)
+  const prepared = await adapter?.prepare(
+    {
+      id: options.id,
+      directory,
+      command: options.hookCommand,
+      emit: publish,
+      onCleanup: (cleanup) => {
+        adapterCleanup = cleanup
+        if (closing) {
+          cleanup()
+          throw new Error('Session closed during adapter setup')
+        }
+      },
+    },
+    options.args,
+  )
+  adapterCleanup = prepared?.cleanup
+  adapterReceive = prepared?.receive
+  if (reportConfig) reporter = new StateReporter(await reportConfig!, 'unknown')
+  if (closing) {
+    prepared?.cleanup()
+    return
   }
   process.stdin.setRawMode(true)
-  child = pty.spawn(options.agent, options.args, {
+  child = pty.spawn(binary, prepared?.args ?? options.args, {
     name: 'xterm-256color',
     cols: process.stdout.columns,
     rows: process.stdout.rows,
@@ -201,22 +315,22 @@ async function main() {
     env,
     encoding: null,
   })
-  queue = new InjectionQueue((data) => child!.write(data), options.idleMs)
+  queue = new InjectionQueue(
+    (data) => child!.write(data),
+    options.idleMs,
+    () => !adapter || state.state === 'idle',
+    !!adapter,
+    submitted,
+  )
   process.stdin.on('data', (data: Buffer) => {
-    queue!.userInput()
-    child!.write(data)
+    queue!.userInput(data)
   })
   process.stdin.on('end', () => finish(0))
   process.stdin.resume()
   process.on('SIGWINCH', () =>
     child!.resize(process.stdout.columns || 80, process.stdout.rows || 24),
   )
-  child.onData((data) => {
-    if (!process.stdout.write(data)) child!.pause()
-  })
-  process.stdout.on('drain', () => {
-    if (!closing) child!.resume()
-  })
+  child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
   child.onExit(({ exitCode, signal }) =>
     finish(signal ? 128 + signal : exitCode, false),

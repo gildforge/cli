@@ -92,6 +92,15 @@ try:
         assert s.buffer.endswith(payload), s.buffer
         assert termios.tcgetattr(s.slave) == s.original
         assert not s.path.exists()
+    elif CASE == 'backpressure':
+        s = Session('flood')
+        # Deliberately stop reading the outer PTY while terminal output fills it.
+        time.sleep(.2)
+        result=s.cli('status','test')
+        assert result.returncode==0,result.stderr
+        assert json.loads(result.stdout)['state']=='unknown'
+        s.send('socket remains responsive')
+        s.stop()
     elif CASE == 'resize':
         s = Session()
         s.wait_event('size', [80, 24])
@@ -184,6 +193,7 @@ try:
         result = s.cli('sessions', '--json')
         assert result.returncode == 0, result.stderr
         info = json.loads(result.stdout)
+        assert info[0]['state'] == 'unknown'
         assert len(info) == 1 and info[0]['id'] == 'test' and info[0]['cwd'] == str(ROOT) and info[0]['childPid'] == s.ready['pid'] and info[0]['pid'] > 0 and info[0]['started']
         cm, cs = pty.openpty()
         saved = termios.tcgetattr(cs)

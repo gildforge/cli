@@ -29,4 +29,4 @@ jobs:
       - name: Exercise PTY sessions through the installed npm launcher
         run: |
           cp -R node_modules/node-pty /tmp/nstest/node_modules/node-pty
-          TEST_GILD_COMMAND='["node","/tmp/nstest/node_modules/gildforge/bin/gild.js"]' bun test src/spawn.test.ts
+          TEST_GILD_COMMAND='["node","/tmp/nstest/node_modules/gildforge/bin/gild.js"]' TEST_GILD_HOOK_COMMAND='["/tmp/nstest/node_modules/@gildforge/cli-linux-x64/bin/gild"]' bun test src/spawn.test.ts src/spawn-events.test.ts

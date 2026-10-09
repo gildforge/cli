@@ -77,49 +77,54 @@ Git packs stay on disk and stream through a live repository-scoped import creden
 ## Local terminal agents
 
 ```sh
-gild spawn claude --name writer
-gild spawn codex --name reviewer --idle-ms 1500
+alias claude='gild spawn claude'
+gild spawn --name writer claude
+gild spawn --name reviewer codex --no-alt-screen
 # In another terminal:
-gild sessions                         # id, executable, cwd, owner pid, start time
+gild sessions                         # state, current tool, activity and process metadata
+gild status writer
+gild events writer                    # normalized JSONL, including local raw hook payloads
 gild send writer "Review the README"
 printf 'First line\nSecond line\n' | gild send reviewer -
-# Pass agent arguments after -- (including options also understood by gild):
-gild spawn codex --name reviewer -- --no-alt-screen
+# In a repository on an approved agent identity's joined gild server:
+gild spawn --name writer --as ava claude
 ```
 
-The agent owns its normal TUI, colours, keyboard handling and exit status. Gild
-forwards terminal bytes and size changes and queues incoming messages until
-keyboard input has been idle for 1500 ms (`--idle-ms` accepts 0–60000). This is
-an idle heuristic: it does not detect whether the agent is generating a reply,
-and a paused, partially typed draft may receive a message after the idle timeout.
-Multi-line messages use bracketed paste and a final Enter. Injected messages
-cannot contain terminal controls other than newline and tab; keyboard input is
-forwarded unchanged. `send` acknowledges acceptance into the bounded queue, not
-completion of an agent response. Pending messages are discarded when the agent
-exits. Messages and terminal output are not recorded.
+Gild options go before the agent name. Everything after it passes to the native
+agent verbatim. With piped stdin or redirected stdout, gild runs the agent
+directly without a PTY or session socket. PATH wrappers that re-enter gild are
+skipped; spawn is quiet unless `--print-id` is requested.
+
+The native TUI owns the display, colours, keyboard handling and exit status.
+Claude hooks and Codex notifications provide a separate event channel. Messages
+queue until the adapted agent ends its turn and the composer has no unsent text.
+For other agents, state stays unknown and the configurable `--idle-ms` heuristic
+remains (default 1500 ms, range 0–60000). Multi-line injection uses bracketed
+paste and a final Enter; message controls other than newline and tab are
+stripped. `send` acknowledges queue acceptance. Pending messages are discarded
+on exit. Gild does not persist messages or terminal output; local event
+subscribers can see raw hook payloads.
 
 Sessions use `~/.gild/sessions/<id>.sock` (0600 in a 0700 directory), accessible
-only to the current local user. Names are 1–32 letters, digits, underscores or
-hyphens; automatic names include a random suffix. `sessions --json` includes the
-PTY owner and child PIDs. Listing removes sockets whose owner no longer accepts
-connections. Duplicate names fail without disturbing the existing session.
-Windows is explicitly unsupported in v1. No forge identity or token is needed.
+only to the local user. Names contain 1–32 letters, digits, underscores or
+hyphens. Duplicate names fail without disturbing the existing session. Listing
+removes stale sockets. Temporary observer settings/plugins are private and
+removed on exit; the user's Claude settings are left intact.
 
-`spawn` requires Node.js on PATH and the optional `node-pty` native dependency.
-The npm `gildforge` package installs it; do not omit optional dependencies. The
-other CLI commands still work if the addon is unavailable. Upstream 1.1.0 ships
-macOS prebuilds; Linux installation needs Python and C++ build tools for its
-native build. Bun installs trust the `node-pty` build script. Gild fixes the
-missing executable permission on the upstream macOS spawn helper before use.
+Interactive PTYs require Node.js on PATH and the optional `node-pty` dependency.
+Install `gildforge` with npm without omitting optional dependencies. macOS uses
+upstream prebuilds; Linux installation needs Python and C++ build tools. The
+standalone Bun binary embeds its Node companion, but a downloaded binary alone
+has no native addon; npm installs provide it. Windows PTYs are unsupported in
+v1; direct pipe/redirect execution still works.
 
-The standalone Bun binary embeds a Node companion, but **a downloaded binary
-alone cannot run `spawn`**: it has no native addon beside it. Use the npm install
-for PTY sessions. In local testing `node-pty` loaded in Bun but its terminal read
-path hung; the Node companion owns the PTY instead. See
-[node-pty](https://github.com/microsoft/node-pty) for the native dependency and
-[Bun macros](https://bun.sh/docs/bundler/macros) for embedding the companion. The
-socket is a message source for the injection queue; a later channel subscription
-can enqueue mentions through the same interface. Channel/token flags are not
-implemented in v1.
+`--as` reports state to the existing commit session REPORT API using the approved
+agent's scoped token. That endpoint currently requires `repo:write`; this does
+not broaden token grants. Reports contain state, tool name and activity time,
+coalesce to at most one per second, and finish with ended. Prompts, arguments,
+commands and file paths stay local. Channel mention subscriptions remain a
+future source for the same injection queue.
+
+See [adapter experiments, live evidence and validation](docs/spawn-events.md).
 
 -codex

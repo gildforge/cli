@@ -18,6 +18,8 @@ if mode == 'jobs':
     output({'job': pid, 'group': os.getpgrp()})
 output({'ready': True, 'pid': os.getpid(), 'env': {k: v for k, v in os.environ.items() if k.startswith(('CLAUDE', 'CODEX', 'KEEP_'))}, 'term': os.environ.get('TERM')})
 resized()
+if mode == 'flood':
+    while True: os.write(1, b'X'*65536)
 if mode == 'bytes':
     expected = bytes([0, 1, 3, 9, 10, 13, 27, 127, 128, 255]) + '🦊'.encode()
     data = b''

@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises'
 
 const cases = [
   'bytes',
+  'backpressure',
   'resize',
   'exit',
   'send',
