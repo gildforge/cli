@@ -8,7 +8,9 @@ import shared from './guest-protocol.json'
 export const GUEST_PROTOCOL: number = shared.protocol
 /** Where the guest image is rebuilt from; printed with every mismatch. */
 export const REBUILD_HINT =
-  'Rebuild the guest image from a gildforge/cli checkout at this gild version: `bun run vm:image` (docs/VM.md)'
+  process.platform === 'darwin'
+    ? 'Rebuild the guest image from a gildforge/cli checkout at this gild version: `scripts/build-vm-guest.sh <dir>` (docs/VM.md)'
+    : 'Rebuild the guest image from a gildforge/cli checkout at this gild version: `bun run vm:image` (docs/VM.md)'
 
 export interface Channel {
   write(data: Uint8Array): void

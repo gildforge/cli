@@ -100,7 +100,7 @@ function api(socket: string, method: string, path: string, body: unknown) {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function vsockChannel(uds: string, port: number): Promise<Channel> {
+export function vsockChannel(uds: string, port: number): Promise<Channel> {
   return new Promise((resolve, reject) => {
     const sock: Socket = createConnection(uds)
     let head = Buffer.alloc(0),
@@ -131,6 +131,45 @@ function vsockChannel(uds: string, port: number): Promise<Channel> {
       if (rest.length) dataCb(rest)
     })
   })
+}
+
+/**
+ * The Isolation members every vsock backend shares (Firecracker, vz): the
+ * work directory appears at /workspace, and guest connections to host port N
+ * arrive on the unix socket `<uds>_N` (Firecracker's convention, which the vz
+ * helper follows too).
+ */
+export function vsockMembers(
+  open: Opener,
+  uds: string,
+  work: string,
+  listeners: Server[],
+): Pick<
+  Isolation,
+  'guestPath' | 'put' | 'exec' | 'pty' | 'files' | 'onGuestMessage'
+> {
+  const toGuest = (p: string) =>
+    p === work
+      ? GUEST_WORK
+      : p.startsWith(work + '/')
+        ? GUEST_WORK + p.slice(work.length)
+        : p
+  return {
+    guestPath: toGuest,
+    put: (p, content, mode) => guestPut(open, toGuest(p), content, mode),
+    exec: (argv, o) => guestExec(open, argv, o),
+    pty: (request) => guestPty(open, request),
+    files: guestFiles(open),
+    onGuestMessage: (port, handler) => {
+      const server = createServer((c) => {
+        void readOneMessage(c)
+          .then(handler, () => {})
+          .finally(() => c.destroy())
+      })
+      server.listen(`${uds}_${port}`)
+      listeners.push(server)
+    },
+  }
 }
 
 export interface BootTimings {
@@ -248,34 +287,7 @@ export async function startFirecracker(
       label: 'vm (firecracker)',
       timings,
       pid: fc.pid!,
-      guestPath: (p) =>
-        p === work
-          ? GUEST_WORK
-          : p.startsWith(work + '/')
-            ? GUEST_WORK + p.slice(work.length)
-            : p,
-      put: (p, content, mode) =>
-        guestPut(
-          open,
-          p === work || p.startsWith(work + '/')
-            ? GUEST_WORK + p.slice(work.length)
-            : p,
-          content,
-          mode,
-        ),
-      exec: (argv, o) => guestExec(open, argv, o),
-      pty: (request) => guestPty(open, request),
-      files: guestFiles(open),
-      onGuestMessage: (port, handler) => {
-        // Firecracker maps a guest connection to host port N onto <uds>_N.
-        const server = createServer((c) => {
-          void readOneMessage(c)
-            .then(handler, () => {})
-            .finally(() => c.destroy())
-        })
-        server.listen(`${uds}_${port}`)
-        listeners.push(server)
-      },
+      ...vsockMembers(open, uds, work, listeners),
       close: async () => {
         for (const l of listeners) l.close()
         kill()

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   GUEST_PROTOCOL,
   GuestProtocolError,
+  REBUILD_HINT,
   checkGuestProtocol,
   guestPing,
   type Opener,
@@ -39,7 +40,7 @@ test('an agent from before the handshake is refused with the rebuild command', a
   const message = (error as Error).message
   expect(message).toContain('/images/rootfs.ext4 is outdated')
   expect(message).toContain(`protocol 1, this gild needs ${GUEST_PROTOCOL}`)
-  expect(message).toContain('bun run vm:image')
+  expect(message).toContain(REBUILD_HINT)
 })
 
 test('a newer agent is refused too, and a matching one passes', async () => {

@@ -60,7 +60,9 @@ test('spawn --vm --detach starts the VM worker (no TTY needed) and reports why a
       new Response(proc.stderr).text(),
     ])
     // The detached worker got as far as booting a VM, and its reason came back.
-    expect(err).toContain('--vm failed: --vm needs a working Firecracker setup')
+    expect(err).toMatch(
+      /--vm failed: --vm needs a working (Firecracker|vz) setup/,
+    )
     expect({ code, out }).toEqual({ code: 1, out: '' })
     // Nothing ran on the host instead, and no session was left behind.
     const sessions = await readdir(join(home, '.gild/sessions')).catch(() => [])

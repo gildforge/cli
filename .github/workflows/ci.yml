@@ -21,6 +21,13 @@ jobs:
           node-version: '24'
       - run: bun install --frozen-lockfile
       - run: bun test src/runner-setup-node.test.ts
+  vz-helper:
+    # The macOS `vm` backend's launcher: must compile and carry the entitlement.
+    environment: public-ci
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/build-vz-helper.sh
   test:
     environment: public-ci
     runs-on: ubuntu-latest

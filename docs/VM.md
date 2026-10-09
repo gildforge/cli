@@ -29,11 +29,17 @@ If the block names other files, the script says so and leaves it alone.
 The mke2fs step uses a fixed UUID, hash seed and timestamp, so the same tree
 packs to the same bytes; apt packages still follow the Ubuntu mirror.
 
+## macOS (`vz`)
+
+The Virtualization.framework backend boots an arm64 guest built by
+`scripts/build-vm-guest.sh <dir>` (docker or Colima); it compiles the same
+guest agent from this checkout, so the handshake below applies to both.
+
 ## Version handshake
 
 The CLI and the guest agent share one protocol number,
 `src/isolation/guest-protocol.json` (the agent compiles it in). On boot the
-host pings the agent; the reply carries the agent's protocol and version, and
+host (Firecracker or vz) pings the agent; the reply carries the agent's protocol and version, and
 any difference stops the VM before the session starts:
 
 ```
