@@ -7,6 +7,7 @@ import {
   type FirecrackerConfig,
 } from './firecracker'
 import { networkState, networkStatusLine } from './network'
+import { startVz, vzAvailable, vzNetworkState, vzNetworkStatusLine } from './vz'
 import { ociAvailable, startOci, type OciConfig } from './container'
 import {
   colimaMountFor,
@@ -42,6 +43,8 @@ export const hostConfigSchema = z.strictObject({
   vm: z
     .strictObject({
       firecracker: z.string().default('firecracker'),
+      /** macOS: the signed Virtualization.framework helper (scripts/build-vz-helper.sh). */
+      vz: z.string().default('gild-vz'),
       kernel: z.string(),
       rootfs: z.string(),
       memoryMiB: z.number().int().min(128).default(1024),
@@ -68,6 +71,34 @@ export const hostConfigSchema = z.strictObject({
     .optional(),
 })
 export type HostConfig = z.infer<typeof hostConfigSchema>
+export type VmConfig = NonNullable<HostConfig['vm']>
+
+/** The `vm` level's backend: Virtualization.framework on macOS, Firecracker elsewhere. */
+export const vmBackend = (platform: NodeJS.Platform = process.platform) =>
+  platform === 'darwin' ? 'vz' : 'firecracker'
+
+export function vmAvailable(
+  vm: VmConfig,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return vmBackend(platform) === 'vz'
+    ? vzAvailable({ helper: vm.vz, kernel: vm.kernel, rootfs: vm.rootfs })
+    : firecrackerAvailable(vm)
+}
+
+/** Boot one microVM with `work` at /workspace, on this platform's backend. */
+export function startVm(
+  vm: VmConfig,
+  work: string,
+  vmDir: string,
+  log?: (line: string) => void,
+  platform: NodeJS.Platform = process.platform,
+): Promise<Isolation> {
+  if (vmBackend(platform) === 'vz')
+    return startVz({ ...vm, helper: vm.vz, port: 9002 }, work, vmDir, log)
+  const cfg: FirecrackerConfig = { ...vm, port: 9002 }
+  return startFirecracker(cfg, work, vmDir, log)
+}
 
 export async function loadHostConfig(configDir: string): Promise<HostConfig> {
   try {
@@ -83,7 +114,8 @@ export async function loadHostConfig(configDir: string): Promise<HostConfig> {
 /** What this machine can do; tests pass their own. */
 export interface Probes {
   platform: NodeJS.Platform
-  firecracker(vm: NonNullable<HostConfig['vm']>): boolean
+  /** The `vm` backend (vmBackend) works with this config. */
+  vm(vm: VmConfig): boolean
   oci(engine: string, agent: string, endpoint?: string): boolean
   colima(): ColimaState
   hostUser(user: string): HostUserState
@@ -91,7 +123,7 @@ export interface Probes {
 
 export const systemProbes = (): Probes => ({
   platform: process.platform,
-  firecracker: firecrackerAvailable,
+  vm: (v) => vmAvailable(v),
   oci: ociAvailable,
   colima: () => detectColima(systemColimaProbe()),
   hostUser: (user) => hostUserState(user, systemProbe()),
@@ -108,7 +140,7 @@ export interface Detected {
 export function detect(host: HostConfig, p: Probes = systemProbes()): Detected {
   const levels: Level[] = [],
     notes: string[] = []
-  if (host.vm && p.firecracker(host.vm)) levels.push('vm')
+  if (host.vm && p.vm(host.vm)) levels.push('vm')
   let colima: ColimaState | undefined
   if (p.platform === 'darwin') {
     // macOS has no local OCI kernel: containers run inside Colima's VM.
@@ -166,17 +198,18 @@ export function resolveForHost(
   })
 }
 
-const BACKEND: Record<Level, string> = {
-  vm: 'firecracker',
+const BACKEND: Record<Exclude<Level, 'vm'>, string> = {
   container: 'oci',
   host: 'dedicated OS user',
   none: 'none',
 }
 
 export const backendName = (level: Level, platform = process.platform) =>
-  level === 'container' && platform === 'darwin'
-    ? 'oci in Colima VM'
-    : BACKEND[level]
+  level === 'vm'
+    ? vmBackend(platform)
+    : level === 'container' && platform === 'darwin'
+      ? 'oci in Colima VM'
+      : BACKEND[level]
 
 /** One line for `gild status` and job logs. */
 export function describe(resolved: Resolved, backend?: string) {
@@ -191,11 +224,7 @@ export async function startIsolation(
   log?: (line: string) => void,
   p: Probes = systemProbes(),
 ): Promise<Isolation | null> {
-  if (level === 'vm') {
-    const v = host.vm!
-    const cfg: FirecrackerConfig = { ...v, port: 9002 }
-    return startFirecracker(cfg, work, vmDir, log)
-  }
+  if (level === 'vm') return startVm(host.vm!, work, vmDir, log, p.platform)
   if (level === 'container') {
     const c: OciConfig = host.container!
     if (p.platform !== 'darwin') return startOci(c, work, log)
@@ -229,7 +258,13 @@ export function statusLines(
   const found = detect(host, p),
     available = found.levels
   const lines = [
-    ...(host.vm ? [networkStatusLine(host.vm.egress, networkState())] : []),
+    ...(host.vm
+      ? [
+          vmBackend(p.platform) === 'vz'
+            ? vzNetworkStatusLine(host.vm.egress, vzNetworkState())
+            : networkStatusLine(host.vm.egress, networkState()),
+        ]
+      : []),
     ...found.notes,
     `isolation backends available: ${available.filter((l) => l !== 'none').join(', ') || 'none'}`,
     `isolation floor: ${host.floor ?? 'none set'}`,

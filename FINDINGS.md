@@ -6,7 +6,7 @@ Status:
   - `spawn --vm` working-directory sync back to the host, at exit and on demand (`gild sync <id>`);
   - the `host` tier (a dedicated unprivileged OS user, set up once by the owner);
   - `container` on macOS through Colima, proven with a real runner job on the Intel iMac.
-- The macOS `vz` microVM backend is NOT built; what porting it takes is written up below.
+- Third slice (`claude/vz-backend`): the macOS `vz` microVM backend (Virtualization.framework), proven on bugsy (Apple silicon) for `--isolation vm` and `spawn --vm`; see "macOS `vz` microVM backend".
 
 ## What the old gild code gave us, and what was rewritten
 
@@ -184,38 +184,108 @@ Colima 0.10.3 is installed and running on the iMac: vz, x86_64, virtiofs, docker
 The whole test run takes 7.5 s wall clock: bun, a git server, clone, container start and 7 steps. LAN and metadata are blocked here because the container has no network. Filtered egress inside Colima needs the root command above.
 - **Revert proof:** treating a stopped Colima as running fails `Colima down means no container level`.
 
-## macOS `vz` microVM: what porting gild-virt/macos.rs takes (not built)
+## macOS `vz` microVM backend (third slice, `claude/vz-backend`)
 
-`gild-virt/src/macos.rs` (594 lines, objc2) is a prototype:
-- It builds `VZVirtualMachineConfiguration` with `VZLinuxBootLoader` (kernel plus initrd, `console=hvc0`) and a virtio console to a file.
-- It runs commands by writing to the console and parsing it.
-- There is no disk, no vsock and no network, and the test boots an Alpine initramfs from `/tmp`.
+Built and proven on **bugsy** (Mac mini, Apple silicon, macOS 27.0, 8 GB, Colima also running there). On macOS the `vm` level now means Virtualization.framework; on Linux it still means Firecracker. Runner and spawn code do not branch: `startVm` / `vmAvailable` in `src/isolation/index.ts` pick the backend by platform, and both backends return the same `Isolation`.
 
-Needed on both Intel and Apple silicon:
-1. **A helper binary, not in-process.** VZ objects need a run loop and callbacks, and the host side of vsock is `VZVirtioSocketDevice.connectToPort` (an objc callback), not a unix socket.
-   - Build a small `gild-vz` Rust binary from macos.rs.
-   - It should expose a unix socket that speaks Firecracker's `CONNECT <port>\n` handshake, and the reverse direction for hooks (`<uds>_<port>`).
-   - Then `firecracker.ts`'s `vsockChannel`, `guestExec`, `guestPty` and the hook relay are reused unchanged. Only the launcher differs.
-2. **Devices:**
-   - `VZVirtioBlockDeviceConfiguration` (read-only rootfs plus the per-job ext4, `VZDiskImageStorageDeviceAttachment`);
-   - `VZVirtioSocketDeviceConfiguration`;
-   - `VZVirtioFileSystemDeviceConfiguration` (virtio-fs is built into macOS 12+). With virtio-fs, `spawn --vm` on a Mac can share the directory live and skip the copy and sync.
-   - Network: `VZNATNetworkDeviceAttachment` (no entitlement) or none. NAT reaches the Mac's LAN, so filtered egress needs a root pf rule on the vmnet bridge ("Needs Sami"); until then use no network.
-3. **Guest kernel:** VZ is virtio-PCI, while the Firecracker kernel boots with `pci=off` on virtio-MMIO. The kernel needs `VIRTIO_PCI`, `VIRTIO_BLK`, `VIRTIO_VSOCKETS`, `VIRTIO_CONSOLE` (hvc0) and `VIRTIO_FS`. Plan on a separate kernel build. `init-gild.sh` and the guest agent are unchanged.
-4. **Signing:** the `com.apple.security.virtualization` entitlement with an ad-hoc signature (`codesign -s - --entitlements …`). This needs no developer account and shows no dialog. Add it to `bun run pack` for the darwin packages.
+**What was built**
+- **`gild-vz` helper** (`vz/gild-vz.swift`, ~330 lines, Swift). Swift rather than objc2: VZ is a Swift/ObjC API with callbacks and a run loop, and the helper has to be a separate signed process anyway. `scripts/build-vz-helper.sh` compiles it with `xcrun swiftc` and signs it ad hoc (`codesign -s - --entitlements vz/gild-vz.entitlements`). No developer identity, no keychain, no dialog. Subcommands:
+  - `check`: the entitlement is present (SecTask) and `VZVirtualMachine.isSupported`;
+  - `clone`: APFS `clonefile` of a file or a whole tree;
+  - `run`: boot one VM.
+- **Devices.** `VZLinuxBootLoader` (`console=hvc0`); one virtio-blk root disk; virtio-console to `serial.log`; virtio-vsock; virtio-entropy; a virtio-fs share tagged `workspace`; NAT only when allowed (below). Nothing else of the host is attached.
+- **Exec protocol unchanged.** The helper listens on a unix socket and speaks Firecracker's `CONNECT <port>\n` / `OK` handshake. A guest connection to host port N is relayed to `<uds>_N` (ports passed with `--listen`). So `vsockChannel`, `guestExec`, `guestPty`, `guestPut`, `guestFiles` and the hook relay are shared code. They were factored out of `firecracker.ts` as `vsockMembers`, not copied.
+- **Copy-on-write per VM.** The base rootfs (mode 0444) is cloned with `clonefile` into the VM's directory and booted read-write. The work directory is cloned the same way and shared over virtio-fs at `/workspace`. The base image and the host checkout are never written: same guarantee as Firecracker's ext4 copy, without `mke2fs` on the Mac. `spawn --vm` keeps the defined sync (`gild sync`, sync at exit): it reads the guest's view through the agent, with the same untrusted-guest checks.
+- **Lifecycle.** The VM stops when the CLI closes the helper's stdin, on SIGTERM, or when the guest powers off. `close()` deletes both clones. No helper or VM process was left after any test run.
+- **Guest, built without root, inside docker (Colima)** by `scripts/build-vm-guest.sh`:
+  - the guest agent: unchanged source, `aarch64` static musl, 594 KB;
+  - `guest-agent/rootfs.Dockerfile`: the blue.git `build-ubuntu.sh` recipe as a Dockerfile, for any architecture. Ubuntu 24.04 with ca-certificates, git, iproute2, unzip, bun 1.3.13, the `runtime` user and `/workspace`, plus python3 for the fixture agents and busybox for udhcpc. rustup and deka are not included. The result is an ext4 of 3 GiB;
+  - an arm64 kernel: Linux 6.12.112 LTS, `allnoconfig` plus `guest-agent/kernel-arm64-vz.config`. Everything is built in (virtio-pci, blk, console, vsock, fs, net, rng), with no modules and no initramfs. The image is 7.3 MB and builds in about 90 s. The script fails if any requested option does not stick.
+- **`init-gild.sh`** (shared with Firecracker; the Firecracker path is unchanged):
+  - mounts `/dev/vdb` if present, else virtio-fs `workspace`;
+  - sets the clock from `gild.time=` (the guest has no trusted clock at boot, and TLS needs one);
+  - runs DHCP when given `gild.net=dhcp`.
 
-Per architecture:
-- **Intel (this iMac, macOS 26.7, `kern.hv_support=1`):** an x86_64 guest, so the existing rootfs and musl agent are reused. The kernel must be in a form VZLinuxBootLoader accepts on x86 (bzImage). Whether it accepts the uncompressed vmlinux Firecracker uses has to be tried.
-- **Apple silicon:**
-  - an arm64 guest: an uncompressed arm64 `Image` (VZ refuses compressed kernels there), an arm64 rootfs and an `aarch64-unknown-linux-musl` agent;
-  - x86_64 toolchains in jobs would need Rosetta for Linux (`VZLinuxRosettaDirectoryShare`, macOS 13+).
-  - Both images should come out of the same rootfs build in CI.
-- **Estimate:** the helper is about 600-800 lines (most of macos.rs is reusable bindings), plus the kernel config, the arm64 image build and the codesign step. Boot time has to be measured. Firecracker's 0.3 s came from the i8042 boot arguments, which do not apply to VZ.
+**Measurements (bugsy, 512 MiB, 2 vCPUs)**
+
+| figure | value |
+|---|---|
+| clone rootfs (3 GiB) + checkout | 10-15 ms |
+| cold boot to vsock-answering agent, no network (5 runs) | 252 / 214 / 233 / 269 / 300 ms |
+| same, with NAT + DHCP | 1117 ms (udhcpc is ~0.9 s of it) |
+| microVM ready inside `executeJob` | 269-348 ms |
+| whole 7-step probe job in a vz VM (clone + boot + steps + teardown) | 2.0-2.2 s, vs 2.3-9.4 s for `none` on the same Mac |
+| VM process RSS (com.apple.Virtualization.VirtualMachine), idle guest, 512 MiB configured | 71 MB; guest `free`: 19 MB used |
+| `spawn --vm` ready (fixture agent, includes bun start-up) | 0.57-0.58 s (Firecracker on demon: 1.1 s) |
+| `gild sync` | 0.11 s |
+
+**Isolation proof (bugsy, real `executeJob`, same 7 probes as demon)**
+
+| step | none (host) | vm (vz) |
+|---|---|---|
+| checkout present, build in it | ok | ok |
+| write inside the checkout | ok | ok (in the clone; the host checkout is unchanged) |
+| write outside the checkout (a host dir) | ok | blocked |
+| read a file in the host user's home tree | ok | blocked |
+| connect to a listener on the Mac's LAN address (192.168.1.112:18099) | blocked, see note | blocked |
+| connect to 169.254.169.254 | blocked (no route) | blocked |
+| secret in step env reaches the step, not argv/log/cmdline | ok | ok |
+
+- **Note on `none` / LAN.** The shell on bugsy reaches the listener (curl 200, `nc` ok). Processes started under bun time out, because of macOS Local Network privacy for an unapproved binary. That is a host TCC effect, not gild isolation. It may have raised a "bun would like to find devices on your local network" prompt on bugsy's screen.
+- **Probe fixes for macOS hosts.** The probe now uses curl when present. macOS has no coreutils `timeout`, and its bash 3.2 hangs on `/dev/tcp`, so the old control could never succeed on a Mac.
+- **LAN and metadata for vm.** They are blocked because the VM has **no network device**: the pf filter below is not installed. Same caveat as the first demon run.
+
+**Other live checks** (`src/isolation/vz.e2e.test.ts`, `TEST_VZ_CONFIG_DIR`):
+- the guest is `aarch64`;
+- a write to `/etc` in VM 0 is not seen by VM 1;
+- the base image's mtime and size are unchanged;
+- the guest clock is within 5 s of the host;
+- there is no eth0;
+- a guest hook (`gild-guest-agent hook`) reaches the host listener on port 9100.
+
+**spawn --vm on vz:** `src/spawn-vm.test.ts` on bugsy, with the fixture agent only:
+- `vm-spawn-harness.py` covers: agent cwd `/workspace`; host env absent; `gild send` delivered; hook-driven idle -> busy -> idle; `gild events`; outer-terminal typing; resize 24x80 -> 40x120; exit 0; no leftover process.
+- `vm-sync-harness.py` covers: edits, creates, deletes, chmod, nested dirs, symlink, the both-sides conflict, the second empty sync, and the change at exit. All pass.
+- **Harness fix for macOS:** a session leader's exit blocks until its pty output is read, so the harnesses now keep reading while they wait (`drain_wait`). The stuck process showed as a zombie that had already printed its final sync line.
+
+**Revert proofs**
+- Sharing the host checkout itself instead of its clone: the live test fails (`made-in-guest.txt` appears on the host).
+- Letting `egress: allow` use NAT without the filter: `vz.test.ts` fails.
+- Trusting a marker that is not root-owned: `vz.test.ts` fails.
+
+**Network: what VZ can and cannot deny**
+- **Measured with unfiltered VZ NAT** (`TEST_VZ_NAT_PROBE`, a measurement the product never does):
+  - the guest gets 192.168.64.2/24 over DHCP;
+  - DNS and the internet work (1.1.1.1:443);
+  - **the Mac's LAN address is reachable**;
+  - 169.254.169.254 is not.
+- **No VZ attachment can filter destinations.** NAT is vmnet shared mode, `VZBridgedNetworkDeviceAttachment` is worse, and `VZFileHandleNetworkDeviceAttachment` would need a userspace TCP/IP stack in the helper (gvisor-tap-vsock-style). So the policy is:
+  - `block`: no NIC;
+  - `auto` (the default): NAT only when the pf filter is installed, otherwise no NIC, and the log says why;
+  - `allow`: refused with "Needs Sami" unless the filter is installed.
+- **`scripts/vz-network-setup.sh`** (root, once) is the host-tier pf approach:
+  - an anchor `com.apple/gild-vz`, loaded by a LaunchDaemon. It allows the vmnet DNS forwarder on the gateway and DHCP, and drops everything from the vmnet subnet (read from `com.apple.vmnet.plist`) to 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16, 127/8 and multicast;
+  - a root-owned marker `/etc/gild/vz-network.json`, which gild reads; it never runs pfctl.
+  - `--dry-run` prints everything. The anchor parses: `pfctl -n -a com.apple/gild-vz -f` returns 0 without root on bugsy.
+  - **Not proven live**, because it needs sudo. Open questions: whether pf sees vmnet bridge traffic inbound before vmnet's NAT, and whether `pfctl -E` coexists with other pf users on the Mac. The proof is to install it, then run the NAT probe test with the real marker and expect `lan=blocked`.
+
+**Not done / limits**
+- **Intel Macs:** not built or tested. The iMac has no Xcode. VZ on x86 needs an x86_64 `bzImage` built with the same config list (x86 has no `PCI_HOST_GENERIC`; use `PCI` plus `VIRTIO_PCI`). The existing x86 rootfs would work as is. Everything else is architecture-neutral.
+- **Packaging:** the npm release runs on ubuntu, and `bun --compile` cannot produce a signed Swift binary. CI now compiles and signs the helper on macos-15 (`vz-helper` job) so the source cannot rot. Shipping it inside `@gildforge/cli-darwin-*` needs a macOS release step (`swiftc -target arm64-apple-macos13` and `-target x86_64-apple-macos13`, ad-hoc sign, copy next to `bin/gild`). It also needs the guest image (kernel, rootfs, agent) published per architecture, plus `vm.vz` defaulting to the helper next to the binary. Today `isolation.json` names all four paths.
+- **Rosetta** for x86_64 toolchains in arm64 guests (`VZLinuxRosettaDirectoryShare`): not wired.
+- **Boot-time shortcuts not tried:** a saved VM state (`saveMachineStateTo`, macOS 14+). Boot is already ~0.25 s.
+
+**bugsy config used** (`~/Projects/claude/vz-guest/hostcfg/isolation.json`):
+```json
+{"vm":{"vz":"…/gild-cli-vz/dist/gild-vz","kernel":"…/vz-guest/Image","rootfs":"…/vz-guest/rootfs.ext4","memoryMiB":512,"vcpus":2}}
+```
+Rebuild the guest with `scripts/build-vm-guest.sh <dir>` (docker or Colima) and the helper with `scripts/build-vz-helper.sh`.
 
 ## Needs Sami
 
 - Egress allowed with LAN/metadata denied needs a tap device per VM (or a docker bridge) plus nftables rules, which need root. Rules to base on `deploy/nftables/gild.rules` (old) with the destination set `10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16` rejected on the guest bridge. Exact commands to be written with the tap manager (next steps 1). Until then `egress: allow` is refused with a clear error.
 - macOS Colima is installed and running on the iMac; nothing needed for `container` there. For filtered egress (instead of no network) inside Colima: `colima ssh -- sudo sh -s up < scripts/vm-network-setup.sh` (from this checkout). For job directories outside `$HOME`, add them under `mounts:` in `~/.colima/default/colima.yaml` and `colima restart` (this restarts the other containers on it).
+- vz filtered egress (macOS VMs get no network until then): `sudo scripts/vz-network-setup.sh` on the Mac (review with `--dry-run`), then prove it with `TEST_VZ_NAT_PROBE` expecting `lan=blocked`.
 - host tier, per machine and per dedicated user: `sudo scripts/host-user-setup.sh gild-runner <owner> --agent <gild-guest-agent built for that OS>`, then log out and in once. Review first with `--dry-run`. Then add `"host": {"user": "gild-runner"}` to `isolation.json`.
 
 ## Real agent login inside a VM (spawn --vm, design only)
@@ -224,7 +294,7 @@ Never copy credential files into the image. Options, best first: (1) host-side b
 
 ## Recommended architecture
 
-- Local Linux: Firecracker as built here; needs `/dev/kvm` access and a kernel+rootfs (`scripts/build-vm-rootfs.sh`). Local Mac: Virtualization.framework (`vz`) via the revived `gild-virt` pattern with the same agent over vsock (VZVirtioSocketDevice); containers via Colima as the fallback tier.
+- Local Linux: Firecracker as built here; needs `/dev/kvm` access and a kernel+rootfs (`scripts/build-vm-rootfs.sh`). Local Mac: Virtualization.framework (`vz`, built: `gild-vz` helper, same agent over vsock, APFS clones, virtio-fs, 0.25 s boot); containers via Colima as the fallback tier.
 - Gild-hosted pool: our own KVM hosts first (a 4-core/26 GB box runs dozens of 0.3 s, ~100 MB VMs; cost is the box, flat), Fly Machines as burst (Firecracker underneath, per-second billing, ~0.3 s start, but egress/LAN policy is theirs and per-job cost scales). Decide with real job volume; the `Isolation` interface is the same for both.
 
 ## Server side, for gild-site (not implemented here)
@@ -235,7 +305,7 @@ Org/repo isolation floor in settings; runners report their capability set (level
 
 1. Run `sudo scripts/vm-network-setup.sh` on demon, then prove LAN/metadata denied and internet allowed from a VM and a container (and `nft -c` the ruleset).
 2. `spawn --vm`: native agents in the guest image; model-login broker. (Sync back: done in the second slice.)
-3. macOS `vz` backend: `gild-vz` helper per the write-up above (Intel first, then arm64 image + kernel).
+3. macOS `vz`: done for Apple silicon. Left: prove the pf filter live after Sami's setup; ship the signed helper and per-arch guest images in the darwin packages (macOS release step); an Intel `bzImage` and a test on the iMac; Rosetta share for x86_64 toolchains.
 4. Host tier: prove the privilege switch live after Sami's setup (same 7 probes as the isolation table); wire `spawn` onto it with a hook relay across uids. Colima: prove filtered egress after the in-VM network setup.
 5. `actions/setup-*` and upload-artifact inside a guest (tools preinstalled today; artifacts are no-ops already).
 6. Guest image build in CI; agent version check on boot; persistent per-agent drive.

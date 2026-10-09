@@ -1,5 +1,5 @@
-// `gild spawn --vm`: the agent process runs on a pty inside a Firecracker
-// microVM; the host keeps the terminal, session socket, hooks, injection queue
+// `gild spawn --vm`: the agent process runs on a pty inside a microVM
+// (Firecracker on Linux, Virtualization.framework on macOS); the host keeps the terminal, session socket, hooks, injection queue
 // and everything else (spawn-worker.ts). This file only builds the guest
 // child and the hook relay.
 import { createConnection } from 'node:net'
@@ -7,8 +7,13 @@ import { mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { loadHostConfig, type Isolation } from './isolation'
-import { firecrackerAvailable, startFirecracker } from './isolation/firecracker'
+import {
+  loadHostConfig,
+  startVm,
+  vmAvailable,
+  vmBackend,
+  type Isolation,
+} from './isolation'
 import { privateSessionsDirectory, socketPath } from './spawn-sessions'
 import {
   describeSync,
@@ -70,9 +75,11 @@ export async function startVmChild(opts: {
   log?: (line: string) => void
 }): Promise<VmChild> {
   const host = await loadHostConfig(opts.configDir)
-  if (!host.vm || !firecrackerAvailable(host.vm))
+  if (!host.vm || !vmAvailable(host.vm))
     throw new Error(
-      '--vm needs a working Firecracker setup: describe `vm` in <config dir>/isolation.json (see FINDINGS.md) and make /dev/kvm accessible',
+      vmBackend() === 'vz'
+        ? '--vm needs a working vz setup: describe `vm` (kernel, rootfs, vz helper) in <config dir>/isolation.json (see FINDINGS.md)'
+        : '--vm needs a working Firecracker setup: describe `vm` in <config dir>/isolation.json (see FINDINGS.md) and make /dev/kvm accessible',
     )
   const kb = Number(
     execFileSync('du', ['-sk', opts.cwd], { encoding: 'utf8' }).split(/\s+/)[0],
@@ -84,12 +91,7 @@ export async function startVmChild(opts: {
   // What the guest starts from: the baseline every later sync is compared to.
   const baseline = await hostManifest(opts.cwd)
   const vmDir = await mkdtemp(join(tmpdir(), 'gild-spawn-vm-'))
-  const iso: Isolation = await startFirecracker(
-    { ...host.vm, port: 9002 },
-    opts.cwd,
-    vmDir,
-    opts.log,
-  )
+  const iso: Isolation = await startVm(host.vm, opts.cwd, vmDir, opts.log)
   const fail = async (e: unknown) => {
     await iso.close()
     throw e

@@ -10,6 +10,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 CLI = json.loads(os.environ['TEST_GILD_COMMAND'])
 CONFIG = os.environ['TEST_VM_CONFIG_DIR']
 
+
+def drain_wait(proc, master, timeout):
+    """Wait for exit while reading the pty: on macOS a session leader's exit
+    blocks until its terminal output is drained, so a bare wait() deadlocks."""
+    out = b''
+    until = time.monotonic() + timeout
+    while proc.poll() is None:
+        if time.monotonic() > until: raise subprocess.TimeoutExpired(proc.args, timeout)
+        if select.select([master], [], [], .05)[0]:
+            try: out += os.read(master, 65536)
+            except OSError: time.sleep(.05)
+    return proc.returncode, out
+
 with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vmsync-') as d:
     home = pathlib.Path(d)
     bindir = home / 'bin'; bindir.mkdir()
@@ -72,8 +85,9 @@ with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vmsync-') as d:
         wait(b'"done": "round2"')
         assert not (project / 'later.txt').exists()
         gild('send', 'vmsync', 'quit')
-        assert proc.wait(timeout=30) == 0, buf
-        wait(b'synced from the VM', 5)
+        code, tail = drain_wait(proc, m, 30); buf += tail
+        assert code == 0, buf
+        if b'synced from the VM' not in buf: wait(b'synced from the VM', 5)
         assert (project / 'later.txt').read_text() == 'written after the on-demand sync\n'
         print(json.dumps({'passed': True, 'sync_s': round(sync_s, 3)}))
     finally:

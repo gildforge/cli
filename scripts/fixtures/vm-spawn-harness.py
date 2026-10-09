@@ -10,6 +10,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 CLI = json.loads(os.environ['TEST_GILD_COMMAND'])
 CONFIG = os.environ['TEST_VM_CONFIG_DIR']
 
+
+def drain_wait(proc, master, timeout):
+    """Wait for exit while reading the pty: on macOS a session leader's exit
+    blocks until its terminal output is drained, so a bare wait() deadlocks."""
+    out = b''
+    until = time.monotonic() + timeout
+    while proc.poll() is None:
+        if time.monotonic() > until: raise subprocess.TimeoutExpired(proc.args, timeout)
+        if select.select([master], [], [], .05)[0]:
+            try: out += os.read(master, 65536)
+            except OSError: time.sleep(.05)
+    return proc.returncode, out
+
 with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vm-') as d:
     home = pathlib.Path(d)
     bindir = home / 'bin'; bindir.mkdir()
@@ -91,7 +104,8 @@ with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vm-') as d:
         wait(lambda: status()['state'] == 'idle')
         # Clean shutdown: the agent quits, gild exits 0, the session socket is gone.
         subprocess.run(CLI + ['send', 'vmevents', 'quit'], env=env, capture_output=True, timeout=10)
-        assert proc.wait(timeout=20) == 0, buf
+        code, tail = drain_wait(proc, m, 20); buf += tail
+        assert code == 0, buf
         assert not sock.exists()
         # Resize: a second session whose agent reports its pty size.
         (bindir / 'size-agent').symlink_to(ROOT / 'scripts/fixtures/size-agent.py')
@@ -115,7 +129,7 @@ with tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='vm-') as d:
             p2.send_signal(signal.SIGWINCH)
             wait2(b'"size": [40, 120]')
             os.write(m2, b'q')
-            assert p2.wait(timeout=20) == 0
+            assert drain_wait(p2, m2, 20)[0] == 0
         finally:
             if p2.poll() is None: p2.terminate(); p2.wait(timeout=8)
             os.close(m2); os.close(s2)
