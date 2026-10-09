@@ -42,10 +42,10 @@ export class GildClient {
     if (query)
       for (const [name, value] of Object.entries(query))
         if (value !== undefined) url.searchParams.set(name, String(value))
-    const res = await this.fetcher(url, {
+    const init:RequestInit = {
       method: route.method,
       headers: {
-        authorization: `Bearer ${this.token}`,
+        ...(this.token?{authorization:`Bearer ${this.token}`}:{ }),
         'content-type': 'application/json',
         ...(options?.idempotencyKey
           ? { 'idempotency-key': options.idempotencyKey }
@@ -55,8 +55,15 @@ export class GildClient {
         ? undefined
         : JSON.stringify(route.input.parse(body ?? {})),
       signal: options?.signal ?? AbortSignal.timeout(30000),
-      redirect: 'error',
-    })
+      redirect: 'manual',
+    }
+    let res=await this.fetcher(url,init),current=url
+    for(let redirects=0;[301,302,307,308].includes(res.status);redirects++){
+      if(redirects>=5)throw new Error('Too many handle redirects')
+      const next=new URL(res.headers.get('location')??'',current)
+      if(next.origin!==url.origin)throw new Error('Refusing cross-origin API redirect')
+      current=next;res=await this.fetcher(next,init)
+    }
     const data = res.status === 204 ? null : await res
       .json()
       .catch(() => ({ message: `HTTP ${res.status}` }))

@@ -166,7 +166,7 @@ test('native import preserves full history, branches, annotated tags, default br
     await new Promise<void>((r) => server.close(() => r()))
     await rm(root, { recursive: true, force: true })
   }
-})
+},30000) // Native Git history/SSH fixture can exceed Bun's five-second default on a shared host.
 test('CLI status, resume and cutover use the canonical import contract', async () => {
   const seen: string[] = [],
     status = {
