@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp', prefix='r-') as d:
             options['agent']='claude'
             env['PATH']=str(root)+os.pathsep+os.environ['PATH']
         prefix="Object.defineProperty(process, 'platform', {value:'win32'});" if CASE=='windows' else ''
-        cmd=[NODE,'--input-type=module','-e',prefix+'process.argv[1]='+json.dumps(json.dumps(options))+';await import('+json.dumps(pathlib.Path(WORKER).as_uri())+')']
+        cmd=[NODE,'--input-type=module','-e',prefix+'process.argv[2]='+json.dumps(json.dumps(options))+';await import('+json.dumps(pathlib.Path(WORKER).as_uri())+')']
     master=slave=None
     try:
         if interactive:

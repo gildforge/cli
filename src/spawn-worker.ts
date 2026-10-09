@@ -32,7 +32,7 @@ type Options = {
   profile?: { name: string; channels?: string[] }
   envAllowlist?: string[]
 }
-const options: Options = JSON.parse(process.argv[1])
+const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
 const reportConfig = options.reporting
   ? new Promise<ReportTarget>((resolve, reject) => {

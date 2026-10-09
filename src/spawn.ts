@@ -4,7 +4,8 @@ import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
 import type { ReportTarget } from './spawn-report'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
-import { randomBytes } from 'node:crypto'
+import { readFile, rename, writeFile } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Command, InvalidArgumentError } from 'commander'
 import { spawnWorkerSource } from './spawn-bundle' with { type: 'macro' }
@@ -15,6 +16,23 @@ import {
   socketPath,
   MAX_MESSAGE_BYTES,
 } from './spawn-sessions'
+
+/** Linux caps one argv string at 128 KiB, so the bundled worker runs from a
+ * content-addressed file in the private ~/.gild directory, not `node -e`. */
+async function workerFile() {
+  const source = await spawnWorkerSource()
+  const directory = dirname(await privateSessionsDirectory())
+  const path = join(
+    directory,
+    `spawn-worker-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.mjs`,
+  )
+  if ((await readFile(path, 'utf8').catch(() => null)) !== source) {
+    const partial = `${path}.${process.pid}.tmp`
+    await writeFile(partial, source, { mode: 0o600 })
+    await rename(partial, path)
+  }
+  return path
+}
 
 function idleMilliseconds(value: string) {
   const number = Number(value)
@@ -95,13 +113,10 @@ export function spawnCommands(
             : []),
           join(dirname(process.execPath), 'gild.js'),
         ]
-        const source = await spawnWorkerSource()
         const worker = spawn(
           'node',
           [
-            '--input-type=module',
-            '-e',
-            source,
+            await workerFile(),
             JSON.stringify({
               agent,
               args,
