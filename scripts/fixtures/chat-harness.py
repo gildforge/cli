@@ -1,5 +1,5 @@
 """Mention bridge end to end: fake forge + `gild spawn agent` + the PTY fixture agent."""
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 AUTH='--auth' in sys.argv
@@ -109,8 +109,11 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         run.wait(lambda:len(run.prompts())==1)
         first=run.prompts()[0]
         assert 'mentioned you in owner/demo (message 5)' in first and '@sami' in first and 'ask @bob for the number' in first,first
-        assert 'gild chat history owner/demo --agent fixture --before 6 --limit 30' in first,first
-        assert 'gild chat send owner/demo --agent fixture --reply-to 5 "<your reply>"' in first,first
+        # The commands name the gild that spawned the session (CLI), not a PATH lookup.
+        context=re.search(r"Context: (.+) chat history owner/demo --agent fixture --before 6 --limit 30",first)
+        reply=re.search(r'Reply:   (.+) chat send owner/demo --agent fixture --reply-to 5 "<your reply>"',first)
+        assert context and reply and context[1]==reply[1],first
+        assert context[1]!='gild' and 'gild' in context[1],first # the spawning gild's own path
         assert TOKEN not in first
         assert run.status()['state']=='busy'
         # Duplicate delivery of the same message under a new event cursor, plus a second mention while busy.

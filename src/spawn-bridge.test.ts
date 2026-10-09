@@ -113,6 +113,22 @@ test('prompt is short, names the history and reply commands', () => {
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
   ])
 })
+test('prompt names the gild that spawned the session, not whatever is on PATH', () => {
+  const text = mentionPrompt(
+    'owner/demo',
+    'bob',
+    {
+      repository: { full_name: 'owner/demo' },
+      message: { cursor: '7', id: 'y', body: 'go', author: { name: 'a' } },
+      agent: 'owner/bob',
+    },
+    "'/opt/gild bin/gild'",
+  )
+  expect(text).toContain(
+    "Context: '/opt/gild bin/gild' chat history owner/demo --agent bob",
+  )
+  expect(text).toContain("Reply:   '/opt/gild bin/gild' chat send owner/demo")
+})
 
 test('only this agent mentions are queued, once, and typed progress reaches the stream', async () => {
   const run = await bridge([

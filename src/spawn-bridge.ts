@@ -46,13 +46,18 @@ type Mention = z.output<typeof mention>
 const SEEN_LIMIT = 500
 
 /** One short prompt; the agent reads the channel history itself. */
-export function mentionPrompt(repo: string, label: string, m: Mention) {
+export function mentionPrompt(
+  repo: string,
+  label: string,
+  m: Mention,
+  gild = 'gild',
+) {
   const { cursor, body, author } = m.message
   return [
     `[gild] @${author.name} mentioned you in ${repo} (message ${cursor}):`,
     body,
-    `Context: gild chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
-    `Reply:   gild chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
+    `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
   ].join('\n')
 }
 
@@ -77,6 +82,8 @@ export class MentionBridge {
       agent: string
       /** The local profile label used in `--agent <label>`. */
       label: string
+      /** The gild that spawned this session; a `gild` on PATH may be older. */
+      gild?: string
       session: string
       repos: string[]
       file: string
@@ -178,7 +185,7 @@ export class MentionBridge {
       this.stage('received', repo, m)
       this.inflight.set(repo, (this.inflight.get(repo) ?? 0) + 1)
       try {
-        this.opts.enqueue(mentionPrompt(repo, this.opts.label, m), () => {
+        this.opts.enqueue(mentionPrompt(repo, this.opts.label, m, this.opts.gild), () => {
           this.stage('delivered', repo, m)
           this.settle(repo, m.message.id)
         })

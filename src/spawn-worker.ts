@@ -6,6 +6,7 @@ import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import type { IPty } from 'node-pty'
 import { adapterFor } from './spawn-adapters'
+import { shellQuote } from './spawn-adapters/types'
 import { applyEvent, type AgentEvent, type SessionState } from './spawn-events'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { StateReporter, type ReportTarget } from './spawn-report'
@@ -436,6 +437,7 @@ async function main() {
       client: new GildClient(target.server + '/api/v1', target.token),
       agent: target.agent,
       label: options.profile.name,
+      gild: options.hookCommand.map(shellQuote).join(' '),
       session: options.id,
       repos: options.profile.channels ?? [],
       file: join(directory, `${options.id}.mentions.json`),
