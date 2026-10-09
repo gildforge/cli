@@ -17,6 +17,7 @@ const hostIps = Object.values(networkInterfaces())
   .flat()
   .filter((i) => i && i.family === 'IPv4' && !i.internal)
   .map((i) => i!.address)
+const PORT = 18099
 const tcp = (ip: string, port: number) =>
   `timeout 4 bash -c 'exec 3<>/dev/tcp/${ip}/${port}'`
 
@@ -33,6 +34,28 @@ async function run(iso: Isolation, cmd: string) {
 }
 
 let work = ''
+// Positive control: every one of these is reachable from the host itself, so
+// "blocked" inside the guest is the isolation, not a dead target.
+async function hostControl(cmds: string[]) {
+  const listener = Bun.listen({
+    hostname: '0.0.0.0',
+    port: PORT,
+    socket: { data() {} },
+  })
+  try {
+    const out: Record<string, string> = {}
+    for (const c of cmds) {
+      const p = Bun.spawn(['bash', '-c', c], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      })
+      out[c] = (await p.exited) === 0 ? 'reachable' : 'blocked'
+    }
+    return out
+  } finally {
+    listener.stop(true)
+  }
+}
 const web = (iso: Isolation) =>
   iso.level === 'vm'
     ? `python3 -c "import urllib.request as u;print(u.urlopen(u.Request('https://gild.gg',method='HEAD'),timeout=8).status)"`
@@ -43,15 +66,32 @@ describe.skipIf(!ready)('filtered network, live', () => {
   const probes = (iso: Isolation) => [
     ['https://gild.gg (internet egress)', web(iso), true],
     ['DNS: getent hosts gild.gg', 'getent hosts gild.gg', true],
-    ...hostIps.map((ip) => [`host IP ${ip}:22`, tcp(ip, 22), false] as const),
-    ['gateway 172.31.255.1:22', tcp('172.31.255.1', 22), false],
-    ['LAN router 192.168.1.1:80', tcp('192.168.1.1', 80), false],
+    ...hostIps.map(
+      (ip) => [`host IP ${ip}:${PORT}`, tcp(ip, PORT), false] as const,
+    ),
+    [`bridge gateway 172.31.255.1:${PORT}`, tcp('172.31.255.1', PORT), false],
+    ['LAN host 192.168.1.254:80', tcp('192.168.1.254', 80), false],
+    ['LAN host 192.168.1.29:80', tcp('192.168.1.29', 80), false],
     ['tailnet 100.100.100.100:80', tcp('100.100.100.100', 80), false],
     ['metadata 169.254.169.254:80', tcp('169.254.169.254', 80), false],
   ]
 
   async function check(iso: Isolation) {
     const row: Record<string, string> = {}
+    const listener = Bun.listen({
+      hostname: '0.0.0.0',
+      port: PORT,
+      socket: { data() {} },
+    })
+    try {
+      await probe(iso, row)
+    } finally {
+      listener.stop(true)
+    }
+    table[iso.level] = row
+  }
+
+  async function probe(iso: Isolation, row: Record<string, string>) {
     for (const [name, cmd, shouldWork] of probes(iso)) {
       const r = await run(iso, cmd as string)
       row[name as string] = r.code === 0 ? 'reachable' : 'blocked'
@@ -59,28 +99,38 @@ describe.skipIf(!ready)('filtered network, live', () => {
         shouldWork as boolean,
       )
     }
-    table[iso.level] = row
   }
 
-  test('vm and container: internet works, host/LAN/tailnet/metadata blocked', async () => {
-    const host = await loadHostConfig(dir!)
-    work = mkdtempSync(join(process.env.TMPDIR ?? '.', 'net-'))
-    mkdirSync(join(work, 'checkout'))
-    const vm = await startFirecracker(
-      { ...host.vm!, port: 9002 },
-      work,
-      join(work, '..', 'vmnet-a'),
-    )
-    const ct = startOci(host.container!, work)
-    try {
-      await check(vm)
-      await check(ct)
-    } finally {
-      await vm.close()
-      await ct.close()
-      console.log(JSON.stringify(table, null, 1))
-    }
-  }, 180_000)
+  for (const level of ['vm', 'container'] as const)
+    test(`${level}: internet works, host/LAN/tailnet/metadata blocked`, async () => {
+      const host = await loadHostConfig(dir!)
+      work = mkdtempSync(join(process.env.TMPDIR ?? '.', 'net-'))
+      mkdirSync(join(work, 'checkout'))
+      const iso =
+        level === 'vm'
+          ? await startFirecracker(
+              { ...host.vm!, port: 9002 },
+              work,
+              join(work, '..', 'vmnet-a'),
+            )
+          : startOci(host.container!, work)
+      try {
+        await check(iso)
+      } finally {
+        await iso.close()
+        console.log(JSON.stringify(table, null, 1))
+      }
+    }, 180_000)
+
+  test('control: the host itself reaches every blocked target', async () => {
+    const targets = probes({ level: 'container' } as Isolation)
+      // 169.254.169.254 has no route from this host either, so it has no control.
+      .filter((p) => p[2] === false && !String(p[0]).startsWith('metadata'))
+      .map((p) => p[1] as string)
+    const seen = await hostControl(targets)
+    console.log(JSON.stringify(seen, null, 1))
+    for (const [c, v] of Object.entries(seen)) expect(v, c).toBe('reachable')
+  }, 120_000)
 
   test('two VMs cannot reach each other', async () => {
     const host = await loadHostConfig(dir!)
