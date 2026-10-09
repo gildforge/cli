@@ -15,12 +15,25 @@ export function importCommands(
     .command('import')
     .argument('<url>', 'Git source URL')
     .option('--name <name>', 'destination name, or owner/name')
-    .option('--private', 'private destination (the default with a source token)')
+    .option(
+      '--private',
+      'private destination (the default with a source token)',
+    )
     .option('--public', 'public destination, even with a source token')
     .option('--mirror', 'sync source until cutover')
     .option('--forge <forge>', 'metadata provider: github, gitlab, git')
-    .option('--source-token', 'prompt for a private source token')
-    .option('--source-token-file <path>', 'read a source token from a file')
+    .option(
+      '--source-token',
+      'prompt for a source token sent to gild for mirroring; defaults destination to private',
+    )
+    .option(
+      '--source-token-file <path>',
+      'read a source token sent to gild; defaults destination to private',
+    )
+    .option(
+      '--anonymous',
+      'disable local GH_TOKEN/GITHUB_TOKEN or gh auth for GitHub API reads (never sent to gild; does not change destination privacy)',
+    )
     .option('--server <url>', 'forge URL', 'https://gild.gg')
     .action(async (url, opts) => {
       const source = sourceURL(url, opts.forge),
@@ -71,7 +84,15 @@ export function importCommands(
       process.once('SIGINT', stop)
       process.once('SIGTERM', stop)
       try {
-        await executeImport(opts.server, job, root(), controller.signal)
+        await executeImport(
+          opts.server,
+          job,
+          root(),
+          controller.signal,
+          console.log,
+          undefined,
+          opts.anonymous,
+        )
       } finally {
         process.removeListener('SIGINT', stop)
         process.removeListener('SIGTERM', stop)
@@ -85,6 +106,7 @@ export function importCommands(
         '--source-token-file <path>',
         'source token for resuming a private import',
       )
+      .option('--anonymous', 'disable local GitHub auth for metadata reads')
       .option('--server <url>', 'forge URL', 'https://gild.gg')
       .action(async (repository, opts) => {
         if (!/^[\w.-]+\/[\w.-]+$/.test(repository))
@@ -109,13 +131,25 @@ export function importCommands(
           : undefined
         await api.request('importRetry', params, { source_token })
         const job = await api.request('importClaim', params)
-        if (job)
-          await executeImport(
-            opts.server,
-            job,
-            root(),
-            new AbortController().signal,
-          )
-        else console.log('An owner runner is resuming the import')
+        if (job) {
+          const controller = new AbortController(),
+            stop = () => controller.abort()
+          process.once('SIGINT', stop)
+          process.once('SIGTERM', stop)
+          try {
+            await executeImport(
+              opts.server,
+              job,
+              root(),
+              controller.signal,
+              console.log,
+              undefined,
+              opts.anonymous,
+            )
+          } finally {
+            process.removeListener('SIGINT', stop)
+            process.removeListener('SIGTERM', stop)
+          }
+        } else console.log('An owner runner is resuming the import')
       })
 }

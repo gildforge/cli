@@ -1507,7 +1507,8 @@ export const routes = [
     'acceptRepositoryInvitation',
     'PATCH',
     '/user/repository_invitations/{id}',
-    'repo:read',
+    // Accepting can grant write, so a read-only token may not accept.
+    'repo:write',
     ok,
     empty,
     'no-store',
