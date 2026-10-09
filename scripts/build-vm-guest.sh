@@ -13,9 +13,10 @@ size=${2:-3G}
 kernel=${KERNEL_VERSION:-6.12.112}
 
 if [ ! -s "$out/gild-guest-agent" ]; then
-  docker run --rm -v "$here/guest-agent:/src:ro" -v "$out:/out" rust:1-alpine sh -euc '
+  # The whole checkout: the agent compiles in src/isolation/guest-protocol.json.
+  docker run --rm -v "$here:/src:ro" -v "$out:/out" rust:1-alpine sh -euc '
     apk add -q musl-dev
-    CARGO_TARGET_DIR=/build cargo build -q --release --manifest-path /src/Cargo.toml
+    CARGO_TARGET_DIR=/build cargo build -q --release --locked --manifest-path /src/guest-agent/Cargo.toml
     cp /build/release/gild-guest-agent /out/gild-guest-agent'
 fi
 file "$out/gild-guest-agent"

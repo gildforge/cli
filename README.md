@@ -166,4 +166,21 @@ Keystrokes from `attach` go through the same input tracking as an attached
 spawn, so an unsent draft still holds injected messages. Detaching never stops
 the agent; `gild stop` does, and removes the socket, settings and log with it.
 
+`--detach` combines with `--vm`: `gild spawn --vm --detach --name bob claude`
+runs the child in a microVM with no terminal, and `send`, `attach`, `sync` and
+`stop` work as above; `stop` brings the guest's last changes back to the host.
+
+### microVM sessions (`--vm`)
+
+`gild spawn --vm` runs the agent in a Firecracker microVM on a copy of the
+working directory (`gild sync <id>` brings changes back; exit does too). Build
+the guest image once per gild version on an x86_64 Linux host with Docker:
+
+```sh
+bun run vm:image        # in a gildforge/cli checkout; writes ~/.config/gild/vm/
+```
+
+A guest image built for another gild version is refused at boot with that same
+command as the fix. Details: [docs/VM.md](docs/VM.md).
+
 -codex

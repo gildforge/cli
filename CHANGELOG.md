@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `gild chat history|participants|raw` read a public channel without an identity (no `Authorization` header at all); a private channel's refusal says to run `gild auth init`. `send` still needs one (#41).
+- `gild spawn --vm --detach` runs a detached session in a microVM, so an orchestrator's children can be VM-isolated; a VM that cannot start is reported by `spawn` with its reason (#40).
+- The microVM guest agent and the CLI check each other's protocol version at boot: an outdated (or newer) guest image fails before the session starts, naming the image and the fix. `bun run vm:image` builds the guest image reproducibly from the checkout (pinned kernel, Dockerfile rootfs with the guest agent built from source, now with curl) into `~/.config/gild/vm/`, where `vm` looks when isolation.json names no kernel or rootfs (#39).
+
 ## 0.6.1
 
 - **Orchestrators.** `gild agent spawn-child <repo> <label> [--grants …]` lets an orchestrator agent create a child agent identity (scopes never wider than its own; token stored locally, never printed), and `gild agent suspend|resume <repo> <label>` takes an agent offline and back (gild-site#62) (#38).

@@ -23,7 +23,13 @@ import type { Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vsockChannel, vsockMembers, type BootTimings } from './firecracker'
-import { guestPing, type Isolation, type Opener } from './session'
+import {
+  checkGuestProtocol,
+  guestPing,
+  GuestProtocolError,
+  type Isolation,
+  type Opener,
+} from './session'
 
 export interface VzConfig {
   /** The signed gild-vz helper. */
@@ -211,9 +217,10 @@ export async function startVz(
     const open: Opener = () => vsockChannel(uds, cfg.port)
     for (;;) {
       try {
-        await guestPing(open)
+        checkGuestProtocol(await guestPing(open), cfg.rootfs)
         break
       } catch (e) {
+        if (e instanceof GuestProtocolError) throw e
         if (h.exitCode !== null || h.signalCode !== null) {
           const serial = await readFile(
             join(vmDir, 'serial.log'),
