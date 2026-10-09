@@ -18,7 +18,8 @@ export const orchestratorList = z.object({
   orchestrators: z.array(orchestratorGrant),
 })
 export const orchestratorInput = z.object({
-  agent: text.regex(/^@?[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9][a-z0-9-]{0,30}$/i),
+  /** sponsor/label of an existing agent (an unknown one answers 404). */
+  agent: text.min(1).max(80),
   child_limit: z.number().int().min(1).max(100).default(10),
 })
 export const orchestratorRevoked = z.object({
