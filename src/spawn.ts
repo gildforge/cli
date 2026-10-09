@@ -199,6 +199,9 @@ export function spawnCommands(
         message = Buffer.concat(chunks).toString('utf8')
       }
       await localRequest(socketPath(id, directory), { type: 'send', message })
+      // The sender (often another agent) needs to know the session accepted
+      // it; delivery waits for the agent to be ready (see gild status).
+      console.log(`queued for ${id}`)
     })
   program
     .command('status <id>')

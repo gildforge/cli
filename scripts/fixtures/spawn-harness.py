@@ -57,6 +57,7 @@ class Session:
     def send(self, text, stdin=False):
         result = self.cli('send', 'test', '-' if stdin else text, stdin=text.encode() if stdin else None)
         assert result.returncode == 0, result.stderr
+        assert result.stdout == b'queued for test\n', result.stdout
     def wait_exit(self, timeout=8):
         deadline = time.monotonic() + timeout
         while self.proc.poll() is None and time.monotonic() < deadline: self.read()
