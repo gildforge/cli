@@ -160,14 +160,22 @@ describe.skipIf(!ready)('filtered network, live', () => {
       const [ia, ib] = [await ipOf(a), await ipOf(b)]
       expect(ia).not.toBe(ib)
       // A listens (python socket, 25 s), B connects. Retry A's own connect until the listener is up.
-      const listener = run(
-        a,
-        `python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('${ia}',8099));s.listen(5);s.settimeout(25)
-t=time.time()
-while time.time()-t<25:
-    try: s.accept()
-    except Exception: pass"`,
+      await a.put(
+        '/tmp/listen.py',
+        `import socket, time
+s = socket.socket()
+s.bind(("${ia}", 8099))
+s.listen(5)
+s.settimeout(1)
+end = time.time() + 25
+while time.time() < end:
+    try:
+        s.accept()
+    except OSError:
+        pass
+`,
       )
+      const listener = run(a, 'python3 /tmp/listen.py')
       let own = { code: 1, out: '' }
       for (let i = 0; i < 10 && own.code !== 0; i++) {
         await Bun.sleep(500)
