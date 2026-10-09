@@ -31,9 +31,31 @@ export interface Isolation {
   exec(argv: string[], options: ExecOptions): Promise<number>
   /** Interactive program on a guest pty (spawn --vm). */
   pty?(request: PtyRequest): Promise<PtyHandle>
+  /** Read the guest file tree (working-directory sync); backends without a copy omit it. */
+  files?: GuestFiles
   /** Messages the guest initiates toward the host on a vsock port (hooks). */
   onGuestMessage?(port: number, handler: (message: any) => void): void
   close(): Promise<void>
+}
+
+/** One entry under a sync root, the same shape the guest agent's `list` op returns. */
+export interface Entry {
+  /** Path relative to the root, `/`-separated. */
+  p: string
+  /** `f` regular file, `d` directory, `l` symlink. */
+  k: 'f' | 'd' | 'l'
+  /** Permission bits (0 for symlinks). */
+  m: number
+  s?: number
+  /** sha256 hex of the content (files). */
+  h?: string
+  /** Link target (symlinks). */
+  t?: string
+}
+
+export interface GuestFiles {
+  list(root: string): Promise<Entry[]>
+  read(path: string): Promise<Buffer>
 }
 
 export interface PtyRequest {
@@ -66,6 +88,7 @@ function frame(value: unknown): Buffer {
 
 type Reply =
   | { t: 'out' | 'err'; d: string }
+  | { t: 'entries'; e: Entry[] }
   | { t: 'exit'; code: number; timed_out: boolean }
   | { t: 'ok' }
   | { t: 'error'; message: string }
@@ -143,6 +166,29 @@ export async function guestPut(
       return r.t === 'ok' ? true : undefined
     },
   )
+}
+
+export function guestFiles(open: Opener): GuestFiles {
+  return {
+    async list(root) {
+      const all: Entry[] = []
+      await converse<true>(open, { op: 'list', root }, undefined, (r) => {
+        if (r.t === 'error') throw new Error(r.message)
+        if (r.t === 'entries') all.push(...r.e)
+        return r.t === 'ok' ? true : undefined
+      })
+      return all
+    },
+    async read(path) {
+      const parts: Buffer[] = []
+      await converse<true>(open, { op: 'get', path }, undefined, (r) => {
+        if (r.t === 'error') throw new Error(r.message)
+        if (r.t === 'out') parts.push(Buffer.from(r.d, 'base64'))
+        return r.t === 'ok' ? true : undefined
+      })
+      return Buffer.concat(parts)
+    },
+  }
 }
 
 export async function guestExec(

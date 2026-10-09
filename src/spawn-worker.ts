@@ -19,12 +19,14 @@ import { GildClient } from './api/client'
 import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
+import { describeSync, type SyncResult } from './isolation/sync'
 import {
   MAX_MESSAGE_BYTES,
   removeDeadSocket,
   privateSessionsDirectory,
   socketPath,
   type LocalSession,
+  type SyncSummary,
 } from './spawn-sessions'
 
 type Options = {
@@ -168,7 +170,21 @@ function finish(code: number, terminate = true) {
       try {
         killGroup('SIGKILL')
       } catch {}
-      void (reporter?.close() ?? Promise.resolve()).finally(() => {
+      // --vm: the guest's last changes come back before the VM is stopped.
+      const vm =
+        child && 'dispose' in child
+          ? child.dispose().then((r) => {
+              if (!r) return
+              console.error(
+                `gild: working directory synced from the VM: ${describeSync(r)}`,
+              )
+              for (const c of r.conflicts)
+                console.error(
+                  `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+                )
+            })
+          : undefined
+      void Promise.all([reporter?.close(), vm]).finally(() => {
         // A signal exit cannot wait forever for a terminal reader that stopped.
         if (terminate) setTimeout(() => process.exit(code), 250)
         void output.flush().then(() => process.exit(code))
@@ -293,6 +309,17 @@ async function main() {
             }
           }
           socket.end()
+          return
+        }
+        if (request.type === 'sync') {
+          if (!child || !('dispose' in child))
+            throw new Error('sync applies to gild spawn --vm sessions only')
+          socket.setTimeout(0)
+          void child.sync().then(
+            (r) => socket.end(JSON.stringify(summary(r)) + '\n'),
+            (e: Error) =>
+              socket.end(JSON.stringify({ error: e.message }) + '\n'),
+          )
           return
         }
         if (request.type === 'info') {
@@ -479,9 +506,16 @@ async function main() {
   child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
   child.onExit(({ exitCode, signal }) => {
-    if ('dispose' in child!) void (child as VmChild).dispose()
     finish(signal ? 128 + signal : exitCode, false)
   })
+}
+function summary(r: SyncResult): SyncSummary {
+  return {
+    written: r.written.length,
+    deleted: r.deleted.length,
+    rejected: r.rejected.length,
+    conflicts: r.conflicts.slice(0, 100),
+  }
 }
 const started = new Date().toISOString()
 main().catch(failed)
