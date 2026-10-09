@@ -29,6 +29,7 @@ import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
+import { spawnCommands } from './spawn'
 import { tailEvents } from './events-tail'
 import { sessionInput } from './api/sessions-contract'
 import { redactSession } from './session-redaction'
@@ -1088,6 +1089,7 @@ sessionCmd
   })
 
 runnerCommands(program, loadIdentity)
+spawnCommands(program)
 
 if (import.meta.main)
   program.parseAsync().catch((error) => {

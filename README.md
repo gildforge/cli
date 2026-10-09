@@ -73,3 +73,53 @@ Source authors and timestamps are retained with explicit imported attribution. H
 Git packs stay on disk and stream through a live repository-scoped import credential. Native Git is required. Request batches stay bounded; interrupted item IDs replay safely. Generated import contracts, source adapters and Actions support come from the site repository.
 
 -codex
+
+## Local terminal agents
+
+```sh
+gild spawn claude --name writer
+gild spawn codex --name reviewer --idle-ms 1500
+# In another terminal:
+gild sessions                         # id, executable, cwd, owner pid, start time
+gild send writer "Review the README"
+printf 'First line\nSecond line\n' | gild send reviewer -
+# Pass agent arguments after -- (including options also understood by gild):
+gild spawn codex --name reviewer -- --no-alt-screen
+```
+
+The agent owns its normal TUI, colours, keyboard handling and exit status. Gild
+forwards terminal bytes and size changes and queues incoming messages until
+keyboard input has been idle for 1500 ms (`--idle-ms` accepts 0–60000). This is
+an idle heuristic: it does not detect whether the agent is generating a reply,
+and a paused, partially typed draft may receive a message after the idle timeout.
+Multi-line messages use bracketed paste and a final Enter. Injected messages
+cannot contain terminal controls other than newline and tab; keyboard input is
+forwarded unchanged. `send` acknowledges acceptance into the bounded queue, not
+completion of an agent response. Pending messages are discarded when the agent
+exits. Messages and terminal output are not recorded.
+
+Sessions use `~/.gild/sessions/<id>.sock` (0600 in a 0700 directory), accessible
+only to the current local user. Names are 1–32 letters, digits, underscores or
+hyphens; automatic names include a random suffix. `sessions --json` includes the
+PTY owner and child PIDs. Listing removes sockets whose owner no longer accepts
+connections. Duplicate names fail without disturbing the existing session.
+Windows is explicitly unsupported in v1. No forge identity or token is needed.
+
+`spawn` requires Node.js on PATH and the optional `node-pty` native dependency.
+The npm `gildforge` package installs it; do not omit optional dependencies. The
+other CLI commands still work if the addon is unavailable. Upstream 1.1.0 ships
+macOS prebuilds; Linux installation needs Python and C++ build tools for its
+native build. Bun installs trust the `node-pty` build script. Gild fixes the
+missing executable permission on the upstream macOS spawn helper before use.
+
+The standalone Bun binary embeds a Node companion, but **a downloaded binary
+alone cannot run `spawn`**: it has no native addon beside it. Use the npm install
+for PTY sessions. In local testing `node-pty` loaded in Bun but its terminal read
+path hung; the Node companion owns the PTY instead. See
+[node-pty](https://github.com/microsoft/node-pty) for the native dependency and
+[Bun macros](https://bun.sh/docs/bundler/macros) for embedding the companion. The
+socket is a message source for the injection queue; a later channel subscription
+can enqueue mentions through the same interface. Channel/token flags are not
+implemented in v1.
+
+-codex
