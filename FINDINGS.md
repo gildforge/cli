@@ -56,6 +56,23 @@ Caveat, stated plainly: the LAN and metadata results for container and vm are "b
 
 One idempotent script, run once as root: bridge `gildbr0` plus a pool of 16 tap devices owned by the runner user and isolated from each other, a docker network `gild-egress` on bridge `gildbr1`, and an nftables table `inet gild_vm`: guests may reach the internet (masqueraded) but not the host (input from the bridges is dropped), nor 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 (metadata), loopback or multicast; all guest IPv6 is dropped; nothing initiates connections toward guests. The rules are installed before any bridge or tap exists. `down` removes everything; `--persist` writes a systemd unit.
 
+### Live proof on demon (after `sudo scripts/vm-network-setup.sh`)
+
+`src/isolation/network.e2e.test.ts`; same probes in a guest, and a control that the host itself reaches every blocked target (listener on 0.0.0.0:18099 plus real LAN hosts), so "blocked" is the isolation.
+
+| probe | host (control) | container (gild-egress) | vm |
+|---|---|---|---|
+| https://gild.gg | n/a | reachable | PENDING (see below) |
+| DNS `getent hosts gild.gg` | n/a | reachable | PENDING |
+| demon IPs 192.168.1.107, 192.168.1.79, 172.30.0.1, 172.19.0.1, 172.18.0.1, 10.139.0.1 (LAN, bridges) | reachable | blocked | blocked |
+| demon tailnet IP 100.98.66.98 | reachable | blocked | blocked |
+| LAN hosts 192.168.1.254:80, 192.168.1.29:80 | reachable | blocked | blocked |
+| 100.100.100.100:80 (100.64/10) | reachable | blocked | blocked |
+| bridge gateway 172.31.255.1 | reachable | blocked | blocked |
+| 169.254.169.254:80 | no route on this host | blocked | blocked |
+
+VM internet is NOT yet proven: the VM gets its tap and address, but forwarded packets are dropped, because docker sets the iptables FORWARD policy to DROP and only accepts its own bridges (the container on `gild-egress` works because docker adds its own accept). Fix pushed in `scripts/vm-network-setup.sh` (accept `gildbr0` in `DOCKER-USER`; our nft drops run first and are final). It needs the script run once more as root; the VM column and "two VMs cannot reach each other" are then re-run with `bun test src/isolation/network.e2e.test.ts`.
+
 Runtime behaviour (`src/isolation/network.ts`): `egress: auto` (default) gives a VM a tap when the bridge and taps exist and are owned by this user, otherwise no network device; `block` never; `allow` refuses to start with "Needs Sami" if not set up. Containers follow the same rule with the `gild-egress` network (never the default bridge). The state is printed in `gild status` and in every job log. Tested both ways (`network.test.ts`: state detection, slot locks incl. dead-pid takeover, auto/block/allow, container network). **Not tested live:** the nftables ruleset itself (`nft -c` needs root) and a VM actually using a tap.
 
 ## gild spawn --vm
