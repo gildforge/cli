@@ -7,6 +7,8 @@ import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { loadHostConfig, parseLevel, statusLines } from './isolation'
 import { Command, InvalidArgumentError } from 'commander'
 import { spawnWorkerSource } from './spawn-bundle' with { type: 'macro' }
 import {
@@ -204,9 +206,28 @@ export function spawnCommands(
       console.log(`queued for ${id}`)
     })
   program
-    .command('status <id>')
-    .description('inspect a live local agent session')
-    .action(async (id: string) => {
+    .command('status [id]')
+    .description(
+      "inspect a live local agent session, or (no id) show this machine's isolation",
+    )
+    .option(
+      '--isolation <level>',
+      'with no id: show the outcome of this request',
+    )
+    .option(
+      '--config-dir <path>',
+      'gild config directory',
+      join(homedir(), '.config', 'gild'),
+    )
+    .action(async (id: string | undefined, opts) => {
+      if (!id) {
+        const host = await loadHostConfig(opts.configDir)
+        for (const line of statusLines(host, {
+          flag: parseLevel(opts.isolation, '--isolation'),
+        }))
+          console.log(line)
+        return
+      }
       const directory = await privateSessionsDirectory()
       console.log(
         JSON.stringify(

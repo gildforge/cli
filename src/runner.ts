@@ -10,6 +10,15 @@ import {
 
 import { GildClient, requestPath } from './api/client'
 import {
+  describe as describeIsolation,
+  loadHostConfig,
+  parseLevel,
+  resolveForHost,
+  startIsolation,
+  type Isolation,
+  type Level,
+} from './isolation'
+import {
   chmod,
   mkdir,
   readFile,
@@ -73,6 +82,8 @@ export interface RunnerStep {
 }
 export interface Assignment {
   schema: 1
+  /** `isolation:` from the workflow job, when the forge sends one. */
+  isolation?: string
   checkoutToken?: string
   workspaceToken: string
   github: Record<string, string>
@@ -484,6 +495,7 @@ export async function executeJob(
   job: Assignment,
   root: string,
   outer: AbortSignal,
+  isolationFlag?: string,
 ) {
   if (job.schema !== 1) throw new Error('unsupported runner protocol version')
   if (!/^[0-9a-f]{40}$/.test(job.sha) || job.repository !== config.repo)
@@ -534,9 +546,39 @@ export async function executeJob(
       if (!logCounters.has(step)) logCounters.set(step, { next: 0 })
       return logCounters.get(step)!
     }
+  let session: Isolation | null = null
+  // Every step goes through here: locally, or through the isolation session.
+  const run = (
+    args: string[],
+    cwd: string,
+    env: Record<string, string>,
+    signal: AbortSignal,
+    output: (line: string) => Promise<void>,
+    timeout: number,
+  ): Promise<number> => {
+    if (!session) return command(args, cwd, env, signal, output, timeout)
+    const g = (t: string) => t.replaceAll(work, session!.guestPath(work))
+    return session.exec(args.map(g), {
+      cwd: g(cwd),
+      env: {
+        ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, g(v)])),
+        // Host PATH means nothing inside the guest.
+        PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      },
+      timeoutMs: timeout,
+      signal,
+      onLine: output,
+    })
+  }
   try {
     const bootstrap = new LogBatch(config, job, 0, counter(0))
     try {
+      const hostIsolation = await loadHostConfig(root),
+        resolved = resolveForHost(hostIsolation, {
+          flag: parseLevel(isolationFlag, '--isolation'),
+          job: parseLevel(job.isolation, 'job isolation'),
+        })
+      await bootstrap.line(`[gild: ${describeIsolation(resolved)}]`)
       // Runner-scoped token proves only this repo's read/job access; no owner
       // API token or git credentials are available to workflow subprocesses.
       const gitEnv = {
@@ -598,6 +640,15 @@ export async function executeJob(
         (s) => bootstrap.line(s),
         30_000,
       )
+      // The token-bearing clone above stays on the host; only steps are isolated.
+      session = await startIsolation(
+        resolved.level,
+        hostIsolation,
+        work,
+        join(dirname(work), `vm-${job.lease}`),
+        (l) => void bootstrap.line(`[gild: ${l}]`),
+      )
+      if (session) await bootstrap.line(`[gild: steps run in ${session.label}]`)
     } finally {
       await bootstrap.close()
     }
@@ -660,7 +711,8 @@ export async function executeJob(
             `step-${i}.${s.shell === 'pwsh' || s.shell === 'powershell' ? 'ps1' : 'script'}`,
           )
           await writeFile(script, s.run + '\n', { mode: 0o600 })
-          exit = await command(
+          await session?.put(script, s.run + '\n')
+          exit = await run(
             shellCommand(s.shell, script),
             cwd,
             env,
@@ -685,7 +737,7 @@ export async function executeJob(
               `[gild: ${s.uses} is a no-op; artifacts and dependency caches are not uploaded]`,
             )
             exit = 0
-          } else if (action === 'actions/setup-node') {
+          } else if (action === 'actions/setup-node' && !session) {
             const signal = AbortSignal.any([
               controller.signal,
               AbortSignal.timeout(Math.min(s.timeout, job.timeout)),
@@ -697,7 +749,7 @@ export async function executeJob(
               env,
               signal,
               (args, actionEnv) =>
-                command(
+                run(
                   args,
                   cwd,
                   actionEnv,
@@ -715,7 +767,7 @@ export async function executeJob(
                 '[gild: dependency cache options are a no-op on this machine]',
               )
             const output: string[] = []
-            exit = await command(
+            exit = await run(
               tool.command,
               cwd,
               env,
@@ -773,6 +825,9 @@ export async function executeJob(
     clearTimeout(deadline)
     outer.removeEventListener('abort', cancel)
     try {
+      await (session as Isolation | null)?.close()
+    } catch {}
+    try {
       await request(config, 'runners/finish', {
         job: job.job,
         lease: job.lease,
@@ -790,6 +845,7 @@ export async function startRunner(
   root: string,
   signal: AbortSignal,
   once = false,
+  isolation?: string,
 ) {
   while (!signal.aborted) {
     if (config.scope === 'org' || config.scope === 'user') {
@@ -831,7 +887,7 @@ export async function startRunner(
           token: job.checkoutToken,
         }
       : config
-    const status = await executeJob(jobConfig, job, root, signal)
+    const status = await executeJob(jobConfig, job, root, signal, isolation)
     console.log(`Run #${job.run}: ${status}`)
     if (once) return status
   }
@@ -954,7 +1010,12 @@ export function runnerCommands(
     .option('--config-dir <path>', 'gild config directory', configRoot())
     .option('--allow-root', 'explicitly allow running as root')
     .option('--once', 'run at most one job and exit')
+    .option(
+      '--isolation <level>',
+      'vm, container, host or none (none = unisolated); default per isolation.json',
+    )
     .action(async (opts) => {
+      parseLevel(opts.isolation, '--isolation')
       assertRunnerHost(opts.allowRoot)
       const configs = await listRunners(opts.configDir),
         config = opts.name
@@ -974,7 +1035,13 @@ export function runnerCommands(
         `${config.name} waiting for ${config.repo ?? config.owner} (${config.labels.join(', ') || 'OS and architecture labels'})`,
       )
       try {
-        await startRunner(config, opts.configDir, c.signal, opts.once)
+        await startRunner(
+          config,
+          opts.configDir,
+          c.signal,
+          opts.once,
+          opts.isolation,
+        )
       } finally {
         process.removeListener('SIGINT', stop)
         process.removeListener('SIGTERM', stop)

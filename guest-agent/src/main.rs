@@ -1,0 +1,284 @@
+//! gild guest agent: one exec contract for every isolation backend.
+//!
+//! Wire format (both directions): `[u32 big-endian length][JSON]`.
+//!
+//! Host to agent, one request per connection:
+//!   {"op":"put","path":"/workspace/x","mode":384,"content":"<base64>"}
+//!   {"op":"exec","argv":[..],"env":{..},"cwd":"/workspace","timeout_ms":1000}
+//!   {"op":"ping"}
+//! Agent to host:
+//!   {"t":"out","d":"<base64>"} / {"t":"err","d":"<base64>"}   (exec, streamed)
+//!   {"t":"exit","code":0,"timed_out":false}                   (exec, last frame)
+//!   {"t":"ok"} / {"t":"error","message":".."}                 (put, ping)
+//!
+//! Secrets travel only inside `env` of an exec request, over vsock or the
+//! container's stdio; they are never written to disk or put in argv.
+//! Closing the connection kills the running step's process group.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+const MAX_FRAME: usize = 64 * 1024 * 1024;
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum Request {
+    Ping,
+    Put { path: String, mode: Option<u32>, content: String },
+    Exec {
+        argv: Vec<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+        timeout_ms: Option<u64>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "t", rename_all = "lowercase")]
+enum Reply<'a> {
+    Out { d: &'a str },
+    Err { d: &'a str },
+    Exit { code: i32, timed_out: bool },
+    Ok,
+    Error { message: String },
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        out.push(B64[(n >> 18) as usize & 63] as char);
+        out.push(B64[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0);
+    for b in s.bytes() {
+        if b == b'=' {
+            break;
+        }
+        let v = B64.iter().position(|&x| x == b).ok_or("bad base64")? as u32;
+        acc = acc << 6 | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
+trait Conn: Read + Write + Send {
+    fn try_clone_box(&self) -> std::io::Result<Box<dyn Conn>>;
+}
+
+struct VsockConn(std::fs::File);
+impl Read for VsockConn { fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> { self.0.read(b) } }
+impl Write for VsockConn { fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { self.0.write(b) } fn flush(&mut self) -> std::io::Result<()> { self.0.flush() } }
+impl Conn for VsockConn {
+    fn try_clone_box(&self) -> std::io::Result<Box<dyn Conn>> { Ok(Box::new(VsockConn(self.0.try_clone()?))) }
+}
+
+struct StdioConn;
+impl Read for StdioConn { fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> { std::io::stdin().lock().read(b) } }
+impl Write for StdioConn {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { std::io::stdout().lock().write(b) }
+    fn flush(&mut self) -> std::io::Result<()> { std::io::stdout().lock().flush() }
+}
+impl Conn for StdioConn { fn try_clone_box(&self) -> std::io::Result<Box<dyn Conn>> { Ok(Box::new(StdioConn)) } }
+
+fn read_frame(r: &mut dyn Read) -> std::io::Result<Option<Vec<u8>>> {
+    let mut h = [0u8; 4];
+    match r.read_exact(&mut h) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let n = u32::from_be_bytes(h) as usize;
+    if n > MAX_FRAME {
+        return Err(std::io::Error::other("frame too large"));
+    }
+    let mut buf = vec![0u8; n];
+    r.read_exact(&mut buf)?;
+    Ok(Some(buf))
+}
+
+fn send(w: &Mutex<Box<dyn Conn>>, reply: &Reply) -> std::io::Result<()> {
+    let body = serde_json::to_vec(reply).map_err(std::io::Error::other)?;
+    let mut w = w.lock().unwrap();
+    w.write_all(&(body.len() as u32).to_be_bytes())?;
+    w.write_all(&body)?;
+    w.flush()
+}
+
+fn handle(mut conn: Box<dyn Conn>) {
+    let frame = match read_frame(&mut conn) {
+        Ok(Some(f)) => f,
+        _ => return,
+    };
+    let req: Request = match serde_json::from_slice(&frame) {
+        Ok(r) => r,
+        Err(e) => {
+            let w = Mutex::new(conn);
+            let _ = send(&w, &Reply::Error { message: format!("bad request: {e}") });
+            return;
+        }
+    };
+    let mut reader = match conn.try_clone_box() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let w = Arc::new(Mutex::new(conn));
+    match req {
+        Request::Ping => {
+            let _ = send(&w, &Reply::Ok);
+        }
+        Request::Put { path, mode, content } => {
+            let res = b64_decode(&content).map_err(|e| e.to_string()).and_then(|bytes| {
+                if let Some(p) = std::path::Path::new(&path).parent() {
+                    std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode.unwrap_or(0o600))).map_err(|e| e.to_string())
+            });
+            let _ = send(&w, &match res { Ok(()) => Reply::Ok, Err(message) => Reply::Error { message } });
+        }
+        Request::Exec { argv, env, cwd, timeout_ms } => {
+            let Some(prog) = argv.first() else {
+                let _ = send(&w, &Reply::Error { message: "empty argv".into() });
+                return;
+            };
+            let mut cmd = Command::new(prog);
+            cmd.args(&argv[1..])
+                .env_clear()
+                .envs(&env)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if let Some(c) = cwd {
+                cmd.current_dir(c);
+            }
+            // Own process group so a timeout or a closed connection kills the whole tree.
+            unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = send(&w, &Reply::Err { d: &b64_encode(format!("gild-guest-agent: cannot start {prog}: {e}\n").as_bytes()) });
+                    let _ = send(&w, &Reply::Exit { code: 127, timed_out: false });
+                    return;
+                }
+            };
+            let pgid = child.id() as i32;
+            let mut pumps = Vec::new();
+            for (stream, is_err) in [
+                (child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>), false),
+                (child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>), true),
+            ] {
+                let Some(mut s) = stream else { continue };
+                let w = w.clone();
+                pumps.push(std::thread::spawn(move || {
+                    let mut buf = [0u8; 16384];
+                    while let Ok(n) = s.read(&mut buf) {
+                        if n == 0 { break }
+                        let d = b64_encode(&buf[..n]);
+                        let r = if is_err { Reply::Err { d: &d } } else { Reply::Out { d: &d } };
+                        if send(&w, &r).is_err() { break }
+                    }
+                }));
+            }
+            // Host going away (cancel) = EOF on the connection: kill the group.
+            let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            {
+                let gone = gone.clone();
+                std::thread::spawn(move || {
+                    let mut b = [0u8; 1];
+                    loop {
+                        match reader.read(&mut b) {
+                            Ok(0) | Err(_) => { gone.store(true, std::sync::atomic::Ordering::SeqCst); break }
+                            Ok(_) => {}
+                        }
+                    }
+                });
+            }
+            let start = Instant::now();
+            let limit = timeout_ms.map(Duration::from_millis);
+            let mut timed_out = false;
+            let code = loop {
+                match child.try_wait() {
+                    Ok(Some(st)) => break st.code().unwrap_or_else(|| {
+                        use std::os::unix::process::ExitStatusExt;
+                        128 + st.signal().unwrap_or(0)
+                    }),
+                    Ok(None) => {}
+                    Err(_) => break 1,
+                }
+                let expired = limit.is_some_and(|l| start.elapsed() > l);
+                if expired || gone.load(std::sync::atomic::Ordering::SeqCst) {
+                    timed_out = expired;
+                    unsafe { libc::kill(-pgid, libc::SIGKILL); }
+                    let _ = child.wait();
+                    break if expired { 124 } else { 130 };
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            // Leftover background processes must not outlive the step.
+            unsafe { libc::kill(-pgid, libc::SIGKILL); }
+            for p in pumps { let _ = p.join(); }
+            let _ = send(&w, &Reply::Exit { code, timed_out });
+        }
+    }
+}
+
+fn vsock_listen(port: u32) -> std::io::Result<i32> {
+    #[repr(C)]
+    struct SockaddrVm { family: u16, reserved: u16, port: u32, cid: u32, flags: u8, zero: [u8; 3] }
+    unsafe {
+        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
+        if fd < 0 { return Err(std::io::Error::last_os_error()) }
+        let addr = SockaddrVm { family: libc::AF_VSOCK as u16, reserved: 0, port, cid: libc::VMADDR_CID_ANY, flags: 0, zero: [0; 3] };
+        if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, std::mem::size_of::<SockaddrVm>() as u32) < 0
+            || libc::listen(fd, 16) < 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(fd)
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("--stdio") => handle(Box::new(StdioConn)),
+        Some("--vsock") => {
+            let port: u32 = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(9002);
+            let fd = match vsock_listen(port) {
+                Ok(fd) => fd,
+                Err(e) => { eprintln!("gild-guest-agent: vsock listen {port}: {e}"); std::process::exit(1) }
+            };
+            eprintln!("gild-guest-agent: listening on vsock {port}");
+            loop {
+                let c = unsafe { libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+                if c < 0 { continue }
+                use std::os::fd::FromRawFd;
+                let file = unsafe { std::fs::File::from_raw_fd(c) };
+                std::thread::spawn(move || handle(Box::new(VsockConn(file))));
+            }
+        }
+        _ => { eprintln!("usage: gild-guest-agent --vsock <port> | --stdio"); std::process::exit(2) }
+    }
+}
