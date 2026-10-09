@@ -37,7 +37,7 @@ type Options = {
   reporting?: boolean
   bridging?: boolean
   identity?: string
-  profile?: { name: string; channels?: string[] }
+  profile?: { name: string; channels?: string[]; on?: string[] }
   envAllowlist?: string[]
 }
 const options: Options = JSON.parse(process.argv[2])
@@ -440,6 +440,7 @@ async function main() {
       gild: options.hookCommand.map(shellQuote).join(' '),
       session: options.id,
       repos: options.profile.channels ?? [],
+      triggers: options.profile.on ?? [],
       file: join(directory, `${options.id}.mentions.json`),
       enqueue: (text, typed) => queue!.enqueue(text, typed),
       emit: broadcast,

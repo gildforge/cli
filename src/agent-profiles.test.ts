@@ -196,6 +196,60 @@ test('profile files reject tokens and secret fields without writing or echoing c
   }
 })
 
+test('profile triggers: --on is repeatable, grammar-validated, --clear-on clears', async () => {
+  const h = await home(),
+    f = await fixture(() => new Response('{}'))
+  try {
+    await f.agent()
+    const add = await run(
+      h,
+      [
+        'agent',
+        'add',
+        'test',
+        '--runtime',
+        'claude',
+        '--dir',
+        '.',
+        '--channel',
+        'owner/repo',
+        '--on',
+        'issues.labeled:triage',
+        '--on',
+        'issues.opened:triage',
+        '--on',
+        'pull_request.opened',
+      ],
+      f.root,
+    )
+    expect(add).toEqual({ code: 0, out: '', err: '' })
+    const path = join(h, '.gild/agents/test.json')
+    expect(JSON.parse(await readFile(path, 'utf8')).on).toEqual([
+      'issues.labeled:triage',
+      'issues.opened:triage',
+      'pull_request.opened',
+    ])
+    for (const bad of ['labeled', 'Issues.labeled', 'issues.', 'issues..x']) {
+      const rejected = await run(
+        h,
+        ['agent', 'edit', 'test', '--on', bad],
+        f.root,
+      )
+      expect(rejected.code).toBe(1)
+      expect(rejected.err).toContain('<event>.<action>[:<label>]')
+    }
+    // A rejected edit must not have touched the stored triggers.
+    expect(JSON.parse(await readFile(path, 'utf8')).on).toHaveLength(3)
+    expect(
+      await run(h, ['agent', 'edit', 'test', '--clear-on'], f.root),
+    ).toEqual({ code: 0, out: '', err: '' })
+    expect(JSON.parse(await readFile(path, 'utf8')).on).toBeUndefined()
+  } finally {
+    await rm(h, { recursive: true, force: true })
+    await f.close()
+  }
+})
+
 for (const [runtime, settings, expected] of [
   [
     'claude',

@@ -8,6 +8,7 @@ import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
 import { chatCommands } from './chat'
+import { issueCommands } from './issue'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
 import chalk from 'chalk'
@@ -1114,6 +1115,7 @@ async function chatClient(opts: { agent?: string; server?: string }) {
   return clientFor(opts.server ?? 'https://gild.gg', identity)
 }
 chatCommands(program, chatClient)
+issueCommands(program, chatClient)
 runnerCommands(program, loadIdentity)
 spawnCommands(
   program,
