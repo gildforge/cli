@@ -29,7 +29,28 @@ export interface Isolation {
   put(hostPath: string, content: string, mode?: number): Promise<void>
   /** Run a step; resolves with its exit code (124 timeout, 130 cancelled). */
   exec(argv: string[], options: ExecOptions): Promise<number>
+  /** Interactive program on a guest pty (spawn --vm). */
+  pty?(request: PtyRequest): Promise<PtyHandle>
+  /** Messages the guest initiates toward the host on a vsock port (hooks). */
+  onGuestMessage?(port: number, handler: (message: any) => void): void
   close(): Promise<void>
+}
+
+export interface PtyRequest {
+  argv: string[]
+  env: Record<string, string>
+  cwd: string
+  cols: number
+  rows: number
+}
+
+export interface PtyHandle {
+  write(data: Uint8Array | string): void
+  resize(cols: number, rows: number): void
+  onData(cb: (data: Buffer) => void): void
+  onExit(cb: (code: number) => void): void
+  /** Drop the connection: the guest hangs up the session. */
+  close(): void
 }
 
 export type Opener = () => Promise<Channel>
@@ -188,4 +209,64 @@ export async function guestExec(
   } finally {
     o.signal.removeEventListener('abort', relay)
   }
+}
+
+export async function guestPty(
+  open: Opener,
+  request: PtyRequest,
+): Promise<PtyHandle> {
+  const ch = await open()
+  let buf = Buffer.alloc(0),
+    exited = false,
+    dataCb: (d: Buffer) => void = () => {},
+    exitCb: (code: number) => void = () => {}
+  const done = (code: number) => {
+    if (exited) return
+    exited = true
+    exitCb(code)
+  }
+  ch.onData((chunk) => {
+    buf = Buffer.concat([buf, chunk])
+    while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
+      const n = buf.readUInt32BE(0)
+      const r = JSON.parse(buf.subarray(4, 4 + n).toString()) as Reply
+      buf = buf.subarray(4 + n)
+      if (r.t === 'out') dataCb(Buffer.from(r.d, 'base64'))
+      else if (r.t === 'exit') done(r.code)
+      else if (r.t === 'error') {
+        dataCb(Buffer.from(`gild: ${r.message}\r\n`))
+        done(127)
+      }
+    }
+  })
+  ch.onClose(() => done(129))
+  ch.write(frame({ op: 'pty', ...request }))
+  return {
+    write: (d) =>
+      ch.write(frame({ t: 'in', d: Buffer.from(d).toString('base64') })),
+    resize: (cols, rows) => ch.write(frame({ t: 'resize', cols, rows })),
+    onData: (cb) => (dataCb = cb),
+    onExit: (cb) => (exitCb = cb),
+    close: () => ch.close(),
+  }
+}
+
+/** Read one length-prefixed JSON message from a connection the guest opened. */
+export function readOneMessage(stream: {
+  on(event: 'data', cb: (c: Buffer) => void): unknown
+}): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let buf = Buffer.alloc(0)
+    stream.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk])
+      if (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0))
+        try {
+          resolve(
+            JSON.parse(buf.subarray(4, 4 + buf.readUInt32BE(0)).toString()),
+          )
+        } catch (e) {
+          reject(e)
+        }
+    })
+  })
 }

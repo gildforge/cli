@@ -2,6 +2,8 @@
 /bin/mount -t tmpfs tmpfs /tmp
 /bin/mount -t tmpfs tmpfs /run
 /bin/mount -t devtmpfs none /dev
+/bin/mkdir -p /dev/pts
+/bin/mount -t devpts devpts /dev/pts
 /bin/mount -t proc proc /proc
 /bin/mount -t sysfs sysfs /sys
 /bin/mount -t tmpfs tmpfs /root

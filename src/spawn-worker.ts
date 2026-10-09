@@ -11,6 +11,7 @@ import { realAgent, agentEnvironment } from './spawn-binary'
 import { StateReporter, type ReportTarget } from './spawn-report'
 import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
+import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
 import {
   MAX_MESSAGE_BYTES,
   removeDeadSocket,
@@ -31,6 +32,8 @@ type Options = {
   identity?: string
   profile?: { name: string; channels?: string[] }
   envAllowlist?: string[]
+  /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
+  vm?: { configDir: string }
 }
 const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
@@ -52,7 +55,7 @@ const reportConfig = options.reporting
       )
     })
   : undefined
-let child: IPty | undefined
+let child: IPty | VmChild | undefined
 let queue: InjectionQueue | undefined
 let path: string | undefined
 let ownsSocket = false
@@ -101,6 +104,7 @@ const output = new TerminalOutput(
 
 function killGroup(signal: NodeJS.Signals) {
   if (!child) return
+  if ('dispose' in child) return child.kill() // the guest hangs up its own group
   // node-pty's forkpty/setsid child owns this group, never gild's terminal group.
   try {
     process.kill(-child.pid, signal)
@@ -169,6 +173,12 @@ process.on('exit', () => {
 })
 
 async function fallback(error: unknown) {
+  if (options.vm) {
+    // Never quietly run an agent that was asked to be isolated on the host.
+    restore()
+    console.error(`gild: --vm failed: ${(error as Error).message}`)
+    process.exit(1)
+  }
   debugFallback(error)
   restore()
   ownsSocket = false
@@ -273,7 +283,7 @@ async function main() {
               : {}),
             cwd: process.cwd(),
             pid: process.pid,
-            childPid: child.pid,
+            childPid: 'dispose' in child ? -1 : child.pid,
             started,
             ...state,
             held: queue?.held,
@@ -340,6 +350,7 @@ async function main() {
   server.on('error', failed)
   const binary = realAgent(options.agent)
   const env = agentEnvironment(binary, options.envAllowlist)
+  const baseEnv = { ...env }
   try {
     const prepared = await adapter?.prepare(
       {
@@ -364,14 +375,25 @@ async function main() {
       prepared?.cleanup()
       return
     }
-    child = pty.spawn(binary, prepared?.args ?? options.args, {
-      name: 'xterm-256color',
-      cols: process.stdout.columns,
-      rows: process.stdout.rows,
-      cwd: process.cwd(),
-      env,
-      encoding: null,
-    })
+    child = options.vm
+      ? await startVmChild({
+          configDir: options.vm.configDir,
+          sessionId: options.id,
+          cwd: process.cwd(),
+          binary,
+          args: prepared?.args ?? options.args,
+          env: guestEnvironment(env, baseEnv, options.envAllowlist),
+          cols: process.stdout.columns || 80,
+          rows: process.stdout.rows || 24,
+        })
+      : pty.spawn(binary, prepared?.args ?? options.args, {
+          name: 'xterm-256color',
+          cols: process.stdout.columns,
+          rows: process.stdout.rows,
+          cwd: process.cwd(),
+          env,
+          encoding: null,
+        })
   } catch (error) {
     return fallback(error)
   }
@@ -396,9 +418,10 @@ async function main() {
   )
   child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
-  child.onExit(({ exitCode, signal }) =>
-    finish(signal ? 128 + signal : exitCode, false),
-  )
+  child.onExit(({ exitCode, signal }) => {
+    if ('dispose' in child!) void (child as VmChild).dispose()
+    finish(signal ? 128 + signal : exitCode, false)
+  })
 }
 const started = new Date().toISOString()
 main().catch(failed)

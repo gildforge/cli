@@ -3,7 +3,12 @@
 // per-VM ext4 image attached as a second drive, so the base image is never
 // written and nothing of the host is visible to the guest.
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { createConnection, type Socket } from 'node:net'
+import {
+  createConnection,
+  createServer,
+  type Server,
+  type Socket,
+} from 'node:net'
 import { tmpdir } from 'node:os'
 import {
   mkdir,
@@ -19,6 +24,8 @@ import { bootNetArgs, networkState, planNetwork } from './network'
 import {
   guestExec,
   guestPing,
+  guestPty,
+  readOneMessage,
   guestPut,
   type Channel,
   type Isolation,
@@ -163,6 +170,7 @@ export async function startFirecracker(
   const fc: ChildProcess = spawn(cfg.firecracker, ['--api-sock', apiSock], {
     stdio: ['ignore', serial.fd, serial.fd],
   })
+  const listeners: Server[] = []
   const kill = () => {
     try {
       fc.kill('SIGKILL')
@@ -252,7 +260,19 @@ export async function startFirecracker(
           mode,
         ),
       exec: (argv, o) => guestExec(open, argv, o),
+      pty: (request) => guestPty(open, request),
+      onGuestMessage: (port, handler) => {
+        // Firecracker maps a guest connection to host port N onto <uds>_N.
+        const server = createServer((c) => {
+          void readOneMessage(c)
+            .then(handler, () => {})
+            .finally(() => c.destroy())
+        })
+        server.listen(`${uds}_${port}`)
+        listeners.push(server)
+      },
       close: async () => {
+        for (const l of listeners) l.close()
         kill()
         await serial.close()
         await rm(sockDir, { recursive: true, force: true })

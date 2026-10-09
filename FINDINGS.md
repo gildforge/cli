@@ -1,6 +1,6 @@
 # gild microVM isolation: findings (first slice)
 
-Status: Firecracker and OCI-container isolation for `gild runner` work end to end on demon. `spawn --vm`, macOS (`vz`), the `host` tier and tap/nftables egress are NOT done in this PR (see "Next steps").
+Status: Firecracker and OCI-container isolation for `gild runner`, and `gild spawn --vm`, work end to end on demon. Egress is written but needs one root command to switch on. macOS (`vz`), Colima detection and the `host` tier are NOT done (see "Next steps").
 
 ## What the old gild code gave us, and what was rewritten
 
@@ -50,7 +50,19 @@ Run: `GILD_ISOLATION_E2E=<dir> bun test src/runner-isolation.e2e.test.ts` (see t
 | connect to 169.254.169.254 | blocked (no route on demon) | blocked | blocked |
 | secret in step env reaches the step, not argv/log/cmdline | ok | ok | ok |
 
-Caveat, stated plainly: the LAN and metadata results for container and vm are "blocked" because both run with **no network at all** (`egress: block`). That is not yet the brief's "egress allowed by default, LAN denied" mode.
+Caveat, stated plainly: the LAN and metadata results for container and vm are "blocked" because, on demon today, both run with **no network at all** (the network is not set up there). The filtered-egress mode is implemented and unit-tested, but NOT proven live because it needs root (below).
+
+## Egress (`scripts/vm-network-setup.sh`)
+
+One idempotent script, run once as root: bridge `gildbr0` plus a pool of 16 tap devices owned by the runner user and isolated from each other, a docker network `gild-egress` on bridge `gildbr1`, and an nftables table `inet gild_vm`: guests may reach the internet (masqueraded) but not the host (input from the bridges is dropped), nor 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 (metadata), loopback or multicast; all guest IPv6 is dropped; nothing initiates connections toward guests. The rules are installed before any bridge or tap exists. `down` removes everything; `--persist` writes a systemd unit.
+
+Runtime behaviour (`src/isolation/network.ts`): `egress: auto` (default) gives a VM a tap when the bridge and taps exist and are owned by this user, otherwise no network device; `block` never; `allow` refuses to start with "Needs Sami" if not set up. Containers follow the same rule with the `gild-egress` network (never the default bridge). The state is printed in `gild status` and in every job log. Tested both ways (`network.test.ts`: state detection, slot locks incl. dead-pid takeover, auto/block/allow, container network). **Not tested live:** the nftables ruleset itself (`nft -c` needs root) and a VM actually using a tap.
+
+## gild spawn --vm
+
+`gild spawn --vm claude` (fixture agent in tests): the host worker keeps the terminal, session socket, hooks, injection queue and report path; only the agent process runs on a pty inside a Firecracker VM (`guest-agent` op `pty`, forkpty, frames for input and resize). Hook commands inside the guest are `gild-guest-agent hook ...`, which forward over vsock (guest port 9100, host `<vsock uds>_9100`) to the host, accepted only for this session's id, and then delivered to the session socket exactly as before, so state, `gild send` gating and `gild events` behave the same. The guest env is a fixed baseline plus adapter additions and allowlisted names, never the host env. The current directory is packed into the VM (limit 2 GiB); changes inside the guest are not synced back yet. Script agents (the fixture) are copied into the guest; native agents must exist in the guest image. `--vm` never falls back to running on the host: no terminal, no Firecracker, or a failed boot is an error.
+
+Proof (`scripts/fixtures/vm-spawn-harness.py`, via `src/spawn-vm.test.ts`, on demon): agent cwd is `/workspace`, host env var absent in the guest, `gild send` delivered through the queue, hook-driven state idle -> busy -> idle, `gild events` stream, outer-terminal typing, resize 24x80 -> 40x120 seen by the guest pty, clean exit 0, no leftover firecracker process. Ready in 1.1 s including bun start-up.
 
 ## Needs Sami
 
@@ -72,8 +84,8 @@ Org/repo isolation floor in settings; runners report their capability set (level
 
 ## Next steps (issue-sized)
 
-1. `egress allow` for vm: tap manager + nftables rules, root setup command, test that LAN/metadata are denied while the internet works.
-2. `gild spawn --vm <agent>`: PTY bridge over vsock with resize; host keeps socket/hooks/queue; test with `scripts/fixtures/events-agent.py`.
+1. Run `sudo scripts/vm-network-setup.sh` on demon, then prove LAN/metadata denied and internet allowed from a VM and a container (and `nft -c` the ruleset).
+2. `spawn --vm`: sync guest changes back to the working directory; native agents in the guest image; model-login broker.
 3. macOS `vz` backend: port `gild-virt/macos.rs`, add disk + vsock, entitlement + ad-hoc codesign, Intel and arm64.
 4. Colima detection for `container` on macOS; `host` tier (unprivileged OS user).
 5. `actions/setup-*` and upload-artifact inside a guest (tools preinstalled today; artifacts are no-ops already).

@@ -59,6 +59,15 @@ export function spawnCommands(
       'report state with an approved local agent identity',
     )
     .option('--print-id', 'print the local session id to stderr')
+    .option(
+      '--vm',
+      'run the agent inside a Firecracker microVM (needs isolation.json)',
+    )
+    .option(
+      '--config-dir <path>',
+      'gild config directory (isolation.json)',
+      join(homedir(), '.config', 'gild'),
+    )
     .option('--name <id>', 'memorable local session name')
     .option(
       '--idle-ms <ms>',
@@ -71,7 +80,14 @@ export function spawnCommands(
       async (
         agent: string,
         args: string[],
-        opts: { name?: string; idleMs: number; as?: string; printId?: boolean },
+        opts: {
+          name?: string
+          idleMs: number
+          as?: string
+          printId?: boolean
+          vm?: boolean
+          configDir: string
+        },
       ) => {
         const resolved =
           agent === 'agent'
@@ -89,6 +105,13 @@ export function spawnCommands(
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
         const binary = realAgent(agent, cwd)
+        if (
+          opts.vm &&
+          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+        )
+          throw Error(
+            '--vm needs an interactive terminal; it never falls back to running on the host',
+          )
         if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
           process.exitCode = await runNative(
             binary,
@@ -125,13 +148,17 @@ export function spawnCommands(
               id,
               idleMs: opts.idleMs,
               resolveFrom,
-              hookCommand: import.meta.url.includes('$bunfs')
-                ? [process.execPath]
-                : [
-                    process.execPath,
-                    'run',
-                    new URL('./gild.ts', import.meta.url).pathname,
-                  ],
+              vm: opts.vm ? { configDir: opts.configDir } : undefined,
+              // Inside the guest the hook is the guest agent, which relays over vsock.
+              hookCommand: opts.vm
+                ? ['/usr/local/bin/gild-guest-agent']
+                : import.meta.url.includes('$bunfs')
+                  ? [process.execPath]
+                  : [
+                      process.execPath,
+                      'run',
+                      new URL('./gild.ts', import.meta.url).pathname,
+                    ],
               reporting: !!report,
               identity: identity?.agent,
               printId: opts.printId,
@@ -166,6 +193,7 @@ export function spawnCommands(
             )
           })
         } catch (error) {
+          if (opts.vm) throw error
           debugFallback(error)
           process.exitCode = await runNative(
             realAgent(agent, cwd),

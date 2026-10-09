@@ -29,6 +29,14 @@ const MAX_FRAME: usize = 64 * 1024 * 1024;
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request {
     Ping,
+    Pty {
+        argv: Vec<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    },
     Put { path: String, mode: Option<u32>, content: String },
     Exec {
         argv: Vec<String>,
@@ -42,11 +50,19 @@ enum Request {
 #[derive(Serialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 enum Reply<'a> {
+    /// pty replies reuse Out/Exit; Exit carries the code.
     Out { d: &'a str },
     Err { d: &'a str },
     Exit { code: i32, timed_out: bool },
     Ok,
     Error { message: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "t", rename_all = "lowercase")]
+enum PtyIn {
+    In { d: String },
+    Resize { cols: u16, rows: u16 },
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -147,6 +163,7 @@ fn handle(mut conn: Box<dyn Conn>) {
         Request::Ping => {
             let _ = send(&w, &Reply::Ok);
         }
+        Request::Pty { argv, env, cwd, cols, rows } => run_pty(w, reader, argv, env, cwd, cols, rows),
         Request::Put { path, mode, content } => {
             let res = b64_decode(&content).map_err(|e| e.to_string()).and_then(|bytes| {
                 if let Some(p) = std::path::Path::new(&path).parent() {
@@ -244,6 +261,128 @@ fn handle(mut conn: Box<dyn Conn>) {
     }
 }
 
+fn find_program(prog: &str, env: &HashMap<String, String>) -> Option<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    let candidates: Vec<std::path::PathBuf> = if prog.contains('/') {
+        vec![prog.into()]
+    } else {
+        env.get("PATH").map(String::as_str).unwrap_or("/usr/local/bin:/usr/bin:/bin")
+            .split(':').map(|d| std::path::Path::new(d).join(prog)).collect()
+    };
+    candidates.into_iter().find(|c| c.is_file()).and_then(|c| std::ffi::CString::new(c.as_os_str().as_bytes()).ok())
+}
+
+/// Run argv on a fresh pty. Host frames: {"t":"in","d":b64} / {"t":"resize","cols","rows"}.
+fn run_pty(
+    w: Arc<Mutex<Box<dyn Conn>>>,
+    mut reader: Box<dyn Conn>,
+    argv: Vec<String>,
+    env: HashMap<String, String>,
+    cwd: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) {
+    use std::ffi::CString;
+    let Some(first) = argv.first() else {
+        let _ = send(&w, &Reply::Error { message: "empty argv".into() });
+        return;
+    };
+    let Some(program) = find_program(first, &env) else {
+        let _ = send(&w, &Reply::Error { message: format!("cannot find {first}") });
+        return;
+    };
+    // Everything the child needs is prepared before fork: no allocation after it.
+    let c_argv: Vec<CString> = argv.iter().filter_map(|a| CString::new(a.as_str()).ok()).collect();
+    let mut p_argv: Vec<*const libc::c_char> = c_argv.iter().map(|c| c.as_ptr()).collect();
+    p_argv.push(std::ptr::null());
+    let c_env: Vec<CString> = env.iter().filter_map(|(k, v)| CString::new(format!("{k}={v}")).ok()).collect();
+    let mut p_env: Vec<*const libc::c_char> = c_env.iter().map(|c| c.as_ptr()).collect();
+    p_env.push(std::ptr::null());
+    let c_cwd = cwd.and_then(|c| CString::new(c).ok());
+    let mut ws = libc::winsize { ws_row: rows.unwrap_or(24), ws_col: cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
+    let mut master: libc::c_int = -1;
+    let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &mut ws) };
+    if pid < 0 {
+        let _ = send(&w, &Reply::Error { message: "forkpty failed".into() });
+        return;
+    }
+    if pid == 0 {
+        unsafe {
+            if let Some(c) = &c_cwd { libc::chdir(c.as_ptr()); }
+            libc::execve(program.as_ptr(), p_argv.as_ptr(), p_env.as_ptr());
+            libc::_exit(127);
+        }
+    }
+    // Host to pty.
+    std::thread::spawn(move || {
+        while let Ok(Some(frame)) = read_frame(&mut reader) {
+            match serde_json::from_slice::<PtyIn>(&frame) {
+                Ok(PtyIn::In { d }) => {
+                    if let Ok(bytes) = b64_decode(&d) {
+                        let mut off = 0;
+                        while off < bytes.len() {
+                            let n = unsafe { libc::write(master, bytes[off..].as_ptr() as *const _, bytes.len() - off) };
+                            if n <= 0 { break }
+                            off += n as usize;
+                        }
+                    }
+                }
+                Ok(PtyIn::Resize { cols, rows }) => unsafe {
+                    let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+                    libc::ioctl(master, libc::TIOCSWINSZ, &ws);
+                },
+                Err(_) => {}
+            }
+        }
+        // Host went away: hang up the session.
+        unsafe { libc::kill(-pid, libc::SIGHUP); libc::kill(pid, libc::SIGHUP); }
+    });
+    // pty to host, until the child closes the slave.
+    let mut buf = [0u8; 16384];
+    loop {
+        let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n <= 0 { break }
+        if send(&w, &Reply::Out { d: &b64_encode(&buf[..n as usize]) }).is_err() { break }
+    }
+    let mut status = 0;
+    unsafe { libc::waitpid(pid, &mut status, 0); }
+    let code = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { 128 + libc::WTERMSIG(status) };
+    let _ = send(&w, &Reply::Exit { code, timed_out: false });
+}
+
+/// `gild-guest-agent hook --session ID [--agent A] [json]`: the hook command inside the guest.
+/// Forwards the payload to the host over vsock (CID 2, port 9100); never fails the agent.
+fn hook(args: &[String]) {
+    #[repr(C)]
+    struct SockaddrVm { family: u16, reserved: u16, port: u32, cid: u32, flags: u8, zero: [u8; 3] }
+    let get = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let raw = match args.last() {
+        Some(l) if l.starts_with('{') => l.clone(),
+        _ => {
+            let mut s = String::new();
+            let _ = std::io::stdin().take(1 << 20).read_to_string(&mut s);
+            s
+        }
+    };
+    let msg = serde_json::json!({"op":"hook","session":get("--session"),"agent":get("--agent").unwrap_or_else(|| "claude".into()),"raw":raw});
+    unsafe {
+        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
+        if fd < 0 { return }
+        let tv = libc::timeval { tv_sec: 1, tv_usec: 0 };
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDTIMEO, &tv as *const _ as *const _, std::mem::size_of::<libc::timeval>() as u32);
+        let addr = SockaddrVm { family: libc::AF_VSOCK as u16, reserved: 0, port: 9100, cid: 2, flags: 0, zero: [0; 3] };
+        if libc::connect(fd, &addr as *const _ as *const libc::sockaddr, std::mem::size_of::<SockaddrVm>() as u32) == 0 {
+            use std::os::fd::FromRawFd;
+            let mut f = std::fs::File::from_raw_fd(fd);
+            let body = serde_json::to_vec(&msg).unwrap_or_default();
+            let _ = f.write_all(&(body.len() as u32).to_be_bytes());
+            let _ = f.write_all(&body);
+        } else {
+            libc::close(fd);
+        }
+    }
+}
+
 fn vsock_listen(port: u32) -> std::io::Result<i32> {
     #[repr(C)]
     struct SockaddrVm { family: u16, reserved: u16, port: u32, cid: u32, flags: u8, zero: [u8; 3] }
@@ -263,6 +402,7 @@ fn vsock_listen(port: u32) -> std::io::Result<i32> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("hook") => hook(&args[2..]),
         Some("--stdio") => handle(Box::new(StdioConn)),
         Some("--vsock") => {
             let port: u32 = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(9002);
