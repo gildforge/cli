@@ -8,7 +8,7 @@ WORKER = os.environ['TEST_WORKER']
 CASE = sys.argv[1]
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp', prefix='r-') as d:
     root=pathlib.Path(d)
-    native=root/'agent'
+    native=root/'claude'
     native.write_text('#!'+sys.executable+'\nimport json,os,sys,signal,time\n'
         'print(json.dumps({"args":sys.argv[1:],"oauth":os.getenv("CLAUDE_CODE_OAUTH_TOKEN"),"bedrock":os.getenv("CLAUDE_CODE_USE_BEDROCK"),"effort":os.getenv("CLAUDE_EFFORT"),"marker":os.getenv("CLAUDECODE"),"chain":os.getenv("GILD_SPAWN_CHAIN")}),flush=True)\n'
         'if "interrupt" in sys.argv:\n'
@@ -33,8 +33,11 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp', prefix='r-') as d:
             (module/'package.json').write_text('{"main":"index.js"}')
             (module/'index.js').write_text('exports.spawn = () => { throw new Error("fixture PTY creation failure") }')
             options['resolveFrom']=[str(root/'entry.js')]
+        if CASE=='windows':
+            options['agent']='claude'
+            env['PATH']=str(root)+os.pathsep+os.environ['PATH']
         prefix="Object.defineProperty(process, 'platform', {value:'win32'});" if CASE=='windows' else ''
-        cmd=[NODE,'--input-type=module','-e',prefix+'process.argv[1]='+json.dumps(json.dumps(options))+';await import('+json.dumps(pathlib.Path(WORKER).as_uri())+')']
+        cmd=[NODE,'--input-type=module','-e',prefix+'process.argv[2]='+json.dumps(json.dumps(options))+';await import('+json.dumps(pathlib.Path(WORKER).as_uri())+')']
     master=slave=None
     try:
         if interactive:

@@ -21,8 +21,8 @@ const mutations = [
   [
     'no-node',
     'src/spawn.ts',
-    'process.exitCode = await runNative(agent, args)\n        } finally',
-    'throw error\n        } finally',
+    'debugFallback(error)',
+    'throw error',
     'src/spawn-regressions.test.ts',
     'no-node',
   ],
@@ -68,6 +68,57 @@ const mutations = [
     'stale-start',
   ],
 ]
+if (process.argv[2] === 'events')
+  mutations.push(
+    [
+      'notify-config',
+      'src/spawn-adapters/codex-notify.ts',
+      'let command = notifyCommand(',
+      'let command = ([] as string[]); void notifyCommand(',
+      'src/spawn-notify.test.ts',
+      'Codex user notify',
+    ],
+    [
+      'notify-chain',
+      'src/spawn-hook.ts',
+      "args.indexOf('--notify-command')",
+      '-1',
+      'src/spawn-notify.test.ts',
+      'Codex user notify',
+    ],
+    [
+      'notify-overrides',
+      'src/spawn-adapters/codex-notify.ts',
+      'override = notifyCommand(parse(value).notify)',
+      'void parse(value)',
+      'src/spawn-notify.test.ts',
+      'Codex notify CLI',
+    ],
+    [
+      'notify-profile',
+      'src/spawn-adapters/codex-notify.ts',
+      'command = notifyCommand(selected.notify)',
+      'void selected.notify',
+      'src/spawn-notify.test.ts',
+      'Codex selected profile',
+    ],
+    [
+      'windows-command',
+      'src/spawn-binary.ts',
+      "if (platform === 'win32') return agent",
+      '',
+      'src/spawn-events.test.ts',
+      'Windows native fallback',
+    ],
+    [
+      'remove-depth',
+      'src/spawn-binary.ts',
+      'env.GILD_SPAWN_CHAIN = JSON.stringify(chain)',
+      "env.GILD_SPAWN_CHAIN = JSON.stringify(chain); env.GILD_SPAWN_DEPTH = '2'",
+      'src/spawn-events.test.ts',
+      'safe alias preserves',
+    ],
+  )
 mkdirSync('.tmp', { recursive: true })
 for (const [name, file, before, after, suite, filter, last] of mutations) {
   const original = readFileSync(file, 'utf8')

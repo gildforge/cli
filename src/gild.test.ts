@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { generateKeyPairSync } from 'node:crypto'
-import { signChallenge, verifyChallenge, fingerprint } from './gild'
+import { signChallenge, verifyChallenge, fingerprint } from './gild-main'
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const identity = {
@@ -42,7 +42,7 @@ test('fingerprint is stable and short', () => {
 })
 
 test('an agent join signature verifies against the key it filed', async () => {
-  const { agentJoinChallenge } = await import('./gild')
+  const { agentJoinChallenge } = await import('./gild-main')
   const signature = signChallenge(identity, agentJoinChallenge('abc123'))
   expect(
     verifyChallenge(identity.publicKey, 'gild-agent-join:abc123', signature),

@@ -1,9 +1,10 @@
+import type { SessionState } from './spawn-events'
 import { chmod, lstat, mkdir, readdir, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
 
-export type LocalSession = {
+export type LocalSession = SessionState & {
   id: string
   agent: string
   cwd: string

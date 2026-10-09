@@ -11,12 +11,19 @@ const path = z
       !/[\x00-\x1f]/.test(p),
     'Use a repository-relative path',
   )
+/** Optional live state; no prompts, tool arguments or hook payloads. */
+export const sessionState = z.object({
+  status: z.enum(['unknown', 'busy', 'idle', 'waiting', 'tool_start', 'tool_end', 'ended']),
+  tool: z.string().regex(/^[a-zA-Z0-9_.:/-]{1,160}$/).optional(),
+  last_activity: z.iso.datetime(),
+}).strict()
 export const sessionInput = z
   .object({
     id: z.string().uuid().optional(),
     agent: z.string().max(100).optional(),
     started_at: z.iso.datetime(),
     ended_at: z.iso.datetime().nullable().default(null),
+    state: sessionState.optional(),
     model: z.string().min(1).max(120),
     tokens_in: z.number().int().nonnegative().default(0),
     tokens_out: z.number().int().nonnegative().default(0),

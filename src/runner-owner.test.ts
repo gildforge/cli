@@ -160,7 +160,7 @@ test('service install invokes the native manager with a credential-free private 
   }
 })
 test('production nested runner command honors global config-dir and edits the requested group', async () => {
-  const { program } = await import('./gild')
+  const { program } = await import('./gild-main')
   const root = await mkdtemp(resolve('.tmp/owner-controls-'))
   const original = globalThis.fetch,
     calls: any[] = []
