@@ -97,14 +97,33 @@ export async function liveSessions(): Promise<LocalSession[]> {
       const result = await localRequest(path, { type: 'info' })
       if ('id' in result) sessions.push(result)
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ECONNREFUSED' || code === 'ENOENT') {
-        // A new owner may have bound this name since the failed connection.
-        const current = await lstat(path).catch(() => null)
-        if (current?.ino === socket.ino && current?.dev === socket.dev)
-          await unlink(path).catch(() => {})
-      } else throw error
+      if (!(await removeDeadSocket(path, error, socket))) throw error
     }
   }
   return sessions.sort((a, b) => a.started.localeCompare(b.started))
+}
+
+/** Probe first; unlink only a refused socket whose inode still belongs to that probe. */
+export async function removeDeadSocket(
+  path: string,
+  error?: unknown,
+  socket?: Awaited<ReturnType<typeof lstat>>,
+) {
+  socket ??= await lstat(path).catch(() => undefined)
+  if (!socket?.isSocket()) return false
+  if (!error) {
+    try {
+      await localRequest(path, { type: 'info' })
+      return false
+    } catch (probeError) {
+      error = probeError
+    }
+  }
+  const code = (error as NodeJS.ErrnoException).code
+  if (code !== 'ECONNREFUSED' && code !== 'ENOENT') return false
+  const current = await lstat(path).catch(() => undefined)
+  if (!current) return true
+  if (current.ino !== socket.ino || current.dev !== socket.dev) return false
+  await unlink(path)
+  return true
 }

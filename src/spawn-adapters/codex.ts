@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { originalNotify } from './codex-notify'
 import { CodexLogs } from './codex-logs'
 import { event, payload, type AgentAdapter } from './types'
 export const codexAdapter: AgentAdapter = {
@@ -13,6 +14,8 @@ export const codexAdapter: AgentAdapter = {
     ]
   },
   async prepare(context, args) {
+    const environment = context.environment ?? process.env
+    const original = await originalNotify(args, environment)
     const command = [
       ...context.command,
       'hook',
@@ -20,10 +23,17 @@ export const codexAdapter: AgentAdapter = {
       context.id,
       '--agent',
       'codex',
+      ...(original.command.length
+        ? ['--notify-command', JSON.stringify(original.command)]
+        : []),
     ]
     const logs = context.emit
       ? new CodexLogs(
-          join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions'),
+          join(
+            environment.CODEX_HOME ??
+              join(environment.HOME ?? homedir(), '.codex'),
+            'sessions',
+          ),
           context.id,
           context.emit,
         )
@@ -31,7 +41,7 @@ export const codexAdapter: AgentAdapter = {
     context.onCleanup?.(() => logs?.close())
     // JSON array syntax is also a TOML array of quoted strings.
     return {
-      args: ['-c', `notify=${JSON.stringify(command)}`, ...args],
+      args: ['-c', `notify=${JSON.stringify(command)}`, ...original.args],
       cleanup: () => logs?.close(),
       receive: (raw) => {
         void logs?.bind(raw)

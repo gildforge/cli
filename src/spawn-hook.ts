@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { socketPath, MAX_MESSAGE_BYTES } from './spawn-sessions'
 /** Deliberately independent of Commander, identity loading, API clients and PTYs. */
@@ -51,4 +52,23 @@ export async function runHook(args: string[]) {
       process.stdin.resume()
     }
   })
+  // The forwarding deadline bounds gild only; the caller's notifier retains its
+  // own runtime and receives exactly the payload argument Codex appended.
+  const index = args.indexOf('--notify-command')
+  if (index >= 0) {
+    const command: unknown = JSON.parse(args[index + 1])
+    if (
+      Array.isArray(command) &&
+      command.length &&
+      command.every((arg) => typeof arg === 'string')
+    ) {
+      await new Promise<void>((resolve) => {
+        const child = spawn(command[0], [...command.slice(1), args.at(-1)!], {
+          stdio: 'inherit',
+        })
+        child.once('error', () => resolve())
+        child.once('exit', () => resolve())
+      })
+    }
+  }
 }

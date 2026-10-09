@@ -439,3 +439,8 @@ test('native executables clear the wrapper chain for later nested agent launches
   const { agentEnvironment } = await import('./spawn-binary')
   expect(agentEnvironment('/bin/cat').GILD_SPAWN_CHAIN).toBe('[]')
 })
+
+test('Windows native fallback leaves command suffix lookup to the native process launcher', async () => {
+  const { realAgent } = await import('./spawn-binary')
+  expect(realAgent('claude.exe', '/unavailable', 'win32')).toBe('claude.exe')
+})

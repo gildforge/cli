@@ -110,8 +110,8 @@ const cases = [
   [
     'profile-environment',
     'src/spawn-binary.ts',
-    '(allowlist !== undefined && !allowlist.includes(name)) ||',
-    'false ||',
+    'allowlist && !allowlist.includes(name) && !baseline.includes(name)',
+    'false',
     'profile piped spawn',
   ],
   [

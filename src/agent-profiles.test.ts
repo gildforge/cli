@@ -235,7 +235,7 @@ test('profile piped spawn resolves cwd, relative commands, verbatim args and env
     await mkdir(dir)
     await writeFile(
       join(dir, 'native'),
-      '#!/usr/bin/env node\nconsole.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),keep:process.env.KEEP_TEST,drop:process.env.KEEP_DROP}))\n',
+      '#!/usr/bin/env node\nconsole.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),keep:process.env.KEEP_TEST,drop:process.env.KEEP_DROP,baseline:Object.fromEntries(["PATH","HOME","TERM","LANG","USER","SHELL","TMPDIR"].map(k=>[k,process.env[k]]))}))\n',
       { mode: 0o755 },
     )
     expect(
@@ -256,8 +256,6 @@ test('profile piped spawn resolves cwd, relative commands, verbatim args and env
           '--arg',
           'a b',
           '--env',
-          'PATH',
-          '--env',
           'KEEP_TEST',
         ])
       ).code,
@@ -266,7 +264,15 @@ test('profile piped spawn resolves cwd, relative commands, verbatim args and env
       h,
       ['spawn', 'agent', 'ava', '--resume', '--', '--as', 'literal'],
       undefined,
-      { KEEP_TEST: 'kept', KEEP_DROP: 'hidden' },
+      {
+        KEEP_TEST: 'kept',
+        KEEP_DROP: 'hidden',
+        TERM: 'native-test-term',
+        LANG: 'test-lang',
+        USER: 'test-user',
+        SHELL: '/fixture/shell',
+        TMPDIR: h,
+      },
     )
     expect(result.code).toBe(0)
     expect(result.err).toBe('')
@@ -274,6 +280,15 @@ test('profile piped spawn resolves cwd, relative commands, verbatim args and env
       cwd: dir,
       args: ['--native', 'a b', '--resume', '--', '--as', 'literal'],
       keep: 'kept',
+      baseline: {
+        PATH: process.env.PATH,
+        HOME: h,
+        TERM: 'native-test-term',
+        LANG: 'test-lang',
+        USER: 'test-user',
+        SHELL: '/fixture/shell',
+        TMPDIR: h,
+      },
     })
     expect(
       (await run(h, ['spawn', '--as', 'other', 'agent', 'ava'])).code,
@@ -287,7 +302,12 @@ test('profile piped spawn resolves cwd, relative commands, verbatim args and env
   }
 })
 
-for (const scenario of ['profile', 'profile-names', 'profile-local']) {
+for (const scenario of [
+  'profile',
+  'profile-names',
+  'profile-local',
+  'profile-stale',
+]) {
   test(`profile PTY: ${scenario}`, async () => {
     const script = 'events-harness.py'
     const proc = Bun.spawn(

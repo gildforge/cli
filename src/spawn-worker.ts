@@ -1,3 +1,4 @@
+import { runNative, debugFallback, supportsPty } from './spawn-native'
 import { createRequire } from 'node:module'
 import { chmodSync, unlinkSync } from 'node:fs'
 import { chmod } from 'node:fs/promises'
@@ -12,6 +13,7 @@ import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
 import {
   MAX_MESSAGE_BYTES,
+  removeDeadSocket,
   privateSessionsDirectory,
   socketPath,
   type LocalSession,
@@ -24,9 +26,9 @@ type Options = {
   idleMs: number
   resolveFrom: string[]
   hookCommand: string[]
+  printId?: boolean
   reporting?: boolean
   identity?: string
-  printId?: boolean
   profile?: { name: string; channels?: string[] }
   envAllowlist?: string[]
 }
@@ -86,6 +88,7 @@ function submitted() {
 }
 const sockets = new Set<Socket>()
 const wasRaw = process.stdin.isRaw ?? false
+let rawOwned = false
 const server = createServer()
 const output = new TerminalOutput(
   process.stdout.fd,
@@ -107,7 +110,10 @@ function killGroup(signal: NodeJS.Signals) {
 }
 function restore() {
   process.stdin.pause()
-  if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw)
+  if (rawOwned) {
+    process.stdin.setRawMode(wasRaw)
+    rawOwned = false
+  }
   queue?.close()
   adapterCleanup?.()
   adapterCleanup = undefined
@@ -162,9 +168,61 @@ process.on('exit', () => {
   } catch {}
 })
 
+async function fallback(error: unknown) {
+  debugFallback(error)
+  restore()
+  ownsSocket = false
+  closing = true
+  // Native stdio belongs to the child; PTY lifecycle handlers must not exit first.
+  process.removeAllListeners('SIGINT')
+  process.removeAllListeners('SIGTERM')
+  process.removeAllListeners('SIGHUP')
+  const binary = realAgent(options.agent)
+  const code = await runNative(
+    binary,
+    options.args,
+    process.cwd(),
+    agentEnvironment(binary, options.envAllowlist),
+  )
+  process.exit(code)
+}
 async function main() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY)
-    throw new Error('spawn requires an interactive terminal')
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+    return fallback('PTY unavailable')
+  let pty: typeof import('node-pty')
+  try {
+    let nodePty: string | undefined
+    for (const from of options.resolveFrom) {
+      try {
+        nodePty = createRequire(from).resolve('node-pty')
+        break
+      } catch {}
+    }
+    if (!nodePty)
+      throw new Error(
+        'spawn needs the optional node-pty dependency. Install gildforge with npm (without --omit=optional); standalone downloads do not include node-pty.',
+      )
+    const require = createRequire(nodePty)
+    // npm 1.1.0's macOS prebuild helper arrives without its executable bit.
+    const ptyRoot = dirname(nodePty)
+    if (process.platform === 'darwin') {
+      const helper = join(
+        ptyRoot,
+        '..',
+        'prebuilds',
+        `${process.platform}-${process.arch}`,
+        'spawn-helper',
+      )
+      try {
+        chmodSync(helper, 0o755)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    pty = require(nodePty)
+  } catch (error) {
+    return fallback(error)
+  }
   const directory = await privateSessionsDirectory()
   path = socketPath(options.id, directory)
   server.on('connection', (socket) => {
@@ -248,7 +306,7 @@ async function main() {
       }
     })
   })
-  for (let suffix = 1; ; suffix++) {
+  for (let suffix = 1, attempt = 0; ;) {
     path = socketPath(options.id, directory)
     try {
       await new Promise<void>((resolve, reject) => {
@@ -263,82 +321,63 @@ async function main() {
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
-      // The bind is the reservation, so concurrent profile launches cannot race.
+      if (attempt === 0 && (await removeDeadSocket(path))) {
+        attempt++
+        continue
+      }
       if (options.profile && suffix < 999999) {
-        options.id = `${options.profile.name}-${suffix + 1}`
+        options.id = `${options.profile.name}-${++suffix}`
+        attempt = 0
         continue
       }
       throw new Error(
-        `Session ${options.id} already exists; use another --name or run gild sessions to remove stale sockets`,
+        `Session ${options.id} already exists; use another --name`,
       )
     }
   }
-  if (options.printId) console.error(options.id)
   await chmod(path, 0o600)
   server.on('error', failed)
-  let nodePty: string | undefined
-  for (const from of options.resolveFrom) {
-    try {
-      nodePty = createRequire(from).resolve('node-pty')
-      break
-    } catch {}
-  }
-  if (!nodePty)
-    throw new Error(
-      'spawn needs the optional node-pty dependency. Install gildforge with npm (without --omit=optional); standalone downloads do not include node-pty.',
-    )
-  const require = createRequire(nodePty)
-  // npm 1.1.0's macOS prebuild helper arrives without its executable bit.
-  const ptyRoot = dirname(nodePty)
-  if (process.platform === 'darwin') {
-    const helper = join(
-      ptyRoot,
-      '..',
-      'prebuilds',
-      `${process.platform}-${process.arch}`,
-      'spawn-helper',
-    )
-    try {
-      chmodSync(helper, 0o755)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-  }
-  const pty: typeof import('node-pty') = require(nodePty)
   const binary = realAgent(options.agent)
   const env = agentEnvironment(binary, options.envAllowlist)
-  const prepared = await adapter?.prepare(
-    {
-      id: options.id,
-      directory,
-      command: options.hookCommand,
-      emit: publish,
-      onCleanup: (cleanup) => {
-        adapterCleanup = cleanup
-        if (closing) {
-          cleanup()
-          throw new Error('Session closed during adapter setup')
-        }
+  try {
+    const prepared = await adapter?.prepare(
+      {
+        id: options.id,
+        directory,
+        command: options.hookCommand,
+        emit: publish,
+        environment: env,
+        onCleanup: (cleanup) => {
+          adapterCleanup = cleanup
+          if (closing) {
+            cleanup()
+            throw new Error('Session closed during adapter setup')
+          }
+        },
       },
-    },
-    options.args,
-  )
-  adapterCleanup = prepared?.cleanup
-  adapterReceive = prepared?.receive
-  if (reportConfig) reporter = new StateReporter(await reportConfig!, 'unknown')
-  if (closing) {
-    prepared?.cleanup()
-    return
+      options.args,
+    )
+    adapterCleanup = prepared?.cleanup
+    adapterReceive = prepared?.receive
+    if (closing) {
+      prepared?.cleanup()
+      return
+    }
+    child = pty.spawn(binary, prepared?.args ?? options.args, {
+      name: 'xterm-256color',
+      cols: process.stdout.columns,
+      rows: process.stdout.rows,
+      cwd: process.cwd(),
+      env,
+      encoding: null,
+    })
+  } catch (error) {
+    return fallback(error)
   }
+  if (reportConfig) reporter = new StateReporter(await reportConfig!, 'unknown')
   process.stdin.setRawMode(true)
-  child = pty.spawn(binary, prepared?.args ?? options.args, {
-    name: 'xterm-256color',
-    cols: process.stdout.columns,
-    rows: process.stdout.rows,
-    cwd: process.cwd(),
-    env,
-    encoding: null,
-  })
+  rawOwned = true
+  if (options.printId) console.error(options.id)
   queue = new InjectionQueue(
     (data) => child!.write(data),
     options.idleMs,

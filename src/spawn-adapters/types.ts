@@ -3,6 +3,7 @@ export type AdapterContext = {
   id: string
   directory: string
   command: string[]
+  environment?: NodeJS.ProcessEnv
   emit?: (event: AgentEvent) => void
   onCleanup?: (cleanup: () => void) => void
 }

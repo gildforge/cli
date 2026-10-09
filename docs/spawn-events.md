@@ -55,7 +55,7 @@ The user/project/local hook commands remained intact and executed on both
 turns. Hashes before and after were identical. The real user's settings file
 was also hashed before/after without editing it.
 
-A separate experiment passed two `--settings` files. Only the last CLI file's
+The refreshed `--repeat-settings` experiment passed two `--settings` files. Only the last CLI file's
 hooks ran; user/project/local hooks still merged. Therefore, if the caller
 already passes `--settings`, gild additionally loads its observer as a
 per-session `--plugin-dir`. The caller's arguments and settings file are left
@@ -90,8 +90,9 @@ an `agent_id`, so a subagent Stop cannot unlock the main composer.
 Reproduce the live checks (all launches are headless):
 
 ```sh
-TEST_GILD_COMMAND='["bun","run","/Volumes/Projects/codex/gild-cli-events/src/gild.ts"]' python3 scripts/fixtures/live-events.py
-TEST_GILD_COMMAND='["bun","run","/Volumes/Projects/codex/gild-cli-events/src/gild.ts"]' python3 scripts/fixtures/live-events.py --explicit-settings
+TEST_GILD_COMMAND='["bun","run","/Volumes/Projects/codex/gild-cli-fixspawn/src/gild.ts"]' python3 scripts/fixtures/live-events.py
+TEST_GILD_COMMAND='["bun","run","/Volumes/Projects/codex/gild-cli-fixspawn/src/gild.ts"]' python3 scripts/fixtures/live-events.py --explicit-settings
+TEST_GILD_COMMAND='["bun","run","/Volumes/Projects/codex/gild-cli-fixspawn/src/gild.ts"]' python3 scripts/fixtures/live-events.py --repeat-settings
 ```
 
 ## Codex 0.160.1 capabilities
@@ -107,8 +108,21 @@ non-managed hooks. We preserve that review policy rather than bypass it.
 The adapter supplies `-c notify=[gild,hook,--session,id,--agent,codex]` with the
 appropriate development or compiled executable prefix. Codex appends its JSON
 payload to argv. `agent-turn-complete` becomes idle. User PTY submission becomes
-busy. Caller config overrides remain in their original order and can override
-notify; in that case gild does not invent an idle signal.
+busy. Gild reads root `notify` from `$CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`) using a TOML parser, overlays the selected
+`<profile>.config.toml` (including `--profile`/`-p`), then applies notify CLI
+overrides in order. System `config.toml` supplies lower-priority defaults;
+project config cannot override notify. Codex 0.160.1 resolves `notify` from root `cfg.notify`;
+CLI config overrides replace it. Gild wraps that effective command: its hook
+forwards first, then invokes the original command with its fixed arguments and
+the exact JSON argument Codex appended. An absent/dead gild socket still runs
+the caller's notifier after the forwarding deadline. Other CLI arguments stay
+in order and `--` ends config-option parsing. User config files are never edited.
+An empty notify command disables only the caller's notifier, leaving observation
+active. The forwarding deadline bounds gild, not the caller's command runtime.
+
+Only the executable-chain recursion guard remains; the unused depth counter
+was removed. Windows fallback defers executable-suffix lookup to native spawning.
 
 We also inspected JSONL shapes in `~/.codex/sessions`: `event_msg`,
 `response_item`, tool calls/outputs, completion items and usage records. The

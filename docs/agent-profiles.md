@@ -64,17 +64,19 @@ The same PTY, alias resolution, event adapters, prompt queue and private socket
 are used as for direct runtime launches. Socket binding reserves the name
 atomically: simultaneous live sessions become `ava`, `ava-2`, etc. Status and
 sessions expose the runtime and profile name separately. `--print-id` prints
-the actual reserved name. Stale sockets retain the existing `gild sessions`
-cleanup rule. Pipes/redirects use the direct native process with the profile's
+the actual reserved name. The worker probes and reclaims dead sockets before choosing a suffix;
+`gild sessions` also retains its stale cleanup. Pipes/redirects use the direct native process with the profile's
 cwd, args and environment; the existing direct-execution path has no session
 socket or forge reporting.
 
 `env` is an optional **inheritance allowlist of variable names**, never values.
-Omit it to retain normal spawn inheritance. When present, only listed inherited
-variables reach the native process; include PATH for env-based scripts and HOME
-for native config/auth and generated hooks. Gild still removes its existing
+Omit it to retain normal spawn inheritance. When present, listed variables plus the baseline PATH, HOME, TERM, LANG, USER,
+SHELL and TMPDIR reach the native process. The baseline is always inherited
+when set, including with an empty allowlist, so executable lookup, native
+configuration/auth and hooks keep working. Gild still removes its existing
 nested-agent markers and supplies its private recursion markers; the PTY
-supplies TERM. Repeated `--env` replaces the allowlist. Repeated `--arg` or
+supplies TERM. Codex notification resolution uses the native child environment
+after filtering, so an excluded CODEX_HOME cannot select the wrapper's config. Repeated `--env` replaces the allowlist. Repeated `--arg` or
 `--channel` replaces that list. `--clear-args`, `--clear-env` (normal inheritance)
 and `--clear-channels` clear the respective fields; an empty model/effort clears
 it on edit.

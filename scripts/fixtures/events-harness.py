@@ -9,7 +9,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     env={**os.environ,'HOME':d,'PATH':str(bin)+os.pathsep+os.environ['PATH']}
     names_mode='--profile-names' in sys.argv
     local_mode='--profile-local' in sys.argv
-    profile_mode='--profile' in sys.argv or names_mode or local_mode
+    stale_mode='--profile-stale' in sys.argv
+    profile_mode='--profile' in sys.argv or names_mode or local_mode or stale_mode
     reporting='--report' in sys.argv or profile_mode
     reports=[];api=None;cwd=ROOT;extra=[]
     if reporting:
@@ -41,6 +42,9 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         profile_file.write_text(json.dumps({'name':'fixture','runtime':'claude','model':'claude-opus-5-5','effort':'high','directory':str(cwd),'args':['--allowedTools','Read'],'channels':['owner/demo'],'env':['PATH','HOME','KEEP_TEST']}))
         env.update({'KEEP_TEST':'allowed','KEEP_DROP':'blocked'})
         extra=[];native=['agent','fixture','--resume','a b','--','--as','literal']
+    if stale_mode:
+        stale=home/'.gild/sessions/fixture.sock';stale.parent.mkdir(parents=True,exist_ok=True)
+        old=socket.socket(socket.AF_UNIX);old.bind(str(stale));old.close()
     m,s=pty.openpty();fcntl.ioctl(s,termios_TIOCSWINSZ:=getattr(__import__('termios'),'TIOCSWINSZ'),struct.pack('HHHH',24,80,0,0))
     proc=subprocess.Popen(CLI+['spawn']+([] if profile_mode else ['--name','events'])+extra+native,stdin=s,stdout=s,stderr=s,env=env,cwd=ROOT if profile_mode else cwd,start_new_session=True)
     path=home/f'.gild/sessions/{session}.sock';buf=b''

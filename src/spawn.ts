@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
-import { constants } from 'node:os'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
 import type { ReportTarget } from './spawn-report'
+import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Command, InvalidArgumentError } from 'commander'
@@ -12,7 +12,6 @@ import {
   liveSessions,
   localRequest,
   privateSessionsDirectory,
-  requireUnix,
   socketPath,
   MAX_MESSAGE_BYTES,
 } from './spawn-sessions'
@@ -69,30 +68,16 @@ export function spawnCommands(
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
-        // Pipes and redirects get exactly the native process: no hooks, socket or PTY.
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          const binary = realAgent(agent, cwd)
-          const child = spawn(binary, args, {
-            stdio: 'inherit',
+        const binary = realAgent(agent, cwd)
+        if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
+          process.exitCode = await runNative(
+            binary,
+            args,
             cwd,
-            env: agentEnvironment(binary, profile?.env),
-          })
-          const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
-          const handlers = signals.map((signal) => () => child.kill(signal))
-          signals.forEach((signal, i) => process.on(signal, handlers[i]))
-          try {
-            process.exitCode = await new Promise<number>((resolve, reject) => {
-              child.once('error', reject)
-              child.once('exit', (code, signal) =>
-                resolve(code ?? 128 + (signal ? constants.signals[signal] : 0)),
-              )
-            })
-          } finally {
-            signals.forEach((signal, i) => process.off(signal, handlers[i]))
-          }
+            agentEnvironment(binary, profile?.env),
+          )
           return
         }
-        requireUnix()
         const identity =
           label && resolveIdentity
             ? await resolveIdentity(label, cwd, !!profile)
@@ -146,25 +131,16 @@ export function spawnCommands(
         )
         if (report)
           worker.once('spawn', () => worker.send({ type: 'report', report }))
-        const signals: NodeJS.Signals[] = [
-          'SIGTERM',
-          'SIGHUP',
-          'SIGINT',
-          'SIGWINCH',
-        ]
+        const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
+        const interrupted = () => {}
+        process.on('SIGINT', interrupted)
         const disconnected = () => worker.kill('SIGHUP')
         process.on('disconnect', disconnected)
         const handlers = signals.map((signal) => () => worker.kill(signal))
         signals.forEach((signal, index) => process.on(signal, handlers[index]))
         try {
           process.exitCode = await new Promise<number>((resolve, reject) => {
-            worker.once('error', () =>
-              reject(
-                new Error(
-                  'spawn requires Node.js on PATH (install Node.js, then retry)',
-                ),
-              ),
-            )
+            worker.once('error', reject)
             worker.once('exit', (code, signal) =>
               resolve(
                 code ??
@@ -172,7 +148,16 @@ export function spawnCommands(
               ),
             )
           })
+        } catch (error) {
+          debugFallback(error)
+          process.exitCode = await runNative(
+            realAgent(agent, cwd),
+            args,
+            cwd,
+            agentEnvironment(realAgent(agent, cwd), profile?.env),
+          )
         } finally {
+          process.off('SIGINT', interrupted)
           process.off('disconnect', disconnected)
           signals.forEach((signal, index) =>
             process.off(signal, handlers[index]),
