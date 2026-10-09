@@ -1,4 +1,5 @@
 import type { SessionState } from './spawn-events'
+import type { NudgeStatus } from './spawn-nudge'
 import { chmod, lstat, mkdir, readdir, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +17,7 @@ export type LocalSession = SessionState & {
   identity?: string
   channels?: ChannelStatus[]
   held?: { queued: number; reason: string }
+  nudges?: NudgeStatus[]
   /** Detached sessions (`gild spawn --detach`) only. */
   detached?: true
   viewers?: number

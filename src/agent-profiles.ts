@@ -14,6 +14,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { Command } from 'commander'
 import { z } from 'zod'
+import { nudgeSpec } from './spawn-nudge'
 
 // Runtime settings only. Scoped tokens stay in the existing identity store.
 const nameSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$/)
@@ -51,6 +52,7 @@ export const profileSchema = z.strictObject({
   channels: z
     .array(z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/))
     .optional(),
+  nudges: z.array(nudgeSpec).optional(),
   on: z.array(triggerSchema).optional(),
 })
 export type AgentProfile = z.infer<typeof profileSchema>
@@ -77,14 +79,19 @@ async function privateDirectory() {
     await chmod(path, 0o700)
   }
 }
+function nudgeError(issues: z.core.$ZodIssue[]) {
+  const issue = issues.find((i) => i.path[0] === 'nudges')
+  return issue && `Invalid nudge rule: ${issue.message}`
+}
 export function parseProfile(value: unknown): AgentProfile {
   const result = profileSchema.safeParse(value)
   if (!result.success)
     throw Error(
-      'Invalid agent profile: only name, runtime, model, effort, directory, args, env, channels and on are allowed; credentials belong in the identity store' +
-        (result.error.issues[0]
-          ? ` (${result.error.issues[0].path.join('.') || 'profile'}: ${result.error.issues[0].message})`
-          : ''),
+      nudgeError(result.error.issues) ??
+        'Invalid agent profile: only name, runtime, model, effort, directory, args, env, channels, on and nudges are allowed; credentials belong in the identity store' +
+          (result.error.issues[0]
+            ? ` (${result.error.issues[0].path.join('.') || 'profile'}: ${result.error.issues[0].message})`
+            : ''),
     )
   return result.data
 }
@@ -209,6 +216,11 @@ export function profileCommands(agent: Command) {
         collect,
       )
       .option(
+        '--nudge <rule>',
+        'watchdog rule: idle:<duration>[:<limit>][:<message>], waiting:<duration>, ci:<owner/repo>, mention-unanswered:<duration>; repeat',
+        collect,
+      )
+      .option(
         '--on <event.action[:label]>',
         'wake this agent on a forge event, e.g. issues.labeled:triage; repeat',
         collect,
@@ -216,6 +228,7 @@ export function profileCommands(agent: Command) {
       .option('--clear-args', 'clear native arguments')
       .option('--clear-env', 'restore normal environment inheritance')
       .option('--clear-channels', 'clear reserved channels')
+      .option('--clear-nudges', 'clear watchdog rules')
       .option('--clear-on', 'clear event triggers')
       .option('--file <json>', 'read a complete, credential-free profile JSON')
       .action(async (name: string, opts) => {
@@ -262,6 +275,11 @@ export function profileCommands(agent: Command) {
               ? { channels: opts.channel }
               : opts.clearChannels
                 ? { channels: undefined }
+                : {}),
+            ...(opts.nudge
+              ? { nudges: opts.nudge }
+              : opts.clearNudges
+                ? { nudges: undefined }
                 : {}),
             ...(opts.on
               ? { on: opts.on }
