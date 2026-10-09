@@ -7,7 +7,7 @@ import { tailEvents, waitForEvents } from './events-tail'
 type ClientOptions = { agent?: string; server?: string }
 type Resolve = (opts: ClientOptions) => Promise<GildClient>
 
-function repoPair(value: string) {
+export function repoPair(value: string) {
   const match = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/)
   if (!match) throw new InvalidArgumentError('Use owner/repo')
   return { owner: match[1], repo: match[2] }

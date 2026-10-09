@@ -7,7 +7,7 @@ import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
  *  also compiled into a standalone executable (bun build --compile). */
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
-import { chatCommands } from './chat'
+import { chatCommands, repoPair } from './chat'
 import { issueCommands } from './issue'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
@@ -967,6 +967,123 @@ agentCmd
         )
     }
   })
+
+// ---------- orchestrators: spawn, suspend and resume child agents ----------
+
+const childLabel = (value: string) => {
+  if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(value))
+    throw Error('agent labels are 1 to 31 lowercase letters, digits or dashes')
+  return value
+}
+
+agentCmd
+  .command('spawn-child <repo> <label>')
+  .description(
+    "as an orchestrator, create a child agent in <owner/repo>; its token goes to this machine's agent store, never to the terminal",
+  )
+  .requiredOption(
+    '--agent <label>',
+    'the orchestrator: an approved local agent holding the orchestrator grant there',
+  )
+  .option(
+    '--grants <list>',
+    'what the child may do there: pr, review, queue (comma separated; never more than the orchestrator holds)',
+    '',
+  )
+  .option('--note <text>', 'why the child exists, in a sentence')
+  .option('--server <url>', 'forge base URL (defaults to the joined server)')
+  .action(async (target: string, label: string, opts) => {
+    childLabel(label)
+    const params = repoPair(target)
+    if (await loadAgent(label))
+      throw Error(`An agent named ${label} already exists on this machine`)
+    const orchestrator = await loadAgent(opts.agent)
+    if (!orchestrator?.token)
+      throw Error(`No approved agent named ${opts.agent} on this machine`)
+    const server = agentServer(orchestrator, opts.server)
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const pub = `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`
+    const child = await new GildClient(
+      server + '/api/v1',
+      orchestrator.token,
+    ).request('createChildAgent', params, {
+      label,
+      publicKey: pub,
+      grants: String(opts.grants ?? '')
+        .split(',')
+        .map((g: string) => g.trim())
+        .filter(Boolean) as ('pr' | 'review' | 'queue')[],
+      note: opts.note,
+    })
+    await saveAgent(label, {
+      schema: 1,
+      name: child.name,
+      server,
+      publicKey: pub,
+      secretKey: privateKey
+        .export({ format: 'der', type: 'pkcs8' })
+        .toString('base64'),
+      requestId: child.request_id,
+      token: child.token,
+      createdAt: child.created_at,
+    })
+    console.log(
+      chalk.green(`Spawned @${child.name} in ${child.repo}`) +
+        ` for @${child.human}, sponsored by @${child.sponsor}.` +
+        (child.grants.length ? ` It may: ${child.grants.join(', ')}.` : ''),
+    )
+    console.log(
+      `Its token is stored as local agent ${chalk.bold(label)} (scopes: ${child.scopes.join(', ')}); print it with gild agent token ${label}.`,
+    )
+  })
+
+for (const action of ['suspend', 'resume'] as const)
+  agentCmd
+    .command(`${action} <repo> <label>`)
+    .description(
+      action === 'suspend'
+        ? 'take an agent offline: it leaves the channel, gets no mentions and its token answers 403'
+        : 'bring a suspended agent back',
+    )
+    .option(
+      '--agent <label>',
+      'act as an approved local orchestrator agent (default: you)',
+    )
+    .option(
+      '--server <url>',
+      'forge base URL (defaults to the joined server for agents)',
+    )
+    .action(
+      async (
+        target: string,
+        label: string,
+        opts: { agent?: string; server?: string },
+      ) => {
+        const params = repoPair(target)
+        const bare = label.replace(/^@/, '')
+        // sponsor/label as given; a bare label is a local agent, else a child
+        // under the same person as the orchestrator (or you).
+        const owner = async () =>
+          opts.agent
+            ? (await loadAgent(opts.agent))?.name.split('/')[0]
+            : (await loadIdentity())?.name
+        const name = bare.includes('/')
+          ? bare
+          : ((await loadAgent(childLabel(bare)))?.name ??
+            `${await owner()}/${bare}`)
+        const [sponsor, child] = name.split('/')
+        const result = await (
+          await chatClient(opts)
+        ).request(action === 'suspend' ? 'suspendAgent' : 'resumeAgent', {
+          ...params,
+          sponsor,
+          label: child,
+        })
+        console.log(
+          `${result.suspended ? 'Suspended' : 'Resumed'} @${result.agent} (noted in the ${target} channel).`,
+        )
+      },
+    )
 
 program
   .command('events [id]')

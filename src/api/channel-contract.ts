@@ -11,7 +11,7 @@ export const channelMessage = z.object({
 export const channelPage = z.object({ messages: z.array(channelMessage), cursor: channelCursor, before: channelCursor.nullable(), after: channelCursor.nullable() })
 export const channelQuery = z.object({ before: channelCursor.optional(), after: channelCursor.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).refine(q => !(q.before && q.after), 'Use before or after, not both')
 export const channelInput = z.object({ body: z.string().trim().min(1).max(4000), reply_to: channelCursor.optional() })
-export const channelParticipant = channelAuthor.extend({ prefix: z.enum(['@', '+', '']), sponsor: z.string().nullable(), scopes: z.array(z.string()), online: z.boolean(), state: channelState.nullable().optional() })
+export const channelParticipant = channelAuthor.extend({ prefix: z.enum(['@', '%', '+', '']), sponsor: z.string().nullable(), scopes: z.array(z.string()), online: z.boolean(), state: channelState.nullable().optional() })
 export const channelParticipants = z.object({ participants: z.array(channelParticipant), can_post: z.boolean(), viewer: z.string().nullable() })
 export type ChannelMessage = z.output<typeof channelMessage>
 export type ChannelParticipant = z.output<typeof channelParticipant>
