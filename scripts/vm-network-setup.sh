@@ -45,6 +45,10 @@ user=${SUDO_USER:-}
 
 teardown() {
   nft delete table inet gild_vm 2>/dev/null || true
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -D DOCKER-USER -i gildbr0 -j ACCEPT 2>/dev/null || true
+    iptables -D DOCKER-USER -o gildbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+  fi
   i=0
   while [ $i -lt 256 ]; do
     ip link del "gildtap$i" 2>/dev/null || break
@@ -115,6 +119,15 @@ if command -v docker >/dev/null 2>&1 && ! docker network inspect gild-egress >/d
     -o com.docker.network.bridge.enable_icc=false gild-egress >/dev/null
 fi
 
+
+# Docker sets the iptables FORWARD policy to DROP and only accepts its own bridges,
+# so the VM bridge needs an accept in DOCKER-USER (our nft drops above still win:
+# they run first and a drop is final).
+if command -v iptables >/dev/null 2>&1 && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
+  iptables -C DOCKER-USER -i gildbr0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER -i gildbr0 -j ACCEPT
+  iptables -C DOCKER-USER -o gildbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null ||
+    iptables -I DOCKER-USER -o gildbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+fi
 
 if [ "$persist" = 1 ]; then
   install -d -o root -g root -m 0755 /usr/local/libexec
