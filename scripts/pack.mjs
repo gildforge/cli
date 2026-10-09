@@ -77,7 +77,7 @@ for (const t of TARGETS) {
 
 const launcher = (family, bin) => `#!/usr/bin/env node
 // Picks the platform binary installed via optionalDependencies and execs it.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -87,8 +87,16 @@ let binPath
 try { binPath = join(dirname(require.resolve(pkg + '/package.json')), 'bin', '${bin}') }
 catch { console.error(\`${bin}: no build for \${process.platform}-\${process.arch} (tried \${pkg})\`); process.exit(1) }
 if (!existsSync(binPath)) { console.error(\`${bin}: \${pkg} is installed but has no binary yet — it ships with the next server release.\`); process.exit(1) }
-const { status } = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' })
-process.exit(status ?? 1)
+${
+  family === 'cli'
+    ? `const child = spawn(binPath, process.argv.slice(2), { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] })
+for (const signal of ['SIGTERM', 'SIGHUP', 'SIGWINCH']) process.on(signal, () => child.kill(signal))
+process.on('SIGINT', () => {})
+child.on('error', (error) => { console.error(error.message); process.exit(1) })
+child.on('exit', (code, signal) => process.exit(code ?? ({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[signal] ?? 1)))`
+    : `const { status } = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' })
+process.exit(status ?? 1)`
+}
 `
 
 const main = join(ROOT, 'packages', 'gildforge')
@@ -121,6 +129,7 @@ writeFileSync(
       },
       publishConfig: { access: 'public' },
       optionalDependencies: {
+        'node-pty': pkg.optionalDependencies['node-pty'],
         ...Object.fromEntries(
           TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version]),
         ),

@@ -73,3 +73,97 @@ Source authors and timestamps are retained with explicit imported attribution. H
 Git packs stay on disk and stream through a live repository-scoped import credential. Native Git is required. Request batches stay bounded; interrupted item IDs replay safely. Generated import contracts, source adapters and Actions support come from the site repository.
 
 -codex
+
+## Local terminal agents
+
+```sh
+alias claude='gild spawn claude'
+gild spawn --name writer claude
+gild spawn --name reviewer codex --no-alt-screen
+# In another terminal:
+gild sessions                         # state, current tool, activity and process metadata
+gild status writer
+gild events writer                    # normalized JSONL, including local raw hook payloads
+gild send writer "Review the README"
+printf 'First line\nSecond line\n' | gild send reviewer -
+# In a repository on an approved agent identity's joined gild server:
+gild spawn --name writer --as ava claude
+```
+
+Gild options go before the agent name. Everything after it passes to the native
+agent verbatim. With piped stdin or redirected stdout, gild runs the agent
+directly without a PTY or session socket. PATH wrappers that re-enter gild are
+skipped; spawn is quiet unless `--print-id` is requested.
+
+The native TUI owns the display, colours, keyboard handling and exit status.
+Claude hooks and Codex notifications provide a separate event channel. Messages
+queue until the adapted agent ends its turn and the composer has no unsent text.
+For other agents, state stays unknown and the configurable `--idle-ms` heuristic
+remains (default 1500 ms, range 0–60000). Multi-line injection uses bracketed
+paste and a final Enter; message controls other than newline and tab are
+stripped. `send` acknowledges queue acceptance. Pending messages are discarded
+on exit. Attached sessions do not persist messages or terminal output; local event
+subscribers can see raw hook payloads.
+
+Sessions use `~/.gild/sessions/<id>.sock` (0600 in a 0700 directory), accessible
+only to the local user. Names contain 1–32 letters, digits, underscores or
+hyphens. Duplicate names fail without disturbing the existing session. Listing
+removes stale sockets. Temporary observer settings/plugins are private and
+removed on exit; the user's Claude settings are left intact.
+
+Interactive PTYs require Node.js on PATH and the optional `node-pty` dependency.
+Install `gildforge` with npm without omitting optional dependencies. macOS uses
+upstream prebuilds; Linux installation needs Python and C++ build tools. The
+standalone Bun binary embeds its Node companion, but a downloaded binary alone
+has no native addon; npm installs provide it. Windows PTYs are unsupported in
+v1; direct pipe/redirect execution still works.
+
+`--as` reports state to the existing commit session REPORT API using the approved
+agent's scoped token. That endpoint currently requires `repo:write`; this does
+not broaden token grants. Reports contain state, tool name and activity time,
+coalesce to at most one per second, and finish with ended. Prompts, arguments,
+commands and file paths stay local. Channel mention subscriptions remain a
+future source for the same injection queue.
+
+Local profiles make a gild label runnable with `gild spawn agent ava`:
+
+```sh
+gild agent add ava --runtime claude --model claude-opus-5-5 --effort high --dir /path/to/repo
+gild agent ls
+gild spawn agent ava --continue
+gild send ava "Review the README"
+```
+
+Interactive launches use the existing approved identity for that label. The
+profile stores runtime settings separately from credentials. Duplicate profile
+sessions become `ava`, `ava-2`; sessions show both profile and runtime. Profile
+arguments precede invocation arguments and use the existing events adapters.
+See [profile management and verified flags](docs/agent-profiles.md) and
+[adapter experiments, live evidence and validation](docs/spawn-events.md).
+
+### Detached sessions (for orchestrator agents)
+
+An agent's Bash tool has no terminal. `--detach` starts the session in the
+background on a PTY nobody is attached to, prints its id once the session is
+listening, and returns without holding the caller's stdin, stdout or stderr:
+
+```sh
+gild spawn --detach --name bob claude       # prints: bob
+gild spawn --detach agent ava               # profiles too (prints ava, or ava-2)
+gild send bob "Review the README"
+gild status bob                             # ... "detached":true,"viewers":0 ...
+gild events bob                             # JSONL; ends with {"type":"exited","code":N}
+gild attach bob                             # from a terminal: replay, then live; Ctrl-] detaches
+gild attach --watch bob                     # read-only, alongside one interactive viewer
+gild stop bob                               # hangup, SIGKILL after --grace-ms (3000), prints the exit
+```
+
+The terminal is 120x40 unless `--cols`/`--rows` say otherwise; an interactive
+viewer resizes it while attached. The session keeps the last 256 KiB of output
+for `attach` to replay and appends everything to
+`~/.gild/sessions/<id>/output.log` (0600, 8 MiB, one rotation to `output.log.1`).
+Keystrokes from `attach` go through the same input tracking as an attached
+spawn, so an unsent draft still holds injected messages. Detaching never stops
+the agent; `gild stop` does, and removes the socket, settings and log with it.
+
+-codex

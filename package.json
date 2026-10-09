@@ -10,6 +10,7 @@
     "dev": "bun run src/gild.ts",
     "build": "bun build --compile --minify src/gild.ts --outfile dist/gild",
     "test": "bun test",
+    "test:setup-node:revert": "node scripts/setup-node-revert.mjs",
     "pack": "bun run scripts/pack.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src scripts",
@@ -19,6 +20,7 @@
     "chalk": "^5.6.2",
     "commander": "^14.0.1",
     "inquirer": "^12.9.4",
+    "smol-toml": "^1.9.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -26,5 +28,9 @@
     "bun-types": "^1.3.1",
     "prettier": "3.9.9",
     "typescript": "^7.0.2"
-  }
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "trustedDependencies": ["node-pty"]
 }
