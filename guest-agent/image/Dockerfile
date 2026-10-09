@@ -50,7 +50,7 @@ ARG SOURCE_DATE_EPOCH=0
 # resolv.conf is a build-time mount above; init-gild.sh bind-mounts over this file.
 RUN rm -rf /rootfs/proc/* /rootfs/sys/* /rootfs/dev/* /rootfs/etc/resolv.conf \
  && : > /rootfs/etc/resolv.conf \
- && mb=$(( $(du -sm /rootfs | cut -f1) * 115 / 100 + 64 )) \
+ && mb=$(( $(du -sm /rootfs | cut -f1) * 3 / 2 + 256 )) \
  && mkdir /out \
  && E2FSPROGS_FAKE_TIME=${SOURCE_DATE_EPOCH} SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} mke2fs -q -t ext4 -L gild-rootfs \
       -U 6b1d0b9e-3f1a-4c5e-9a57-67696c64766d -E hash_seed=6b1d0b9e-3f1a-4c5e-9a57-67696c64766d,root_owner=0:0 \
