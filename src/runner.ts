@@ -11,6 +11,7 @@ import {
 import { GildClient, requestPath } from './api/client'
 import {
   describe as describeIsolation,
+  assertCanIsolate,
   loadHostConfig,
   parseLevel,
   resolveForHost,
@@ -1015,7 +1016,10 @@ export function runnerCommands(
       'vm, container, host or none (none = unisolated); default per isolation.json',
     )
     .action(async (opts) => {
-      parseLevel(opts.isolation, '--isolation')
+      assertCanIsolate(
+        await loadHostConfig(opts.configDir),
+        parseLevel(opts.isolation, '--isolation'),
+      )
       assertRunnerHost(opts.allowRoot)
       const configs = await listRunners(opts.configDir),
         config = opts.name

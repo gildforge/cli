@@ -22,12 +22,6 @@ export interface PolicyInput {
   floor?: Level
   /** Backends usable on this machine. */
   available: readonly Level[]
-  /**
-   * Level used when nothing at all asks for one and there is no floor. This
-   * keeps `gild runner start` working exactly as before for existing
-   * runners; it is labelled unisolated.
-   */
-  legacyDefault?: Level
 }
 
 export interface Resolved {
@@ -67,12 +61,10 @@ export function resolveIsolation(input: PolicyInput): Resolved {
     )
     if (auto && (!floor || strength(auto) >= strength(floor)))
       return { level: auto, source: 'auto' }
-    if (!floor && input.legacyDefault)
-      return { level: input.legacyDefault, source: 'auto' }
     throw new IsolationRefused(
       floor
         ? `this host requires isolation "${floor}" or stronger and none is available (available: ${input.available.join(', ') || 'none'})`
-        : `no isolation backend is available on this host (tried ${LEVELS.filter((l) => l !== 'none').join(', ')}); ask for --isolation none to run unisolated`,
+        : `no isolation backend is available on this host (tried vm, container, host)`,
     )
   }
   if (floor && strength(chosen.level) < strength(floor))

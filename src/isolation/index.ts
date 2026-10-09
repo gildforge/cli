@@ -85,7 +85,6 @@ export function resolveForHost(host: HostConfig, req: Request): Resolved {
     hostDefault: host.default,
     floor: host.floor,
     available: availableLevels(host),
-    legacyDefault: 'none',
   })
 }
 
@@ -127,4 +126,17 @@ export function statusLines(host: HostConfig, requested: Request = {}) {
     lines.push(`isolation: refused (${(e as Error).message})`)
   }
   return lines
+}
+
+/** `gild runner start` calls this once: a runner that cannot isolate does not start. */
+export function assertCanIsolate(host: HostConfig, flag?: Level) {
+  try {
+    return resolveForHost(host, { flag })
+  } catch (e) {
+    throw new Error(
+      `${(e as Error).message}. This runner would run workflow steps with no isolation. ` +
+        `Fix it by describing a microVM or container backend in <config dir>/isolation.json ` +
+        `(see FINDINGS.md), or start with --isolation none to run unisolated on purpose.`,
+    )
+  }
 }

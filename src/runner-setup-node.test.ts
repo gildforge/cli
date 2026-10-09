@@ -166,6 +166,8 @@ test.each(['latest', '24', '22'])(
           'runner',
           'start',
           '--once',
+          '--isolation',
+          'none',
           '--allow-root',
           '--name',
           'setup-node',

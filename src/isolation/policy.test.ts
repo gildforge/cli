@@ -40,16 +40,11 @@ describe('isolation policy', () => {
     })
   })
 
-  test('nothing available and no explicit none refuses (or the legacy default)', () => {
-    expect(() => run({ available: ['none'] })).toThrow(IsolationRefused)
-    expect(run({ available: ['none'], legacyDefault: 'none' })).toEqual({
-      level: 'none',
-      source: 'auto',
-    })
-    // a floor disables the legacy default
-    expect(() =>
-      run({ available: ['none'], legacyDefault: 'none', floor: 'host' }),
-    ).toThrow(IsolationRefused)
+  test('nothing available and no explicit none refuses, even with nothing else set', () => {
+    expect(() => run({ available: ['none'] })).toThrow(/no isolation backend/)
+    expect(() => run({ available: ['none'], floor: 'host' })).toThrow(
+      IsolationRefused,
+    )
   })
 
   test('explicit none is allowed without a floor and refused under one', () => {
