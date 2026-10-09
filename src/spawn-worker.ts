@@ -18,6 +18,8 @@ import {
 import { GildClient } from './api/client'
 import { TerminalOutput } from './spawn-output'
 import { InjectionQueue } from './spawn-queue'
+import { startWatchdog } from './spawn-nudge-worker'
+import type { NudgeEvent } from './spawn-nudge'
 import {
   MAX_MESSAGE_BYTES,
   removeDeadSocket,
@@ -39,6 +41,7 @@ type Options = {
   identity?: string
   profile?: { name: string; channels?: string[] }
   envAllowlist?: string[]
+  nudges?: string[]
 }
 const options: Options = JSON.parse(process.argv[2])
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
@@ -86,15 +89,17 @@ const state: SessionState = {
 const subscribers = new Set<Socket>()
 let reporter: StateReporter | undefined
 let bridge: MentionBridge | undefined
+let watchdog: ReturnType<typeof startWatchdog>
 const bridgeAbort = new AbortController()
 function publish(event: AgentEvent) {
   applyEvent(state, event)
+  watchdog?.state(state.state)
   queue?.changed()
   broadcast(event)
   reporter?.event(event)
 }
 /** Local subscribers only; mention records say nothing about the agent's state. */
-function broadcast(event: AgentEvent | BridgeEvent) {
+function broadcast(event: AgentEvent | BridgeEvent | NudgeEvent) {
   const line = JSON.stringify(event) + '\n'
   for (const socket of subscribers) {
     if (socket.writableLength + Buffer.byteLength(line) > 1024 * 1024)
@@ -140,6 +145,7 @@ function restore() {
     rawOwned = false
   }
   bridgeAbort.abort()
+  watchdog?.close()
   queue?.close()
   adapterCleanup?.()
   adapterCleanup = undefined
@@ -308,6 +314,7 @@ async function main() {
             started,
             ...state,
             held: queue?.held,
+            nudges: watchdog?.status(),
           }
           socket.end(JSON.stringify(info) + '\n')
         } else if (
@@ -431,8 +438,18 @@ async function main() {
     !!adapter,
     submitted,
   )
-  if (bridgeConfig && options.profile) {
-    const target = await bridgeConfig
+  const target = bridgeConfig ? await bridgeConfig : undefined
+  watchdog = startWatchdog({
+    specs: options.nudges ?? [],
+    session: options.id,
+    agent: options.identity,
+    channels: options.profile?.channels ?? [],
+    target,
+    enqueue: (text) => queue!.enqueue(text),
+    emit: broadcast,
+  })
+  if (watchdog) watchdog.state(state.state)
+  if (target && options.profile) {
     bridge = new MentionBridge({
       client: new GildClient(target.server + '/api/v1', target.token),
       agent: target.agent,
@@ -442,7 +459,12 @@ async function main() {
       repos: options.profile.channels ?? [],
       file: join(directory, `${options.id}.mentions.json`),
       enqueue: (text, typed) => queue!.enqueue(text, typed),
-      emit: broadcast,
+      watch: watchdog?.repos,
+      observe: (repo, events) => watchdog?.events(repo, events),
+      emit: (event) => {
+        broadcast(event)
+        watchdog?.bridge(event)
+      },
     })
     void bridge.start(bridgeAbort.signal)
   }
