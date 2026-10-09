@@ -187,7 +187,10 @@ describe.skipIf(!hostDir)('runner isolation end to end', () => {
     },
   ]
 
-  for (const level of ['none', 'container', 'vm']) {
+  // GILD_ISOLATION_LEVELS=container on a Mac with Colima (no Firecracker there).
+  for (const level of (
+    process.env.GILD_ISOLATION_LEVELS ?? 'none,container,vm'
+  ).split(',')) {
     test(`isolation ${level}`, async () => {
       const r = await job(level, probes)
       console.log(

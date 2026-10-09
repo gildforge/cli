@@ -22,15 +22,26 @@ export interface OciConfig {
   cpus: string
   pids: number
   egress: 'auto' | 'block' | 'allow'
+  /** Engine endpoint (`docker --host`), e.g. Colima's socket on macOS. */
+  host?: string
+  /** Where the engine runs, for labels: `Colima vz VM`. */
+  where?: string
 }
+
+/** Global engine flags that pick the endpoint; empty for the local default. */
+const endpoint = (host?: string) => (host ? ['--host', host] : [])
 
 export const EGRESS_NETWORK = 'gild-egress'
 
-function egressNetworkReady(engine: string) {
+function egressNetworkReady(engine: string, host?: string) {
   try {
-    execFileSync(engine, ['network', 'inspect', EGRESS_NETWORK], {
-      stdio: 'ignore',
-    })
+    execFileSync(
+      engine,
+      [...endpoint(host), 'network', 'inspect', EGRESS_NETWORK],
+      {
+        stdio: 'ignore',
+      },
+    )
     return true
   } catch {
     return false
@@ -38,23 +49,35 @@ function egressNetworkReady(engine: string) {
 }
 
 /** Network the container joins: the filtered bridge, or none. `allow` without setup is an error. */
-export function containerNetwork(mode: OciConfig['egress'], ready: boolean) {
+export function containerNetwork(
+  mode: OciConfig['egress'],
+  ready: boolean,
+  setup = NETWORK_SETUP,
+) {
   if (mode === 'block' || (!ready && mode === 'auto')) return 'none'
   if (!ready)
     throw new Error(
-      `egress is set to allow but the ${EGRESS_NETWORK} network is not set up. Needs Sami: sudo scripts/vm-network-setup.sh`,
+      `egress is set to allow but the ${EGRESS_NETWORK} network is not set up. Needs Sami: ${setup}`,
     )
   return EGRESS_NETWORK
 }
 
 export const GUEST_WORK = '/workspace'
+export const NETWORK_SETUP = 'sudo scripts/vm-network-setup.sh'
+/** The same script, run inside Colima's VM, where the containers' network lives. */
+export const COLIMA_NETWORK_SETUP =
+  'colima ssh -- sudo sh -s up < scripts/vm-network-setup.sh'
 
-export function ociAvailable(engine: string, agent: string) {
+export function ociAvailable(engine: string, agent: string, host?: string) {
   try {
-    execFileSync(engine, ['version', '--format', '{{.Server.Version}}'], {
-      stdio: 'ignore',
-      timeout: 5000,
-    })
+    execFileSync(
+      engine,
+      [...endpoint(host), 'version', '--format', '{{.Server.Version}}'],
+      {
+        stdio: 'ignore',
+        timeout: 5000,
+      },
+    )
     execFileSync('test', ['-x', agent])
     return true
   } catch {
@@ -62,10 +85,10 @@ export function ociAvailable(engine: string, agent: string) {
   }
 }
 
-function execChannel(engine: string, name: string): Channel {
+function execChannel(engine: string, name: string, host?: string): Channel {
   const child = spawn(
     engine,
-    ['exec', '-i', name, '/gild-guest-agent', '--stdio'],
+    [...endpoint(host), 'exec', '-i', name, '/gild-guest-agent', '--stdio'],
     {
       stdio: ['pipe', 'pipe', 'ignore'],
     },
@@ -92,18 +115,21 @@ export function startOci(
 ): Isolation {
   const name = 'gild-' + randomBytes(6).toString('hex'),
     me = userInfo()
+  const setup = cfg.where ? COLIMA_NETWORK_SETUP : NETWORK_SETUP
   const network = containerNetwork(
     cfg.egress,
-    cfg.egress !== 'block' && egressNetworkReady(cfg.engine),
+    cfg.egress !== 'block' && egressNetworkReady(cfg.engine, cfg.host),
+    setup,
   )
   log(
     network === 'none'
-      ? 'container network: none, egress blocked (enable with: sudo scripts/vm-network-setup.sh)'
+      ? `container network: none, egress blocked (enable with: ${setup})`
       : `container network: ${network}, egress allowed, LAN/host/metadata denied`,
   )
   execFileSync(
     cfg.engine,
     [
+      ...endpoint(cfg.host),
       'run',
       '-d',
       '--rm',
@@ -141,20 +167,22 @@ export function startOci(
     ],
     { stdio: 'ignore' },
   )
-  const open: Opener = async () => execChannel(cfg.engine, name)
+  const open: Opener = async () => execChannel(cfg.engine, name, cfg.host)
   const inWork = (p: string) => p === work || p.startsWith(work + '/')
   const guest = (p: string) =>
     inWork(p) ? GUEST_WORK + p.slice(work.length) : p
   return {
     level: 'container',
-    backend: 'oci:' + cfg.engine,
-    label: `container (${cfg.engine})`,
+    backend: 'oci:' + cfg.engine + (cfg.where ? '@colima' : ''),
+    label: `container (${cfg.engine}${cfg.where ? ` in ${cfg.where}` : ''})`,
     guestPath: guest,
     put: (p, content, mode) => guestPut(open, guest(p), content, mode),
     exec: (argv, o) => guestExec(open, argv, o),
     close: async () => {
       try {
-        execFileSync(cfg.engine, ['rm', '-f', name], { stdio: 'ignore' })
+        execFileSync(cfg.engine, [...endpoint(cfg.host), 'rm', '-f', name], {
+          stdio: 'ignore',
+        })
       } catch {}
     },
   }
