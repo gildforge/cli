@@ -51,7 +51,7 @@ const mutations = [
     'message',
     'sanitize',
   ],
-  ['env markers', worker, "name.startsWith('CLAUDE_CODE_')", 'false', 'env'],
+  ['env markers', 'src/spawn-native.ts', 'CLAUDECODE|CLAUDE_PID|', '', 'env'],
   [
     'group cleanup',
     worker,
@@ -80,13 +80,7 @@ const mutations = [
     'await chmod(path, 0o644)',
     'sessions',
   ],
-  [
-    'stale sockets',
-    sessions,
-    'await unlink(path).catch(() => {})',
-    'void path',
-    'sessions',
-  ],
+  ['stale sockets', sessions, 'await unlink(path)', 'void path', 'sessions'],
   [
     'startup cleanup',
     worker,

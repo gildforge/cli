@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
-import { constants } from 'node:os'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import type { ReportTarget } from './spawn-report'
+import { runNative, supportsPty, debugFallback } from './spawn-native'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Command, InvalidArgumentError } from 'commander'
@@ -11,7 +11,6 @@ import {
   liveSessions,
   localRequest,
   privateSessionsDirectory,
-  requireUnix,
   socketPath,
   MAX_MESSAGE_BYTES,
 } from './spawn-sessions'
@@ -49,29 +48,16 @@ export function spawnCommands(
         args: string[],
         opts: { name?: string; idleMs: number; as?: string; printId?: boolean },
       ) => {
-        // Pipes and redirects get exactly the native process: no hooks, socket or PTY.
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          const binary = realAgent(agent)
-          const child = spawn(binary, args, {
-            stdio: 'inherit',
-            env: agentEnvironment(binary),
-          })
-          const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
-          const handlers = signals.map((signal) => () => child.kill(signal))
-          signals.forEach((signal, i) => process.on(signal, handlers[i]))
-          try {
-            process.exitCode = await new Promise<number>((resolve, reject) => {
-              child.once('error', reject)
-              child.once('exit', (code, signal) =>
-                resolve(code ?? 128 + (signal ? constants.signals[signal] : 0)),
-              )
-            })
-          } finally {
-            signals.forEach((signal, i) => process.off(signal, handlers[i]))
-          }
+        const binary = realAgent(agent)
+        if (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty()) {
+          process.exitCode = await runNative(
+            binary,
+            args,
+            process.cwd(),
+            agentEnvironment(binary),
+          )
           return
         }
-        requireUnix()
         const report =
           opts.as && reportTarget ? await reportTarget(opts.as) : undefined
         const id = opts.name ?? `agent-${randomBytes(3).toString('hex')}`
@@ -83,7 +69,6 @@ export function spawnCommands(
             : []),
           join(dirname(process.execPath), 'gild.js'),
         ]
-        if (opts.printId) console.error(id)
         const source = await spawnWorkerSource()
         const worker = spawn(
           'node',
@@ -105,6 +90,7 @@ export function spawnCommands(
                     new URL('./gild.ts', import.meta.url).pathname,
                   ],
               reporting: !!report,
+              printId: opts.printId,
             }),
           ],
           {
@@ -113,25 +99,16 @@ export function spawnCommands(
         )
         if (report)
           worker.once('spawn', () => worker.send({ type: 'report', report }))
-        const signals: NodeJS.Signals[] = [
-          'SIGTERM',
-          'SIGHUP',
-          'SIGINT',
-          'SIGWINCH',
-        ]
+        const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
+        const interrupted = () => {}
+        process.on('SIGINT', interrupted)
         const disconnected = () => worker.kill('SIGHUP')
         process.on('disconnect', disconnected)
         const handlers = signals.map((signal) => () => worker.kill(signal))
         signals.forEach((signal, index) => process.on(signal, handlers[index]))
         try {
           process.exitCode = await new Promise<number>((resolve, reject) => {
-            worker.once('error', () =>
-              reject(
-                new Error(
-                  'spawn requires Node.js on PATH (install Node.js, then retry)',
-                ),
-              ),
-            )
+            worker.once('error', reject)
             worker.once('exit', (code, signal) =>
               resolve(
                 code ??
@@ -139,7 +116,16 @@ export function spawnCommands(
               ),
             )
           })
+        } catch (error) {
+          debugFallback(error)
+          process.exitCode = await runNative(
+            realAgent(agent),
+            args,
+            process.cwd(),
+            agentEnvironment(realAgent(agent)),
+          )
         } finally {
+          process.off('SIGINT', interrupted)
           process.off('disconnect', disconnected)
           signals.forEach((signal, index) =>
             process.off(signal, handlers[index]),

@@ -29,18 +29,22 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
         hooks={n:[{'hooks':[{'type':'command','command':f"python3 '{rec}' '{source}' '{record}'"}]}] for n in ['SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','PermissionRequest','Stop']}
         p.write_text(json.dumps({'hooks':hooks}));settings.append(p)
     (config/'.claude.json').write_text(json.dumps({'hasCompletedOnboarding':True,'theme':'dark','customApiKeyResponses':{'approved':['fixture-not-a-secret'],'rejected':[]},'projects':{str(project):{'hasTrustDialogAccepted':True}}}))
-    explicit = '--explicit-settings' in sys.argv
+    repeated = '--repeat-settings' in sys.argv
+    explicit = '--explicit-settings' in sys.argv or repeated
     extra_args = []
     if explicit:
         extra = d/'extra.json'
         extra.write_text(json.dumps({'hooks':{n:[{'hooks':[{'type':'command','command':f"python3 '{rec}' 'extra' '{record}'"}]}] for n in ['SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','PermissionRequest','Stop']},'theme':'dark'}))
         settings.append(extra);extra_args=['--settings',str(extra)]
+        if repeated:
+            first=d/'first.json';first.write_text(extra.read_text().replace("'extra'","'first'"))
+            settings.append(first);extra_args=['--settings',str(first)]+extra_args
     before=[hashlib.sha256(p.read_bytes()).hexdigest() for p in settings]
     original=pathlib.Path.home()/'.claude/settings.json';actual_before=hashlib.sha256(original.read_bytes()).hexdigest() if original.exists() else None
-    env={**os.environ,'CLAUDE_CONFIG_DIR':str(config),'ANTHROPIC_API_KEY':'fixture-not-a-secret','ANTHROPIC_BASE_URL':f'http://127.0.0.1:{server.server_port}'}
+    env={**{k:v for k,v in os.environ.items() if k in ('PATH','TERM','LANG','USER','SHELL','TMPDIR')},'HOME':str(d),'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','CLAUDE_CONFIG_DIR':str(config),'ANTHROPIC_API_KEY':'fixture-not-a-secret','ANTHROPIC_BASE_URL':f'http://127.0.0.1:{server.server_port}'}
     env.pop('CLAUDECODE',None)
-    # Keep HOME real so we neither move nor copy credentials; fake API key takes precedence.
-    name='live-'+str(os.getpid());path=pathlib.Path.home()/'.gild/sessions'/f'{name}.sock'
+    # All runtime files and credentials are isolated fixture data in this worktree.
+    name='live-'+str(os.getpid());path=d/'.gild/sessions'/f'{name}.sock'
     m,s=pty.openpty();fcntl.ioctl(s,termios.TIOCSWINSZ,struct.pack('HHHH',40,120,0,0))
     proc=subprocess.Popen(CLI+['spawn','--name',name,'claude','--permission-mode','manual','--model','sonnet','--no-chrome']+extra_args,cwd=project,env=env,stdin=s,stdout=s,stderr=s,start_new_session=True)
     raw=b'';events=[];stream=None;accepted=False;prompted=False;approved=False;sent=False;statuses=set();waiting_since=None;started=time.monotonic()
@@ -48,7 +52,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
         with socket.socket(socket.AF_UNIX) as c:
             c.connect(str(path));c.sendall(b'{"type":"info"}\n');return json.loads(c.recv(65536))
     try:
-        deadline=time.monotonic()+35
+        deadline=time.monotonic()+90
         while time.monotonic()<deadline:
             if stream is None and path.exists():
                 stream=socket.socket(socket.AF_UNIX);stream.connect(str(path));stream.sendall(b'{"type":"subscribe"}\n');stream.setblocking(False)
@@ -99,6 +103,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
             for line in record.read_text().splitlines():
                 row=json.loads(line);p=row['payload'];p['session_id']='recorded-session';p['transcript_path']='/fixture/transcript.jsonl';p['cwd']='/fixture/project';rows.append(row)
             (ROOT/'scripts/evidence/claude-hooks.jsonl').write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
+        if repeated: assert not any(r['source']=='first' for r in rows), 'Earlier CLI settings were unexpectedly retained'
         assert received, 'Queued prompt was not submitted by the native TUI'
         assert any(e['type']=='busy' for e in events),[e['type'] for e in events]
         assert any(e['type']=='waiting' for e in events),[e['type'] for e in events]
@@ -107,7 +112,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
         assert any(e['type']=='idle' for e in events),[e['type'] for e in events]
         assert [hashlib.sha256(p.read_bytes()).hexdigest() for p in settings]==before
         assert (hashlib.sha256(original.read_bytes()).hexdigest() if original.exists() else None)==actual_before
-        print(json.dumps({'passed':True,'version':subprocess.check_output(['claude','--version'],text=True).strip(),'sequence':[e['type'] for e in events],'settings_hashes':before,'observed_statuses':sorted(statuses),'queued_prompt_submitted':received,'real_user_settings_unchanged':True,'explicit_settings':explicit}))
+        print(json.dumps({'passed':True,'version':subprocess.check_output(['claude','--version'],text=True).strip(),'sequence':[e['type'] for e in events],'settings_hashes':before,'observed_statuses':sorted(statuses),'queued_prompt_submitted':received,'real_user_settings_unchanged':True,'explicit_settings':explicit,'repeated_settings':repeated}))
     finally:
         if proc.poll() is None:
             proc.send_signal(signal.SIGTERM)

@@ -1,3 +1,4 @@
+import { agentEnvironment as baseEnvironment } from './spawn-native'
 import {
   accessSync,
   constants,
@@ -8,7 +9,13 @@ import {
 } from 'node:fs'
 import { basename, delimiter, resolve } from 'node:path'
 /** Resolve PATH without executing shims; aliases are expanded by the caller's shell. */
-export function realAgent(agent: string): string {
+export function realAgent(
+  agent: string,
+  cwd = process.cwd(),
+  platform = process.platform,
+): string {
+  // Native Windows spawning owns executable-suffix lookup.
+  if (platform === 'win32') return agent
   let visited: string[] = []
   try {
     const chain = JSON.parse(process.env.GILD_SPAWN_CHAIN ?? '[]')
@@ -16,10 +23,10 @@ export function realAgent(agent: string): string {
       visited = chain.filter((p): p is string => typeof p === 'string')
   } catch {}
   const candidates = agent.includes('/')
-    ? [resolve(agent)]
+    ? [resolve(cwd, agent)]
     : (process.env.PATH ?? '')
         .split(delimiter)
-        .map((dir) => resolve(dir || '.', agent))
+        .map((dir) => resolve(cwd, dir || '.', agent))
   for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK)
@@ -48,25 +55,14 @@ export function realAgent(agent: string): string {
   )
 }
 export function agentEnvironment(binary?: string) {
-  const env: Record<string, string> = {}
-  for (const [name, value] of Object.entries(process.env)) {
-    if (
-      value === undefined ||
-      /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CODEX_SESSION_ID|CODEX_THREAD_ID)$/.test(
-        name,
-      ) ||
-      name.startsWith('CLAUDE_CODE_')
-    )
-      continue
-    env[name] = value
-  }
+  const env = baseEnvironment()
   let chain: string[] = []
   try {
     const previous = JSON.parse(process.env.GILD_SPAWN_CHAIN ?? '[]')
     if (Array.isArray(previous))
       chain = previous.filter((p): p is string => typeof p === 'string')
   } catch {}
-  if (binary) {
+  if (binary && process.platform !== 'win32') {
     const fd = openSync(binary, 'r'),
       prefix = Buffer.alloc(2)
     let script = false
@@ -81,6 +77,5 @@ export function agentEnvironment(binary?: string) {
     else chain = []
   }
   env.GILD_SPAWN_CHAIN = JSON.stringify(chain)
-  env.GILD_SPAWN_DEPTH = String(Number(process.env.GILD_SPAWN_DEPTH ?? 0) + 1)
   return env
 }

@@ -3,7 +3,7 @@ import pathlib,os,subprocess,json,tempfile,signal,time,sys,shlex,pty
 ROOT=pathlib.Path(__file__).resolve().parents[2];CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='alias-') as d:
     root=pathlib.Path(d);shim=root/'shim';native=root/'native';shim.mkdir();native.mkdir()
-    agent=native/'claude';agent.write_text('#!/usr/bin/env python3\nimport sys,json,os,signal\nif "--die" in sys.argv:os.kill(os.getpid(),signal.SIGKILL)\nprint(json.dumps({"args":sys.argv[1:],"input":"" if "--no-input" in sys.argv else sys.stdin.read(),"tty":os.isatty(0),"depth":os.getenv("GILD_SPAWN_DEPTH")}))\n');agent.chmod(0o755)
+    agent=native/'claude';agent.write_text('#!/usr/bin/env python3\nimport sys,json,os,signal\nif "--die" in sys.argv:os.kill(os.getpid(),signal.SIGKILL)\nprint(json.dumps({"args":sys.argv[1:],"input":"" if "--no-input" in sys.argv else sys.stdin.read(),"tty":os.isatty(0),"chain":os.getenv("GILD_SPAWN_CHAIN"),"depth":os.getenv("GILD_SPAWN_DEPTH")}))\n');agent.chmod(0o755)
     wrapper=shim/'claude';wrapper.write_text('#!/bin/sh\nexec gild spawn claude "$@"\n');wrapper.chmod(0o755)
     env={**os.environ,'HOME':d,'PATH':str(shim)+os.pathsep+str(native)+os.pathsep+os.environ['PATH']}
     args=['--resume','-p','x','--name','belongs-to-agent','--','foo']
@@ -32,5 +32,6 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='alias-') as d:
     env['GILD_TEST_RUNTIME']=CLI[0];env.pop('GILD_SPAWN_DEPTH',None);env.pop('GILD_SPAWN_CHAIN',None)
     opaque=subprocess.run(CLI+['spawn','claude','--version'],input=b'',capture_output=True,env=env,timeout=5)
     assert opaque.returncode==0 and opaque.stderr==b'',opaque.stderr
-    assert json.loads(opaque.stdout)['depth']=='2'
+    assert json.loads(opaque.stdout)['depth'] is None
+    assert str(wrapper.resolve()) in json.loads(json.loads(opaque.stdout)['chain'])
     print(json.dumps({'passed':True,'alias':"alias claude='gild spawn claude'",'pipe':True,'signal_exit':137,'verbatim_args':True,'shim_skipped':True}))
