@@ -40,7 +40,7 @@ type Options = {
   reporting?: boolean
   bridging?: boolean
   identity?: string
-  profile?: { name: string; channels?: string[] }
+  profile?: { name: string; channels?: string[]; on?: string[] }
   envAllowlist?: string[]
   /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
   vm?: { configDir: string }
@@ -489,6 +489,7 @@ async function main() {
       gild: options.hookCommand.map(shellQuote).join(' '),
       session: options.id,
       repos: options.profile.channels ?? [],
+      triggers: options.profile.on ?? [],
       file: join(directory, `${options.id}.mentions.json`),
       enqueue: (text, typed) => queue!.enqueue(text, typed),
       emit: broadcast,

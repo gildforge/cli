@@ -166,7 +166,11 @@ export function spawnCommands(
               identity: identity?.agent,
               printId: opts.printId,
               profile: profile
-                ? { name: profile.name, channels: profile.channels }
+                ? {
+                    name: profile.name,
+                    channels: profile.channels,
+                    on: profile.on,
+                  }
                 : undefined,
               envAllowlist: profile?.env,
             }),
