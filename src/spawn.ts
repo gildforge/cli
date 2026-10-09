@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
+import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
 import { runNative, supportsPty, debugFallback } from './spawn-native'
@@ -68,6 +69,18 @@ export function spawnCommands(
     )
     .option('--print-id', 'print the local session id to stderr')
     .option(
+      '--nudge <rule>',
+      "watchdog rule added to the profile's: idle:<duration>[:<limit>][:<message>], waiting:<duration>, ci:<owner/repo>, mention-unanswered:<duration>; repeat; put it before <agent>",
+      (value: string, previous: string[] = []) => {
+        try {
+          parseNudge(value)
+        } catch (error) {
+          throw new InvalidArgumentError((error as Error).message)
+        }
+        return [...previous, value]
+      },
+    )
+    .option(
       '--vm',
       'run the agent inside a Firecracker microVM (needs isolation.json)',
     )
@@ -99,6 +112,7 @@ export function spawnCommands(
           idleMs: number
           as?: string
           printId?: boolean
+          nudge?: string[]
           detach?: boolean
           cols: number
           rows: number
@@ -152,7 +166,24 @@ export function spawnCommands(
             ? await resolveIdentity(label, cwd, !!profile)
             : undefined
         const report = identity?.report
-        const bridge = profile?.channels?.length ? identity?.bridge : undefined
+        const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
+        const rules = nudges.map(parseNudge)
+        // ci and mention rules read the profile's events subscription.
+        if (rules.some((r) => r.kind === 'ci') && !(profile && identity))
+          throw Error(
+            'ci nudges need an agent profile with an approved identity (gild spawn agent <name>)',
+          )
+        if (
+          rules.some((r) => r.kind === 'mention-unanswered') &&
+          !(profile?.channels?.length && identity)
+        )
+          throw Error(
+            'mention-unanswered nudges need an agent profile with --channel and an approved identity',
+          )
+        const bridge =
+          profile?.channels?.length || rules.some((r) => r.kind === 'ci')
+            ? identity?.bridge
+            : undefined
         const id =
           profile?.name ??
           opts.name ??
@@ -198,6 +229,7 @@ export function spawnCommands(
                   }
                 : undefined,
               envAllowlist: profile?.env,
+              nudges,
               detach: opts.detach
                 ? { cols: opts.cols, rows: opts.rows }
                 : undefined,

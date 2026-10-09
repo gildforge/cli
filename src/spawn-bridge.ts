@@ -139,6 +139,7 @@ type Trigger = { spec: string } & AgentTrigger
  * queued prompts, once each, over the same events subscription. */
 export class MentionBridge {
   readonly channels: ChannelStatus[]
+  private readonly watched: ChannelStatus[]
   private saved: Saved = { cursors: {}, delivered: [] }
   private readonly seen = new Set<string>()
   private readonly inflight = new Map<string, number>()
@@ -156,6 +157,13 @@ export class MentionBridge {
       gild?: string
       session: string
       repos: string[]
+      /** More repos to read events from without delivering their mentions. */
+      watch?: string[]
+      /** Sees every page of every repo before mentions are handled. */
+      observe?: (
+        repo: string,
+        events: { event: string; payload: unknown }[],
+      ) => void
       /** Trigger specs from the profile (`--on`), matched on the same repos. */
       triggers?: string[]
       file: string
@@ -165,6 +173,10 @@ export class MentionBridge {
     },
   ) {
     this.channels = opts.repos.map((repo) => ({ repo, state: 'connecting' }))
+    const own = new Set(opts.repos.map((r) => r.toLowerCase()))
+    this.watched = [...new Set(opts.watch ?? [])]
+      .filter((repo) => !own.has(repo.toLowerCase()))
+      .map((repo) => ({ repo, state: 'connecting' }))
     this.triggers = (opts.triggers ?? [])
       .map((spec) => ({ spec, ...parseTrigger(spec) }))
       .filter((t): t is Trigger => t.event !== undefined)
@@ -178,7 +190,11 @@ export class MentionBridge {
       // No file yet, or an unreadable one: start from now rather than replay.
     }
     for (const id of this.saved.delivered) this.seen.add(id)
-    await Promise.all(this.channels.map((channel) => this.run(channel, signal)))
+    await Promise.all(
+      [...this.channels, ...this.watched].map((channel) =>
+        this.run(channel, signal),
+      ),
+    )
   }
   private set(
     channel: ChannelStatus,
@@ -273,6 +289,8 @@ export class MentionBridge {
   ) {
     this.set(channel, 'listening')
     const repo = channel.repo
+    this.opts.observe?.(repo, page.events)
+    if (this.watched.includes(channel)) return this.save(repo, page.cursor)
     for (const event of page.events) {
       if (event.event === 'channel.mention') this.mention(repo, event)
       else this.trigger(repo, event)
