@@ -299,9 +299,9 @@ fn run_pty(
     let mut p_env: Vec<*const libc::c_char> = c_env.iter().map(|c| c.as_ptr()).collect();
     p_env.push(std::ptr::null());
     let c_cwd = cwd.and_then(|c| CString::new(c).ok());
-    let mut ws = libc::winsize { ws_row: rows.unwrap_or(24), ws_col: cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
+    let ws = libc::winsize { ws_row: rows.unwrap_or(24), ws_col: cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
     let mut master: libc::c_int = -1;
-    let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &mut ws) };
+    let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &ws) };
     if pid < 0 {
         let _ = send(&w, &Reply::Error { message: "forkpty failed".into() });
         return;
@@ -420,5 +420,27 @@ fn main() {
             }
         }
         _ => { eprintln!("usage: gild-guest-agent --vsock <port> | --stdio"); std::process::exit(2) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_round_trips_binary() {
+        for len in 0..40 {
+            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+            assert_eq!(b64_decode(&b64_encode(&data)).unwrap(), data);
+        }
+        assert_eq!(b64_encode(b"gild"), "Z2lsZA==");
+        assert!(b64_decode("a$b").is_err());
+    }
+
+    #[test]
+    fn finds_programs_on_the_given_path_only() {
+        let env: HashMap<String, String> = [("PATH".to_string(), "/bin:/usr/bin".to_string())].into();
+        assert!(find_program("sh", &env).is_some());
+        assert!(find_program("definitely-not-a-program", &env).is_none());
     }
 }
