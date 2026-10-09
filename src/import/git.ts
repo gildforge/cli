@@ -112,7 +112,8 @@ export class NativeImport {
         else
           reject(
             Error(
-              'Git transfer failed; check source access and retry the import',
+              'Git transfer failed; check source access and retry the import' +
+                gitReason(stderr),
             ),
           )
       })
@@ -309,4 +310,18 @@ export class NativeImport {
     }
     return results
   }
+}
+
+/** The last line Git printed, with any credentials in URLs masked, so a failed
+ *  import says why instead of only that it failed. */
+export function gitReason(stderr: string) {
+  const line = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join(' | ')
+  return line
+    ? ` (${line.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300)})`
+    : ''
 }
