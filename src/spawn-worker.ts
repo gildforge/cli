@@ -110,6 +110,7 @@ function publish(event: AgentEvent) {
   queue?.changed()
   broadcast(event)
   reporter?.event(event)
+  bridge?.event(event)
 }
 /** Local subscribers only; mention records say nothing about the agent's state. */
 function broadcast(event: AgentEvent | BridgeEvent | NudgeEvent) {
@@ -217,7 +218,14 @@ function finish(code: number, terminate = true) {
                 )
             })
           : undefined
-      void Promise.all([reporter?.close(), vm]).finally(() => {
+      void Promise.all([
+        reporter?.close(),
+        Promise.race([
+          bridge?.flush(),
+          new Promise((resolve) => setTimeout(resolve, 1000)),
+        ]),
+        vm,
+      ]).finally(() => {
         // A signal exit cannot wait forever for a terminal reader that stopped.
         if (terminate) setTimeout(() => process.exit(code), 250)
         void Promise.all([output.flush(), exitFlushed]).then(() =>
@@ -571,7 +579,7 @@ async function main() {
       repos: options.profile.channels ?? [],
       triggers: options.profile.on ?? [],
       file: join(directory, `${options.id}.mentions.json`),
-      enqueue: (text, typed) => queue!.enqueue(text, typed),
+      enqueue: (text, typed, held) => queue!.enqueue(text, typed, held),
       watch: watchdog?.repos,
       observe: (repo, events) => watchdog?.events(repo, events),
       emit: (event) => {

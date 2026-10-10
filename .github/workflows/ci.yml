@@ -45,6 +45,7 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test --timeout 30000
+      - run: bun run test:receipts:revert
       - run: npm install -g npm@11.16.0
       - run: bun run pack
       - name: Check packed manifests, dependency graph and warning-free global install

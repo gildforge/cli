@@ -35,8 +35,8 @@ test('trigger bridge PTY: label wakes alice, her unprompted post wakes bob', asy
     clearTimeout(timer)
   }
 }, 60000)
-for (const scenario of ['', '--auth']) {
-  test(`mention bridge PTY${scenario ? ': auth failure keeps the agent alive' : ''}`, async () => {
+for (const scenario of ['', '--auth', '--receipt-failure']) {
+  test(`mention bridge PTY${scenario ? `: ${scenario} keeps the agent alive` : ''}`, async () => {
     const proc = Bun.spawn(
       [
         'python3',
@@ -140,6 +140,7 @@ async function bridge(
         _b: unknown,
         query: { since?: string },
       ) => {
+        if (_op === 'channelReceipt') return {}
         sinces.push(query.since)
         const page = pages[Math.min(index++, pages.length - 1)]()
         if (index >= pages.length + 1) controller.abort()

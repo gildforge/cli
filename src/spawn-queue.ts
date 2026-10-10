@@ -10,7 +10,11 @@ export function injectedInput(message: string): string {
 export class InjectionQueue {
   readonly input = new InputLine()
   private buffered: Buffer[] = []
-  private pending: { data: string; typed?: () => void }[] = []
+  private pending: {
+    data: string
+    typed?: () => void
+    held?: (reason: string) => void
+  }[] = []
   private bytes = 0
   private lastInput = Date.now()
   private timer?: ReturnType<typeof setTimeout>
@@ -53,19 +57,23 @@ export class InjectionQueue {
         : !this.ready()
           ? 'agent not idle'
           : this.structured && this.input.unsent
-            ? `unsent draft ${JSON.stringify(this.input.why)}`
+            ? "unsent draft in the agent's input"
             : 'scheduled',
     }
   }
   /** `typed` runs once the prompt and its Enter have been written to the agent. */
-  enqueue(message: string, typed?: () => void) {
+  enqueue(
+    message: string,
+    typed?: () => void,
+    held?: (reason: string) => void,
+  ) {
     const data = injectedInput(message)
     if (
       this.pending.length >= 128 ||
       this.bytes + Buffer.byteLength(data) > 1024 * 1024
     )
       throw new Error('Session message queue is full')
-    this.pending.push({ data, typed })
+    this.pending.push({ data, typed, held })
     this.bytes += Buffer.byteLength(data)
     this.schedule()
   }
@@ -79,6 +87,8 @@ export class InjectionQueue {
   }
   private schedule() {
     clearTimeout(this.timer)
+    const reason = this.held?.reason
+    if (reason) for (const item of this.pending) item.held?.(reason)
     if (!this.pending.length || this.submitTimer) return
     this.timer = setTimeout(
       () => {
