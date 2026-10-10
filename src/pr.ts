@@ -51,12 +51,22 @@ export function prCommands(program: Command, resolve: ForgeResolve) {
       ) => {
         if (!['open', 'closed', 'all'].includes(opts.state))
           throw new InvalidArgumentError('Use --state open, closed, or all')
+        const page = Number(opts.page),
+          limit = Number(opts.limit)
+        if (!Number.isInteger(page) || page < 1 || page > 10000)
+          throw new InvalidArgumentError(
+            '--page must be an integer from 1 to 10000',
+          )
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+          throw new InvalidArgumentError(
+            '--limit must be an integer from 1 to 100',
+          )
         const pulls = await (
           await resolve(opts, true)
         ).request('pulls', repoPair(repo), undefined, {
           state: opts.state as 'open' | 'closed' | 'all',
-          page: Number(opts.page),
-          per_page: Number(opts.limit),
+          page,
+          per_page: limit,
         })
         if (opts.json) return console.log(JSON.stringify(pulls))
         for (const p of pulls)
@@ -83,8 +93,7 @@ export function prCommands(program: Command, resolve: ForgeResolve) {
           if (opts.json) return console.log(JSON.stringify(files))
           for (const f of files)
             console.log(
-              f.patch ??
-                `${f.status}: ${f.filename} (+${f.additions} -${f.deletions})`,
+              `${f.status}: ${f.filename} (+${f.additions} -${f.deletions})${f.patch ? '\n' + f.patch : ''}`,
             )
           return
         }

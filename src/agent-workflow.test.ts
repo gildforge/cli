@@ -164,6 +164,22 @@ for (const c of cases) {
       expect(f.seen.every((r) => r.auth === 'Bearer gf_fixturetoken')).toBe(
         true,
       )
+      const readable = await cli(f.root, [...c.args, '--agent', 'test'])
+      expect(readable.code).toBe(0)
+      expect(readable.out + readable.err).not.toContain('gf_')
+      if (c.args[1] === 'diff') {
+        expect(readable.out).toContain('hello.txt')
+        expect(readable.out).toContain('+hello')
+      } else if (c.args[1] === 'checks')
+        expect(readable.out).toContain('9 test success')
+      else if (c.args[1] === 'list' || c.args[1] === 'view')
+        expect(readable.out).toContain('#12 [open] Fix it')
+      else if (c.args[1] === 'merge')
+        expect(readable.out).toBe('Queued for merge\n')
+      else
+        expect(readable.out.trim()).toBe(
+          (c.result as { html_url: string }).html_url,
+        )
     } finally {
       await f.close()
     }
