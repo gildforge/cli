@@ -96,6 +96,16 @@ export async function chatTUI(
       name,
     )
   }
+  const timer = setInterval(() => {
+    void client
+      .request('channelList', repo)
+      .then((list) => {
+        channels = list.channels
+        archived = !!channels.find((c) => c.name === selected)?.archived
+        paint()
+      })
+      .catch(() => {})
+  }, 10000)
   try {
     await switchTo(selected)
     for await (const line of input) {
@@ -122,6 +132,7 @@ export async function chatTUI(
       }
     }
   } finally {
+    clearInterval(timer)
     controller.abort()
     input.close()
   }

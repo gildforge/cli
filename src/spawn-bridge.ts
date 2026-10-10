@@ -1,3 +1,4 @@
+import { shellQuote } from './spawn-adapters/types'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { GildClient } from './api/client'
@@ -91,7 +92,7 @@ export function mentionPrompt(
 ) {
   const { cursor, body, author } = m.message
   const channel = m.channel ?? repo.split('/')[1],
-    selection = ` --channel ${channel}`
+    selection = ` --channel ${/^[A-Za-z0-9_./-]+$/.test(channel) ? channel : shellQuote(channel)}`
   return [
     `[gild] @${author.name} mentioned you in ${repo} #${channel} (message ${cursor}):`,
     body,

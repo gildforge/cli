@@ -424,3 +424,20 @@ test('a restart skips delivered trigger ids and resumes from the cursor', async 
     delivered: ['trigger:evt2', 'trigger:evt8'],
   })
 })
+
+test('the repo event bridge delivers mentions from every branch and prompts select the same channel', async () => {
+  const one = mentionEvent(1),
+    two = mentionEvent(2)
+  const a = { ...one, payload: { ...one.payload, channel: 'bob/topic' } }
+  const b = { ...two, payload: { ...two.payload, channel: 'alice/topic' } }
+  const run = await bridge([
+    () => ({ events: [a, b], cursor: '2' }),
+    () => ({ events: [], cursor: '2' }),
+  ])
+  await run.done
+  expect(run.prompts).toHaveLength(2)
+  expect(run.prompts[0]).toContain('#bob/topic')
+  expect(run.prompts[0]).toContain('--channel bob/topic')
+  expect(run.prompts[1]).toContain('--channel alice/topic')
+  expect(run.prompts.every((p) => p.includes('chat note'))).toBe(true)
+})
