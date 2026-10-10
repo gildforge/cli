@@ -101,13 +101,18 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         if CODEX:
             # Codex reports nothing until its first turn ends. A mention to a fresh
             # session must still be typed once its first screen has gone quiet.
-            argv=json.loads(next(l for l in run.buf.splitlines() if l.startswith(b'{"ready"')))['argv']
-            assert 'check_for_update_on_startup=false' in argv,argv # the update menu would eat the prompt
+            # The fixture keeps Codex's update menu and paste-burst traps unless
+            # the session turns them off; either one leaves the prompt unsent.
             run.wait(lambda:run.status()['channels']==[{'repo':'owner/demo','state':'listening'}])
             mention(2,'@fixture what is 6 x 7? ask bob')
             run.wait(lambda:len(run.prompts())==1,t=8)
             assert 'what is 6 x 7? ask bob' in run.prompts()[0]
-            assert run.status()['state']=='busy',run.status()
+            assert b'"menu"' not in run.buf,run.buf
+            # Its turn ends (Codex notify), so a typed one-line `gild send` goes in;
+            # it is not bracket-pasted, which is where paste-burst detection bites.
+            run.wait(lambda:run.status()['state']=='idle')
+            p=subprocess.run(CLI+['send','fixture','reply with pong'],env=env,capture_output=True,timeout=8);assert p.returncode==0,p.stderr
+            run.wait(lambda:'reply with pong' in run.lines(),t=5)
             print(json.dumps({'passed':True}));raise SystemExit(0)
         run.wait(lambda:run.status()['state']=='idle')
         run.subscribe()

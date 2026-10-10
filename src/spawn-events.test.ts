@@ -167,9 +167,12 @@ test('Codex notify translates only turn completion; generated spawn config is na
     expect(prepared.args).toEqual([
       '-c',
       'notify=["/gild","hook","--session","test","--agent","codex"]',
-      // An injected prompt must never land in Codex's "Update available" menu.
+      // An injected prompt must never land in Codex's "Update available" menu,
+      // nor be held as a paste whose Enter never submits.
       '-c',
       'check_for_update_on_startup=false',
+      '-c',
+      'tui.disable_paste_burst=true',
       '--resume',
     ])
   } finally {

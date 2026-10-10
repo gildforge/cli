@@ -3,8 +3,20 @@ import { join } from 'node:path'
 import { originalNotify } from './codex-notify'
 import { CodexLogs } from './codex-logs'
 import { event, payload, type AgentAdapter } from './types'
-/** Keeps Codex's interactive update menu from blocking an injected session. */
-export const NO_UPDATE_PROMPT = ['-c', 'check_for_update_on_startup=false']
+/** Codex settings every gild session needs, because gild types its prompts.
+ * - The startup "Update available" menu would swallow the first prompt (its
+ *   Enter picks "Update now").
+ * - Paste-burst detection treats typed prompt text as a paste and the Enter
+ *   that follows it as part of the paste, so the prompt sat in the composer
+ *   unsent: 0 of 3 fresh sessions answered on 10 Oct, 3 of 3 with it off.
+ * Profile args come later on the command line, so a profile can still turn
+ * either back on. */
+export const SESSION_CONFIG = [
+  '-c',
+  'check_for_update_on_startup=false',
+  '-c',
+  'tui.disable_paste_burst=true',
+]
 export const codexAdapter: AgentAdapter = {
   name: 'codex',
   profileArgs({ model, effort }) {
@@ -46,11 +58,7 @@ export const codexAdapter: AgentAdapter = {
       args: [
         '-c',
         `notify=${JSON.stringify(command)}`,
-        // A gild session is driven by injected prompts, often detached. Codex's
-        // startup "Update available" menu would swallow the first prompt (its
-        // Enter picks "Update now"), so the session never offers it. A later
-        // `-c check_for_update_on_startup=true` in the profile args still wins.
-        ...NO_UPDATE_PROMPT,
+        ...SESSION_CONFIG,
         ...original.args,
       ],
       cleanup: () => logs?.close(),
