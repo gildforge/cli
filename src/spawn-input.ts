@@ -49,7 +49,10 @@ export class InputLine {
         }
         // CSI / SS3 cursor and function keys can arrive in separate chunks.
         if (this.escape === '\x1b[' || this.escape === '\x1bO') continue
-        if (/^\x1b[\[O][0-9;?]*$/.test(this.escape)) continue
+        // Full CSI grammar: parameter bytes 0x30–0x3F (digits ; < = > ?),
+        // intermediates 0x20–0x2F, then one final byte. SGR mouse reports
+        // (ESC [ < b ; x ; y M) arrive on every click and are not typing.
+        if (/^\x1b\[[\x30-\x3f]*[\x20-\x2f]*$/.test(this.escape)) continue
         const sequence = this.escape
         this.escape = ''
         // Esc cancels dialogs, but does not reliably erase or precede a draft.

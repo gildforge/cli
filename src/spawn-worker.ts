@@ -109,6 +109,11 @@ function publish(event: AgentEvent) {
   if (event.type !== 'message')
     inferredBusy =
       (event.raw as { source?: string } | null)?.source === 'pty_submit'
+  if (
+    (event.raw as { hook_event_name?: string } | undefined)?.hook_event_name ===
+    'UserPromptSubmit'
+  )
+    queue?.confirmed()
   applyEvent(state, event)
   quiet?.changed()
   watchdog?.state(state.state)
@@ -584,6 +589,18 @@ async function main() {
     () => !adapter || state.state === 'idle',
     !!adapter,
     submitted,
+    // Claude reports UserPromptSubmit through hooks; Codex only reports turn end.
+    adapter?.name !== 'claude',
+    adapter?.name === 'claude',
+    () =>
+      // Never left 'busy' on a guess nothing confirmed: report and fall back.
+      publish({
+        session: options.id,
+        agent: adapter!.name,
+        type: 'idle',
+        ts: new Date().toISOString(),
+        raw: { source: 'unconfirmed_submit' },
+      }),
   )
   const target = bridgeConfig ? await bridgeConfig : undefined
   watchdog = startWatchdog({

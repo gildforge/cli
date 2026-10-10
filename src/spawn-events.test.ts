@@ -243,6 +243,82 @@ test('input tracker handles split bracketed pastes, Escape, controls, cursor key
   expect(input.feed('\r')).toBe(true)
   expect(input.unsent).toBe(false)
 })
+test('a typed prompt the agent never accepts is re-submitted, then reported instead of left busy', async () => {
+  const writes: string[] = []
+  let unconfirmed = 0
+  const queue = new InjectionQueue(
+    (d) => writes.push(String(d)),
+    0,
+    () => true,
+    true,
+    () => {},
+    false,
+    true,
+    () => unconfirmed++,
+  )
+  try {
+    queue.enqueue('hello')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(writes).toEqual(['hello', '\r'])
+    await new Promise((r) => setTimeout(r, 1600))
+    expect(writes.filter((w) => w === '\r').length).toBe(2) // Enter pressed again
+    await new Promise((r) => setTimeout(r, 3100))
+    expect(writes.filter((w) => w === '\r').length).toBe(3)
+    expect(unconfirmed).toBe(1)
+  } finally {
+    queue.close()
+  }
+  const quiet: string[] = []
+  const ok = new InjectionQueue(
+    (d) => quiet.push(String(d)),
+    0,
+    () => true,
+    true,
+    () => {},
+    false,
+    true,
+    () => {},
+  )
+  try {
+    ok.enqueue('hi')
+    await new Promise((r) => setTimeout(r, 200))
+    ok.confirmed() // UserPromptSubmit arrived
+    await new Promise((r) => setTimeout(r, 1700))
+    expect(quiet).toEqual(['hi', '\r'])
+  } finally {
+    ok.close()
+  }
+}, 15000)
+test('a user Enter marks busy only when the agent cannot report prompts itself', async () => {
+  for (const userEnterIsPrompt of [true, false]) {
+    let busy = 0
+    const queue = new InjectionQueue(
+      () => {},
+      0,
+      () => true,
+      true,
+      () => busy++,
+      userEnterIsPrompt,
+    )
+    try {
+      queue.userInput(Buffer.from('\r')) // e.g. answering Claude's trust dialog
+      expect(busy).toBe(userEnterIsPrompt ? 1 : 0)
+    } finally {
+      queue.close()
+    }
+  }
+})
+test('mouse reports and other full-grammar CSI sequences are not typing', () => {
+  const input = new InputLine()
+  // SGR mouse press and release (a click), a bracketed focus-in, and a CSI
+  // with an intermediate byte, split across reads.
+  input.feed('\x1b[<0;12;5M\x1b[<0;12;5m')
+  input.feed('\x1b[<')
+  input.feed('64;3;9M\x1b[I\x1b[1 q')
+  expect(input.unsent).toBe(false)
+  input.feed('x')
+  expect(input.unsent).toBe(true)
+})
 test('terminal replies to agent queries are not typing', () => {
   const input = new InputLine()
   // OSC 11 background colour (BEL and ST forms, split across reads), DCS
