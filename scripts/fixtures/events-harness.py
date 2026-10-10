@@ -31,7 +31,12 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
                     if instructions_mode:body['preferences']={'runtime':'claude','model':'web-model','effort':'low'}
                     self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(body).encode())
                 elif self.path.startswith('/api/v1/events'):
-                    time.sleep(.5);self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'events':instruction_events,'cursor':str(len(instruction_events))}).encode())
+                    time.sleep(.5)
+                    try:
+                        self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'events':instruction_events,'cursor':str(len(instruction_events))}).encode())
+                    except (BrokenPipeError,ConnectionResetError):
+                        # The runner cancels the outstanding long poll when its PTY closes.
+                        pass
                 else:self.send_response(404);self.end_headers()
             def do_POST(self):
                 assert self.headers.get('Authorization')=='Bearer fixture-scoped-token'
