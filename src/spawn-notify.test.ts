@@ -3,7 +3,7 @@ import { createServer } from 'node:net'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { codexAdapter } from './spawn-adapters/codex'
+import { codexAdapter, SESSION_CONFIG } from './spawn-adapters/codex'
 import { originalNotify } from './spawn-adapters/codex-notify'
 
 async function fixture(run: (root: string) => Promise<void>) {
@@ -66,7 +66,7 @@ test('Codex user notify runs after forwarding with its fixed args and identical 
       '--notify-command',
       JSON.stringify(command),
     ])
-    expect(prepared.args.slice(2)).toEqual(['--resume'])
+    expect(prepared.args.slice(2)).toEqual([...SESSION_CONFIG, '--resume'])
     const server = createServer((socket) => {
       let message = ''
       socket.on('data', (data) => (message += data))
@@ -153,7 +153,10 @@ test('Codex notify CLI overrides replace user notify in order and remain chained
         '--notify-command',
         JSON.stringify(result.command),
       ])
-      expect(prepared.args.slice(2)).toEqual(result.args)
+      expect(prepared.args.slice(2)).toEqual([
+        ...SESSION_CONFIG,
+        ...result.args,
+      ])
       prepared.cleanup()
     }
     expect(
@@ -167,6 +170,7 @@ test('Codex notify CLI overrides replace user notify in order and remain chained
     expect(prepared.args).toEqual([
       '-c',
       'notify=["/gild","hook","--session","test","--agent","codex"]',
+      ...SESSION_CONFIG,
     ])
     prepared.cleanup()
   })
