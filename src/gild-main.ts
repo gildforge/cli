@@ -37,6 +37,7 @@ import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { spawnCommands, localEvents } from './spawn'
+import { grantRequestCommands } from './grant-requests'
 import { profileCommands } from './agent-profiles'
 import { tailEvents } from './events-tail'
 import { sessionInput } from './api/sessions-contract'
@@ -846,6 +847,8 @@ const agentCmd = program
 
 profileCommands(agentCmd)
 
+grantRequestCommands(agentCmd, chatClient)
+
 agentCmd
   .command('join <label>')
   .description(
@@ -1160,7 +1163,7 @@ program
       throw Error('Agent token is not approved here yet')
     if (!opts.agent && !identity) throw Error('Run gild auth init first')
     const client = agent?.token
-      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token)
+      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token, fetch, opts.agent)
       : await clientFor(opts.server ?? 'https://gild.gg', identity!)
     const controller = new AbortController(),
       stop = () => controller.abort()
@@ -1213,6 +1216,8 @@ sessionCmd
       client = new GildClient(
         agentServer(agent, opts.server) + '/api/v1',
         agent.token,
+        fetch,
+        opts.agent,
       )
     const options = {
       idempotencyKey:
@@ -1254,7 +1259,7 @@ sessionCmd
       throw Error('Use an approved local agent token')
     if (!opts.agent && !identity) throw Error('Run gild auth init first')
     const client = agent?.token
-      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token)
+      ? new GildClient(agentServer(agent, opts.server) + '/api/v1', agent.token, fetch, opts.agent)
       : await clientFor(opts.server ?? 'https://gild.gg', identity!)
     console.log(
       JSON.stringify(
@@ -1277,6 +1282,8 @@ async function chatClient(
     return new GildClient(
       agentServer(agent, opts.server) + '/api/v1',
       agent.token,
+      fetch,
+      opts.agent,
     )
   }
   const identity = await loadIdentity()

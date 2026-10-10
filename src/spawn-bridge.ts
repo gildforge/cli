@@ -1,5 +1,9 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
+import {
+  grantRequestHint,
+  GRANT_REQUEST_INSTRUCTION,
+} from './api/grant-request-contract'
 import type { GildClient } from './api/client'
 import { tailEvents, waitForEvents } from './events-tail'
 import { parseTrigger, type AgentTrigger } from './agent-profiles'
@@ -89,6 +93,8 @@ export function mentionPrompt(
   gild = 'gild',
 ) {
   const { cursor, body, author } = m.message
+  if (cursor === '0' && body.startsWith('[gild] '))
+    return [body, workflowPrompt(repo, label, gild)].join('\n')
   return [
     `[gild] @${author.name} mentioned you in ${repo} (message ${cursor}):`,
     body,
@@ -130,7 +136,7 @@ export function triggerPrompt(
 }
 
 function workflowPrompt(repo: string, agent: string, gild: string) {
-  return `Work: ${gild} clone ${repo} --agent ${agent}; git switch -c <branch>, commit, push; ${gild} issue create|comment|close|label and ${gild} pr create|list|view|diff|checks|comment|review|merge. Use --agent ${agent} on every forge command; reads support --json.`
+  return `${GRANT_REQUEST_INSTRUCTION} ${grantRequestHint(repo, agent, gild)}\nWork: ${gild} clone ${repo} --agent ${agent}; git switch -c <branch>, commit, push; ${gild} issue create|comment|close|label and ${gild} pr create|list|view|diff|checks|comment|review|merge. Use --agent ${agent} on every forge command; reads support --json.`
 }
 
 type Saved = { cursors: Record<string, string>; delivered: string[] }
@@ -358,7 +364,12 @@ export class MentionBridge {
           { owner, repo: name } as never,
           undefined as never,
           { state: 'open', labels: t.label, per_page: 50 } as never,
-        )) as unknown as { number: number; title: string; labels: { name: string }[]; user: { login: string } }[]
+        )) as unknown as {
+          number: number
+          title: string
+          labels: { name: string }[]
+          user: { login: string }
+        }[]
         for (const issue of issues.slice().reverse())
           this.trigger(repo, {
             event: 'issues',
