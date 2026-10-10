@@ -22,6 +22,7 @@ export class InjectionQueue {
     private readonly ready: () => boolean = () => true,
     private readonly structured = false,
     private readonly submitted: () => void = () => {},
+    private readonly userEnterIsPrompt = true,
   ) {}
   userInput(data?: Buffer) {
     if (data && this.submitTimer) {
@@ -31,7 +32,10 @@ export class InjectionQueue {
     this.lastInput = Date.now()
     clearTimeout(this.escapeTimer)
     if (data) {
-      if (this.input.feed(data) && this.structured) this.submitted()
+      // A user's Enter is not proof of a prompt (it also answers startup
+      // dialogs). Agents whose hooks report UserPromptSubmit say so themselves.
+      if (this.input.feed(data) && this.structured && this.userEnterIsPrompt)
+        this.submitted()
       this.write(data)
       this.escapeTimer = setTimeout(() => {
         this.input.settleEscape()
