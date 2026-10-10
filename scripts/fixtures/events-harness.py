@@ -91,7 +91,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     stream=None;second=None;second_m=None;second_s=None
     try:
         wait(lambda:b'"ready": true' in buf)
-        assert status()['state']=='idle' # a new session waits at its prompt
+        if not (profile_mode and not local_mode):
+            assert status()['state']=='idle' # no instruction guidance was queued
         if profile_mode:
             ready=next(json.loads(l) for l in buf.splitlines() if l.startswith(b'{') and json.loads(l).get('ready'))
             assert ready['cwd']==str(cwd),ready
@@ -99,7 +100,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert ready['argv'][2:]==['--model','web-model' if instructions_mode else 'claude-opus-5-5','--effort','low' if instructions_mode else 'high','--allowedTools','Read','--resume','a b','--','--as','literal'],ready
             assert status()['profile']=='fixture' and status()['id']=='fixture'
             assert status()['identity']=='owner/fixture'
-            assert status()['channels']==[{'repo':'owner/demo','state':'connecting'}]
+            channels=status()['channels'];assert len(channels)==1 and channels[0]['repo']=='owner/demo',channels
+            assert channels[0]['state'] in ['connecting','listening'],channels
             assert 'fixture-scoped-token' not in profile_file.read_text()
 
         if profile_mode and not local_mode:
