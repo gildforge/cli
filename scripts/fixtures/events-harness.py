@@ -81,8 +81,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             read(.05)
             if check():return
         raise AssertionError(buf)
-    def hook(name,**extra):
-        p=subprocess.run(CLI+['hook','--session',session],input=json.dumps({'hook_event_name':name,**extra}).encode(),env=env,capture_output=True,timeout=2)
+    def hook(name,session_target=None,**extra):
+        p=subprocess.run(CLI+['hook','--session',session_target or session],input=json.dumps({'hook_event_name':name,**extra}).encode(),env=env,capture_output=True,timeout=2)
         assert p.returncode==0 and p.stdout==b'' and p.stderr==b''
     def send(text):
         p=subprocess.run(CLI+['send',session,text],env=env,capture_output=True);assert p.returncode==0,p.stderr
@@ -102,14 +102,24 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert status()['channels']==[{'repo':'owner/demo','state':'connecting'}]
             assert 'fixture-scoped-token' not in profile_file.read_text()
 
+        if profile_mode and not local_mode:
+            wait(lambda:any('Work notes:' in line for line in lines()))
+            startup=lines();assert len(startup)==1,startup
+            assert 'chat note owner/demo --channel "$(git branch --show-current)" --agent fixture' in startup[0],startup
+            assert 'never notifies' in startup[0],startup
+            hook('Stop');assert status()['state']=='idle'
+            buf=b'' # Subsequent assertions concern user/event delivery, after startup guidance.
+
         if names_mode:
             second_m,second_s=pty.openpty()
             second=subprocess.Popen(CLI+['spawn','--print-id','agent','fixture'],stdin=second_s,stdout=second_s,stderr=second_s,env=env,cwd=ROOT,start_new_session=True)
             second_buf=b'';deadline=time.monotonic()+8
-            while b'"ready": true' not in second_buf and time.monotonic()<deadline:
+            while (b'"ready": true' not in second_buf or b'Work notes:' not in second_buf) and time.monotonic()<deadline:
                 if select.select([second_m],[],[],.05)[0]:second_buf+=os.read(second_m,65536)
                 if second.poll() is not None:break
             assert b'"ready": true' in second_buf,second_buf
+            assert b'Work notes:' in second_buf and b'never notifies' in second_buf,second_buf
+            hook('Stop',session_target='fixture-2')
             assert b'fixture-2\r\n' in second_buf or b'fixture-2\n' in second_buf,second_buf
             listed=subprocess.run(CLI+['sessions','--json'],env=env,capture_output=True,timeout=8)
             assert listed.returncode==0,listed.stderr
