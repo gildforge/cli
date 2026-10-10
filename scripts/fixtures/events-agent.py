@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """A PTY composer that runs the actual generated Claude hook commands."""
 import sys,os,json,tty,pathlib,subprocess,shlex
+if '--version' in sys.argv:
+    print('claude fixture 1.0');sys.exit(0)
 settings=json.loads(pathlib.Path(sys.argv[sys.argv.index('--settings')+1]).read_text())
 tty.setraw(0)
 def hook(name,**extra):

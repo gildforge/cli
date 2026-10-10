@@ -209,7 +209,7 @@ test('prompt is short, names the history and reply commands', () => {
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
-    'Work notes: gild chat note owner/demo --agent bob "<progress, decisions, blockers or tests>" (never notifies).',
+    'Work notes: gild chat note owner/demo --channel "$(git branch --show-current)" --agent bob "<progress, decisions, blockers or tests>" (never notifies).',
     MENTION_ETIQUETTE,
   ])
   // Without the note, agents tag each other as a courtesy and wake each other

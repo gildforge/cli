@@ -33,6 +33,24 @@ export function redact(value: string, cap = 4096) {
 export function redactSession<T extends SessionInput>(receipt: T): T {
   return {
     ...receipt,
+    ...(receipt.environment
+      ? {
+          environment: {
+            ...receipt.environment,
+            runtime: redact(receipt.environment.runtime, 120),
+            runtime_version: receipt.environment.runtime_version
+              ? redact(receipt.environment.runtime_version, 120)
+              : undefined,
+            model: receipt.environment.model
+              ? redact(receipt.environment.model, 120)
+              : undefined,
+            effort: receipt.environment.effort
+              ? redact(receipt.environment.effort, 120)
+              : undefined,
+            host: redact(receipt.environment.host, 120),
+          },
+        }
+      : {}),
     model: redact(receipt.model, 120),
     commands: receipt.commands.map((c) => ({
       ...c,

@@ -1,7 +1,11 @@
+import { pullInstructions } from './agent-instructions'
+import { GildClient } from './api/client'
+import { describeRuntime, launchSettings } from './runtime-report'
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
+import { profileArguments } from './spawn-adapters'
 import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
@@ -124,7 +128,8 @@ export function spawnCommands(
           agent === 'agent'
             ? await resolveProfile(args.shift() ?? '', args)
             : undefined
-        const profile = resolved?.profile
+        let profile = resolved?.profile
+        const extraArgs = args
         if (profile && opts.as && opts.as !== profile.name)
           throw Error(
             'A profile uses its own approved agent label; --as must match the profile name',
@@ -135,6 +140,65 @@ export function spawnCommands(
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
+        let identity:
+          Awaited<ReturnType<NonNullable<typeof resolveIdentity>>> | undefined
+        if (label && resolveIdentity) {
+          try {
+            identity = await resolveIdentity(label, cwd, !!profile)
+          } catch (e) {
+            if (
+              !profile ||
+              opts.detach ||
+              (process.stdin.isTTY && process.stdout.isTTY)
+            )
+              throw e
+          }
+        }
+        if (
+          profile &&
+          identity?.report &&
+          ['claude', 'codex'].includes(agent.split('/').at(-1)!)
+        ) {
+          const target = {
+            owner: identity.report.owner,
+            repo: identity.report.repo,
+            sponsor: identity.agent.split('/')[0],
+            label: identity.agent.split('/')[1],
+          }
+          const client = new GildClient(
+            identity.report.server + '/api/v1',
+            identity.report.token,
+          )
+          const remote = await client.request(
+            'agentInstructions',
+            target,
+            undefined,
+            { history: '0' },
+          )
+          if (remote.preferences) {
+            const switched =
+              remote.preferences.runtime &&
+              remote.preferences.runtime !== profile.runtime
+            profile = {
+              ...profile,
+              ...(switched ? { model: undefined, effort: undefined } : {}),
+              ...remote.preferences,
+            }
+            agent = profile.runtime
+            args = [
+              ...profileArguments(agent, profile),
+              ...profile.args,
+              ...extraArgs,
+            ]
+          }
+          const status = await pullInstructions(
+            cwd,
+            agent,
+            JSON.stringify(target),
+            remote,
+          )
+          if (status.warning) console.error('gild: ' + status.warning)
+        }
         const binary = realAgent(agent, cwd)
         if (opts.detach && !supportsPty())
           throw Error(
@@ -173,10 +237,11 @@ export function spawnCommands(
           )
           return
         }
-        const identity =
-          label && resolveIdentity
-            ? await resolveIdentity(label, cwd, !!profile)
-            : undefined
+        const environment = await describeRuntime(
+          binary,
+          launchSettings(args, profile ?? {}),
+          !!opts.vm,
+        )
         const report = identity?.report
         const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
         const rules = nudges.map(parseNudge)
@@ -193,7 +258,9 @@ export function spawnCommands(
             'mention-unanswered nudges need an agent profile with --channel and an approved identity',
           )
         const bridge =
-          profile?.channels?.length || rules.some((r) => r.kind === 'ci')
+          (profile && identity?.report) ||
+          profile?.channels?.length ||
+          rules.some((r) => r.kind === 'ci')
             ? identity?.bridge
             : undefined
         const id =
@@ -218,6 +285,16 @@ export function spawnCommands(
             await workerFile(),
             JSON.stringify({
               agent,
+              environment,
+              instructionTarget:
+                profile && report
+                  ? {
+                      owner: report.owner,
+                      repo: report.repo,
+                      sponsor: identity!.agent.split('/')[0],
+                      label: identity!.agent.split('/')[1],
+                    }
+                  : undefined,
               args,
               id,
               idleMs: opts.idleMs,

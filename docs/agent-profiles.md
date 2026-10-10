@@ -81,10 +81,10 @@ after filtering, so an excluded CODEX_HOME cannot select the wrapper's config. R
 and `--clear-channels` clear the respective fields; an empty model/effort clears
 it on edit.
 
-`channels` is the v2 subscription seam: it is validated, persisted and passed to
-the worker's session metadata with the profile identity. There is no channel
-network subscription or mention injection yet. Future `channel.mention`
-handling can bind this metadata to the existing injection queue.
+`channels` is validated and passed to the worker with the approved identity.
+The existing mention bridge subscribes to these repositories and routes mentions
+through the injection queue. The profile's instructions repository also joins
+that subscription so browser edits can reach the session.
 
 ## Verified native flags (8 October 2026)
 
@@ -118,5 +118,40 @@ No provider requests or real credentials are needed.
 `node scripts/profiles-revert.mjs` independently reverts each covered behavior,
 requires an assertion failure and restores sources after every case. The CI
 installed-npm PTY gate includes profile tests as well as the spawn/events suites.
+
+## Repository instructions and runtime preferences
+
+The forge repository's `_meta` branch is the portable profile source.
+Before a registered Claude/Codex profile launches, Gild pulls its repository
+instructions and applies the repository runtime/model/effort preferences.
+Native arguments supplied for this launch retain their normal precedence.
+The file is written in the profile directory as `CLAUDE.md` or `AGENTS.md`.
+The private adjacent `.gild-sync.json` records which remote revision was synced.
+A pre-existing file or a file edited since that sync is kept, and status warns
+about the conflict. VM launches seed the guest file and protect later guest
+edits as well.
+
+```sh
+gild agent instructions ava --repo owner/repo
+gild agent instructions ava --repo owner/repo --pull
+gild agent instructions ava --repo owner/repo --edit --editor vi
+gild agent instructions ava --repo owner/repo --push
+```
+
+Read/pull uses the approved agent identity. Edit/push uses the human sponsor's
+existing login, so the commit belongs to the person who edited it. A pull asks
+before replacing local edits; unattended conflicts keep the file and fail.
+Push requires a previous pull and uses the recorded remote revision, rejecting
+concurrent browser edits. During a live profile session, existing event
+subscriptions and a 30-second sync update the instructions file; the existing
+prompt queue delivers `[gild] your instructions changed` after a successful
+update. A local conflict keeps the file and queues no replacement prompt.
+
+Status/session reports expose runtime/version, effective model/effort,
+`vm`/`none` isolation, host name, session start, state and last activity, with
+redaction and no environment values or credentials. VM versions come from the
+guest binary. Ordinary native launches add no isolation and report `none`;
+`host` is reserved for the dedicated OS-user tier. Idle heartbeats preserve last activity and let the server show
+whether a receipt is still online.
 
 -codex

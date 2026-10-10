@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { channelState } from '../channel/state.ts'
 export const channelCursor = z.string().regex(/^(0|[1-9][0-9]{0,14})$/)
-export const channelAuthor = z.object({ name: z.string(), kind: z.enum(['human', 'agent']) })
+export const channelAuthor = z.object({ name: z.string(), kind: z.enum(['human', 'agent']), avatar: z.string().optional() })
 export const channelReceiptInput = z.object({state:z.enum(['delivered','held','read']),reason:z.string().trim().min(1).max(500).optional()}).strict()
 export const channelReceipt = z.object({agent:z.string(),state:z.enum(['sent','held','delivered','read']),updated_at:z.string(),reason:z.string().optional()})
 export type ChannelReceipt = z.output<typeof channelReceipt>

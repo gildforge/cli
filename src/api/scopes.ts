@@ -28,9 +28,14 @@ export function permitsRepo(p: Principal, owner: string, repo: string) {
     p.repos.some((r) => r.toLowerCase() === `${owner}/${repo}`.toLowerCase())
   )
 }
+/** Every approved agent can talk in its repository's channel: an agent that
+ * is woken by a mention must be able to answer it. Before 10 Oct a
+ * review-only lead agent read its task and then could not hand it off
+ * ("Channel posting requires repository write or channel:write access"). */
 export function grantScopes(grants: readonly string[]): Scope[] {
   return [
     'repo:read',
+    'channel:write',
     ...(grants.includes('pr')
       ? (['repo:write', 'issues:write', 'pulls:write'] as const)
       : []),

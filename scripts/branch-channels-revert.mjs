@@ -24,3 +24,13 @@ try {
 } finally {writeFileSync(reporter,original)}
 const restored=spawnSync('bun',['test','src/spawn-receipts.test.ts','--test-name-pattern','branch receipt reports'],{encoding:'utf8'})
 assert.equal(restored.status,0,restored.stderr)
+
+const instructions='src/agent-instructions.ts',synced=readFileSync(instructions,'utf8'),hint='this.options.enqueue(reread+workNoteHint'
+assert.ok(synced.includes(hint),'instruction note mutation reaches the sync prompt')
+try {
+ writeFileSync(instructions,synced.replace(hint,'if(false)this.options.enqueue(reread+workNoteHint'))
+ const result=spawnSync('bun',['test','src/agent-instructions.test.ts','--test-name-pattern','instruction sync tells'],{encoding:'utf8'})
+ writeFileSync('.tmp/branch-instructions-reverted.log',result.stdout+result.stderr)
+ assert.notEqual(result.status,0);assert.match(result.stderr,/expect\(|1 fail/)
+ console.log('Revert proof: instruction sync loses branch work-note guidance when the hint is removed')
+} finally {writeFileSync(instructions,synced)}

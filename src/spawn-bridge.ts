@@ -1,3 +1,4 @@
+import { workNoteHint } from './work-notes'
 import { shellQuote } from './spawn-adapters/types'
 import { ReceiptReporter } from './spawn-receipts'
 import type { AgentEvent } from './spawn-events'
@@ -103,7 +104,7 @@ export function mentionPrompt(
     body,
     `Context: ${gild} chat history ${repo}${selection} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
     `Reply:   ${gild} chat send ${repo}${selection} --agent ${label} --reply-to ${cursor} "<your reply>"`,
-    `Work notes: ${gild} chat note ${repo}${selection} --agent ${label} "<progress, decisions, blockers or tests>" (never notifies).`,
+    workNoteHint(repo,label,m.channel,gild),
     MENTION_ETIQUETTE,
     workflowPrompt(repo, label, gild),
   ].join('\n')

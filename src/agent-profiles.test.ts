@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
@@ -361,6 +362,7 @@ for (const scenario of [
   'profile-names',
   'profile-local',
   'profile-stale',
+  'profile-instructions',
 ]) {
   test(`profile PTY: ${scenario}`, async () => {
     const script = 'events-harness.py'
@@ -386,3 +388,85 @@ for (const scenario of [
     }
   }, 25000)
 }
+
+test('instructions command round trip uses the sponsor for writes and protects local conflicts', async () => {
+  const h = await home(),
+    dir = join(h, 'workspace')
+  await mkdir(dir)
+  let text = 'Repository instructions\n'
+  const revision = () => createHash('sha256').update(text).digest('hex')
+  const writes: string[] = []
+  const f = await fixture(async (request) => {
+    if (!new URL(request.url).pathname.endsWith('/instructions'))
+      return new Response('{}')
+    const auth = request.headers.get('authorization')
+    if (request.method === 'PUT') {
+      if (auth !== 'Bearer gf_fixturetoken')
+        return Response.json({ message: 'Sponsor required' }, { status: 403 })
+      const body = (await request.json()) as { text: string; revision: string }
+      if (body.revision !== revision())
+        return Response.json(
+          { message: 'Instructions changed' },
+          { status: 409 },
+        )
+      text = body.text
+      writes.push(auth)
+    } else
+      expect(['Bearer gf_agentfixture', 'Bearer gf_fixturetoken']).toContain(
+        auth ?? '',
+      )
+    return Response.json({
+      text,
+      revision: revision(),
+      history: [],
+      preferences: { runtime: 'codex' },
+    })
+  })
+  try {
+    await f.identity()
+    await f.agent()
+    expect(
+      (
+        await run(
+          h,
+          ['agent', 'add', 'test', '--runtime', 'codex', '--dir', dir],
+          f.root,
+        )
+      ).code,
+    ).toBe(0)
+    const args = ['agent', 'instructions', 'test', '--repo', 'owner/repo']
+    expect((await run(h, args, f.root)).out).toContain(text)
+    expect((await run(h, [...args, '--pull'], f.root)).code).toBe(0)
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf8')).toBe(text)
+    await writeFile(join(dir, 'AGENTS.md'), 'Local replacement\n')
+    const conflict = await run(h, [...args, '--pull'], f.root)
+    expect(conflict.code).toBe(1)
+    expect(conflict.err).toContain('Kept locally edited')
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf8')).toBe(
+      'Local replacement\n',
+    )
+    expect((await run(h, [...args, '--push'], f.root)).code).toBe(0)
+    expect(text).toBe('Local replacement\n')
+    expect(writes).toEqual(['Bearer gf_fixturetoken'])
+    const editor = join(h, 'edit-instructions')
+    await writeFile(
+      editor,
+      '#!/bin/sh\nprintf "Edited instructions\\n" > "$1"\n',
+      { mode: 0o700 },
+    )
+    expect(
+      (await run(h, [...args, '--edit', '--editor', editor], f.root)).code,
+    ).toBe(0)
+    expect(text).toBe('Edited instructions\n')
+    await writeFile(join(dir, 'AGENTS.md'), 'Stale local edit')
+    text = 'Concurrent web edit'
+    expect((await run(h, [...args, '--push'], f.root)).code).toBe(1)
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf8')).toBe(
+      'Stale local edit',
+    )
+    expect(text).toBe('Concurrent web edit')
+  } finally {
+    await f.close()
+    await rm(h, { recursive: true, force: true })
+  }
+})

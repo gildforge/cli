@@ -1,3 +1,4 @@
+import hashlib
 """Mention bridge end to end: fake forge + `gild spawn agent` + the PTY fixture agent."""
 import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2]
@@ -35,6 +36,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
             self.send_response(503 if RECEIPT_FAILURE else 200);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps({'message':'receipt outage'} if RECEIPT_FAILURE else {'agent':'owner/fixture',**body,'updated_at':'2026-10-10T06:31:04Z'}).encode())
         def do_GET(self):
+            if self.path.split('?',1)[0].endswith('/instructions'):
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert url.path=='/api/v1/events',url.path
             if self.headers.get('Authorization')!=f'Bearer {TOKEN}' or AUTH:
