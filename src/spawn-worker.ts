@@ -120,6 +120,25 @@ function broadcast(event: AgentEvent | BridgeEvent | NudgeEvent) {
     else socket.write(line)
   }
 }
+let startup: ReturnType<typeof setTimeout> | undefined
+/** Each output chunk restarts the adapter's startup-quiet timer until the
+ * first real state arrives; a quiet first screen means the prompt is ready. */
+function startupOutput() {
+  const quiet = adapter?.startupQuietMs
+  if (!quiet || state.state !== 'unknown') return
+  clearTimeout(startup)
+  startup = setTimeout(() => {
+    if (state.state !== 'unknown' || closing) return
+    publish({
+      session: options.id,
+      agent: adapter!.name,
+      type: 'idle',
+      ts: new Date().toISOString(),
+      raw: { source: 'startup_quiet' },
+    })
+  }, quiet)
+  startup.unref?.()
+}
 function submitted() {
   publish({
     session: options.id,
@@ -534,6 +553,7 @@ async function main() {
         })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
+    child.onData(() => startupOutput())
   } catch (error) {
     return fallback(error)
   }

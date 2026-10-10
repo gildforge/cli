@@ -5,6 +5,7 @@ import { ApiRequestError } from './api/client'
 import {
   MentionBridge,
   mentionPrompt,
+  MENTION_ETIQUETTE,
   triggerPrompt,
   type BridgeEvent,
 } from './spawn-bridge'
@@ -35,8 +36,13 @@ test('trigger bridge PTY: label wakes alice, her unprompted post wakes bob', asy
     clearTimeout(timer)
   }
 }, 60000)
-for (const scenario of ['', '--auth']) {
-  test(`mention bridge PTY${scenario ? ': auth failure keeps the agent alive' : ''}`, async () => {
+const scenarios: Record<string, string> = {
+  '': '',
+  '--auth': ': auth failure keeps the agent alive',
+  '--codex': ': a fresh Codex session gets its first mention',
+}
+for (const [scenario, title] of Object.entries(scenarios)) {
+  test(`mention bridge PTY${title}`, async () => {
     const proc = Bun.spawn(
       [
         'python3',
@@ -183,7 +189,12 @@ test('prompt is short, names the history and reply commands', () => {
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
+    MENTION_ETIQUETTE,
   ])
+  // Without the note, agents tag each other as a courtesy and wake each other
+  // again (rehearsal, 10 Oct: bob answered coordinator's relay of his answer).
+  expect(MENTION_ETIQUETTE).toContain('Tag only whoever must act next')
+  expect(MENTION_ETIQUETTE).toContain('do not reply')
 })
 test('prompt names the gild that spawned the session, not whatever is on PATH', () => {
   const text = mentionPrompt(

@@ -21,6 +21,9 @@ export type AgentAdapter = {
     receive?: (raw: unknown) => void
   }>
   translate(session: string, raw: unknown): AgentEvent | null
+  /** For a runtime with no startup hook: once its first screen has drawn and
+   * the terminal has been quiet this long, it sits at its prompt (idle). */
+  startupQuietMs?: number
 }
 export function event(
   session: string,
