@@ -361,6 +361,7 @@ for (const scenario of [
   'profile-names',
   'profile-local',
   'profile-stale',
+  'profile-instructions',
 ]) {
   test(`profile PTY: ${scenario}`, async () => {
     const script = 'events-harness.py'

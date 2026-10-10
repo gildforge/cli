@@ -618,12 +618,12 @@ export const routes = [
   route('channelStream','GET',R+'/channel/stream','repo:read',z.null(),empty,'no-store',false,z.object({after:channelCursor.optional()}),101),
   route('migrateRepoAgentProfiles','POST',R+'/agents/migrate','agents',z.object({ok:z.literal(true)}),empty,'no-store',false),
   route('repoAgentProfile','GET',R+'/agents/{sponsor}/{label}/profile','repo:read',agentProfileView,empty,'no-store',false),
-  route('updateRepoAgentProfile','PUT',R+'/agents/{sponsor}/{label}/profile',null,agentProfileView,agentProfileInput,'no-store',false),
-  route('agentInstructions','GET',R+'/agents/{sponsor}/{label}/instructions','repo:read',instructions,empty,'no-store',false),
-  route('updateAgentInstructions','PUT',R+'/agents/{sponsor}/{label}/instructions',null,instructions,instructionsInput,'no-store',false),
-  route('updateAgentPhoto','PUT',R+'/agents/{sponsor}/{label}/photo',null,agentProfileView,photoInput,'no-store',false),
-  route('deleteAgentPhoto','DELETE',R+'/agents/{sponsor}/{label}/photo',null,agentProfileView,empty,'no-store',false),
-  route('updateAgentPermissions','PATCH',R+'/agents/{sponsor}/{label}/permissions',null,agentProfileView,permissionInput,'no-store',false),
+  route('updateRepoAgentProfile','PUT',R+'/agents/{sponsor}/{label}/profile','agents',agentProfileView,agentProfileInput,'no-store',false),
+  route('agentInstructions','GET',R+'/agents/{sponsor}/{label}/instructions','repo:read',instructions,empty,'no-store',false,z.object({history:z.enum(['0','1']).optional()})),
+  route('updateAgentInstructions','PUT',R+'/agents/{sponsor}/{label}/instructions','agents',instructions,instructionsInput,'no-store',false),
+  route('updateAgentPhoto','PUT',R+'/agents/{sponsor}/{label}/photo','agents',agentProfileView,photoInput,'no-store',false),
+  route('deleteAgentPhoto','DELETE',R+'/agents/{sponsor}/{label}/photo','agents',agentProfileView,empty,'no-store',false),
+  route('updateAgentPermissions','PATCH',R+'/agents/{sponsor}/{label}/permissions','agents',agentProfileView,permissionInput,'no-store',false),
   // Orchestrators. Granting takes a person with the agents scope; the agent
   // routes take no token scope because the orchestrator grant is the authority.
   route('repoOrchestrators','GET',R+'/orchestrators','repo:read',orchestratorList,empty,'no-store',false),
@@ -1373,7 +1373,9 @@ export const routes = [
     'actionCommitRuns',
     'GET',
     R + '/actions/commits/{sha}',
-    'actions',
+    // A commit's run results are a read, like actionRuns: an agent with only
+    // repo:read must see whether its PR's checks passed.
+    'repo:read',
     z.array(actionRun),
     empty,
     'index',

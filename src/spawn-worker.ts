@@ -583,19 +583,22 @@ async function main() {
         })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
+    else child.onData((data) => output.push(data))
     if (options.environment && 'runtimeVersion' in child)
       options.environment.runtime_version = child.runtimeVersion
     child.onData((data) => quiet?.output(data as unknown as Buffer))
   } catch (error) {
     return fallback(error)
   }
-  if (reportConfig)
+  if (reportConfig) {
     reporter = new StateReporter(
       await reportConfig!,
       options.environment?.model ?? 'unknown',
       undefined,
       options.environment,
     )
+    reporter.snapshot(state)
+  }
   if (!options.detach) {
     process.stdin.setRawMode(true)
     rawOwned = true
@@ -702,7 +705,6 @@ async function main() {
   process.on('SIGWINCH', () =>
     child!.resize(process.stdout.columns || 80, process.stdout.rows || 24),
   )
-  child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
   child.onExit(({ exitCode, signal }) => {
     finish(signal ? 128 + signal : exitCode, false)

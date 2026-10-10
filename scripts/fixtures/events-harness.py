@@ -12,10 +12,12 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
     for p in configs:p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"hooks":{}}')
     before=[hashlib.sha256(p.read_bytes()).hexdigest() for p in configs]
     env={**os.environ,'HOME':d,'PATH':str(bin)+os.pathsep+os.environ['PATH']}
+    instructions_mode='--profile-instructions' in sys.argv
+    instructions=['Repo instructions\n'];instruction_events=[]
     names_mode='--profile-names' in sys.argv
     local_mode='--profile-local' in sys.argv
     stale_mode='--profile-stale' in sys.argv
-    profile_mode='--profile' in sys.argv or names_mode or local_mode or stale_mode
+    profile_mode='--profile' in sys.argv or instructions_mode or names_mode or local_mode or stale_mode
     reporting='--report' in sys.argv or profile_mode
     reports=[];api=None;cwd=ROOT;extra=[]
     if reporting:
@@ -23,11 +25,13 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             def log_message(self,*a):pass
             def address_string(self):return self.client_address[0]
             def do_GET(self):
-                if self.path.endswith('/instructions'):
-                    body={'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}
+                if self.path.split('?',1)[0].endswith('/instructions'):
+                    text=instructions[0] if instructions_mode else ''
+                    body={'text':text,'revision':hashlib.sha256(text.encode()).hexdigest(),'history':[]}
+                    if instructions_mode:body['preferences']={'runtime':'claude','model':'web-model','effort':'low'}
                     self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(body).encode())
                 elif self.path.startswith('/api/v1/events'):
-                    time.sleep(.5);self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"events":[],"cursor":"0"}')
+                    time.sleep(.5);self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'events':instruction_events,'cursor':str(len(instruction_events))}).encode())
                 else:self.send_response(404);self.end_headers()
             def do_POST(self):
                 assert self.headers.get('Authorization')=='Bearer fixture-scoped-token'
@@ -92,7 +96,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             ready=next(json.loads(l) for l in buf.splitlines() if l.startswith(b'{') and json.loads(l).get('ready'))
             assert ready['cwd']==str(cwd),ready
             assert ready['env']=={'KEEP_TEST':'allowed'},ready
-            assert ready['argv'][2:]==['--model','claude-opus-5-5','--effort','high','--allowedTools','Read','--resume','a b','--','--as','literal'],ready
+            assert ready['argv'][2:]==['--model','web-model' if instructions_mode else 'claude-opus-5-5','--effort','low' if instructions_mode else 'high','--allowedTools','Read','--resume','a b','--','--as','literal'],ready
             assert status()['profile']=='fixture' and status()['id']=='fixture'
             assert status()['identity']=='owner/fixture'
             assert status()['channels']==[{'repo':'owner/demo','state':'connecting'}]
@@ -145,6 +149,22 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         hook('Stop');os.write(m,b'paste\x1b[200~one\ntwo\x1b[201~');send('third');read(.2);assert lines()==['first','second']
         os.write(m,b'\x03');wait(lambda:lines()==['first','second','third'])
         hook('Stop');assert status()['state']=='idle'
+        if instructions_mode:
+            file=cwd/'CLAUDE.md';assert file.read_text()=='Repo instructions\n'
+            instructions[0]='Edited in the browser\n'
+            def changed(n):
+                instruction_events.append({'id':str(n),'cursor':str(n),'event':'agent_profile','repository':'owner/demo','created_at':'2026-10-10T00:00:00Z','payload':{'action':'instructions','agent':'owner/fixture'}})
+            changed(1)
+            wait(lambda:any('[gild] your instructions changed' in line for line in lines()))
+            assert file.read_text()==instructions[0]
+            hook('Stop');file.write_text('User edited this local file')
+            instructions[0]='A second web edit';changed(2)
+            wait(lambda:status().get('instructions',{}).get('state')=='conflict')
+            assert file.read_text()=='User edited this local file'
+            assert len([line for line in lines() if '[gild] your instructions changed' in line])==1
+            assert status()['environment']['model']=='web-model'
+            assert status()['environment']['effort']=='low'
+            assert status()['environment']['runtime_version']=='claude fixture 1.0'
         settings=home/f'.gild/sessions/{session}/settings.json';assert settings.stat().st_mode&0o777==0o600
         proc.send_signal(signal.SIGTERM);assert proc.wait(timeout=8)==143
         assert not path.exists() and not settings.exists()

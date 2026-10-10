@@ -13,10 +13,33 @@ import { pullInstructions, InstructionsSync } from './agent-instructions'
 import { GildClient } from './api/client'
 import { StateReporter } from './spawn-report'
 import { InjectionQueue } from './spawn-queue'
+import { launchSettings } from './runtime-report'
 const remote = (text: string) => ({
   text,
   revision: createHash('sha256').update(text).digest('hex'),
   history: [],
+})
+test('reported model and effort follow native launch overrides', () => {
+  expect(
+    launchSettings([
+      '-m',
+      'profile-model',
+      '-c',
+      'model_reasoning_effort="high"',
+      '--model=actual-model',
+      '--effort=low',
+      '--',
+      '--model',
+      'prompt-text',
+    ]),
+  ).toEqual({ model: 'actual-model', effort: 'low' })
+  expect(
+    launchSettings([
+      '--config',
+      'model="gpt-6"',
+      '--config=model_reasoning_effort="xhigh"',
+    ]),
+  ).toEqual({ model: 'gpt-6', effort: 'xhigh' })
 })
 async function directory() {
   await mkdir('.tmp', { recursive: true })
@@ -151,4 +174,35 @@ test('runtime reports include observed version, model, effort, isolation and hos
   expect(sent).not.toHaveLength(0)
   expect((sent[0] as { environment: unknown }).environment).toEqual(environment)
   expect(JSON.stringify(sent)).not.toContain('gf_not_in_payload')
+})
+test('idle runtime heartbeat stays online without falsifying last activity', async () => {
+  const sent: { state: { status: string; last_activity: string } }[] = []
+  const reporter = new StateReporter(
+    {
+      server: 'https://forge',
+      token: 'gf_fixture',
+      agent: 'alice/codex',
+      owner: 'owner',
+      repo: 'repo',
+      sha: 'a'.repeat(40),
+    },
+    'gpt-6',
+    async (_url, init) => {
+      sent.push(JSON.parse(String(init?.body)))
+      return Response.json({ message: 'fixture' }, { status: 500 })
+    },
+    undefined,
+    200,
+  )
+  const activity = '2026-10-10T00:00:00Z'
+  reporter.snapshot({ state: 'idle', lastActivity: activity })
+  await new Promise((r) => setTimeout(r, 1250))
+  const live = [...sent]
+  await reporter.close()
+  expect(live.length).toBeGreaterThanOrEqual(2)
+  expect(
+    live.every(
+      (s) => s.state.status === 'idle' && s.state.last_activity === activity,
+    ),
+  ).toBe(true)
 })

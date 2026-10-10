@@ -3,7 +3,7 @@ import type { z } from 'zod'
 import type { runtimeReport } from './api/agent-profile-contract'
 import { randomUUID } from 'node:crypto'
 import { GildClient } from './api/client'
-import type { AgentEvent } from './spawn-events'
+import type { AgentEvent, SessionState } from './spawn-events'
 import { sessionState, type SessionInput } from './api/sessions-contract'
 export type ReportTarget = {
   server: string
@@ -28,23 +28,41 @@ export class StateReporter {
   private sending?: Promise<void>
   private lastSent = 0
   private ended = false
+  private latest?: NonNullable<SessionInput['state']>
+  private heartbeat?: ReturnType<typeof setInterval>
   constructor(
     private readonly target: ReportTarget,
     private readonly model: string,
     fetcher?: ConstructorParameters<typeof GildClient>[2],
     private readonly environment?: z.output<typeof runtimeReport>,
+    heartbeatMs = 30000,
   ) {
     this.client = new GildClient(
       target.server + '/api/v1',
       target.token,
       fetcher,
     )
+    this.heartbeat = setInterval(() => {
+      if (this.ended || !this.latest || this.sending || this.pending) return
+      this.pending = this.latest
+      this.schedule()
+    }, heartbeatMs)
+    this.heartbeat.unref?.()
+  }
+  snapshot(state: SessionState) {
+    if (this.ended) return
+    this.latest = this.pending = sessionState.parse({
+      status: state.state,
+      tool: state.tool,
+      last_activity: state.lastActivity,
+    })
+    this.schedule()
   }
   event(event: AgentEvent) {
     if (this.ended || event.type === 'message') return
     const parsedTool = sessionState.shape.tool.safeParse(event.tool)
     const tool = parsedTool.success ? parsedTool.data : undefined
-    this.pending = {
+    this.latest = this.pending = {
       status: event.type,
       ...(tool ? { tool } : {}),
       last_activity: event.ts,
@@ -108,6 +126,7 @@ export class StateReporter {
   }
   async close() {
     this.ended = true
+    clearInterval(this.heartbeat)
     clearTimeout(this.timer)
     this.timer = undefined
     this.pending = { status: 'ended', last_activity: new Date().toISOString() }

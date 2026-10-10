@@ -2,7 +2,48 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 mkdirSync('.tmp', { recursive: true })
-for (const [name, file, change, pattern] of [
+for (const [
+  name,
+  file,
+  change,
+  pattern,
+  args = ['src/agent-instructions.test.ts'],
+] of [
+  [
+    'heartbeat',
+    'src/spawn-report.ts',
+    (s) =>
+      s.replace(
+        'this.pending = this.latest',
+        'return; this.pending = this.latest',
+      ),
+    /idle runtime heartbeat/,
+  ],
+  [
+    'native-overrides',
+    'src/runtime-report.ts',
+    (s) =>
+      s.replace(
+        'const settings = { ...defaults }',
+        'args = []; const settings = { ...defaults }',
+      ),
+    /native launch overrides/,
+  ],
+  [
+    'preferences',
+    'src/spawn.ts',
+    (s) => s.replace('if (remote.preferences) {', 'if (false) {'),
+    /profile-instructions/,
+    ['src/agent-profiles.test.ts', '-t', 'profile PTY: profile-instructions'],
+  ],
+  [
+    'running-instructions',
+    'src/spawn-worker.ts',
+    (s) =>
+      s.replace('if (target && options.instructionTarget) {', 'if (false) {'),
+    /profile-instructions/,
+    ['src/agent-profiles.test.ts', '-t', 'profile PTY: profile-instructions'],
+  ],
   [
     'conflict',
     'src/agent-instructions.ts',
@@ -12,7 +53,8 @@ for (const [name, file, change, pattern] of [
   [
     'prompt',
     'src/agent-instructions.ts',
-    (s) => s.replace('this.options.enqueue(', '((..._args: unknown[]) => {} )('),
+    (s) =>
+      s.replace('this.options.enqueue(', '((..._args: unknown[]) => {} )('),
     /web instruction edits sync/,
   ],
   [
@@ -27,9 +69,9 @@ for (const [name, file, change, pattern] of [
   assert.notEqual(mutated, original, name)
   try {
     writeFileSync(file, mutated)
-    const r = spawnSync('bun', ['test', 'src/agent-instructions.test.ts'], {
+    const r = spawnSync('bun', ['test', ...args], {
       encoding: 'utf8',
-      timeout: 60000,
+      timeout: 90000,
     })
     writeFileSync(`.tmp/instructions-revert-${name}.log`, r.stdout + r.stderr)
     assert.notEqual(r.status, 0, name)

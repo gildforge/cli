@@ -27,6 +27,7 @@ export function instructionsCommands(
     .option('--edit', 'edit instructions then commit as the sponsor')
     .option('--pull', 'sync instructions, asking before replacing local edits')
     .option('--push', 'commit local instructions as the sponsor')
+    .option('--editor <executable>', 'editor for --edit', 'vi')
     .action(async (name: string, opts) => {
       if ([opts.edit, opts.pull, opts.push].filter(Boolean).length > 1)
         throw Error('Choose --edit, --pull or --push')
@@ -60,12 +61,13 @@ export function instructionsCommands(
       const [owner, repo] = repository.split('/'),
         [sponsor, label] = connection.agent.split('/')
       const target: InstructionsTarget = { owner, repo, sponsor, label },
-        path = instructionPath(profile.directory, profile.runtime),
         source = JSON.stringify(target)
       const remote = await connection.client.request(
         'agentInstructions',
         target,
       )
+      const runtime = remote.preferences?.runtime ?? profile.runtime
+      const path = instructionPath(profile.directory, runtime)
       if (!opts.pull && !opts.push && !opts.edit) {
         console.log(remote.text)
         return
@@ -73,7 +75,7 @@ export function instructionsCommands(
       if (opts.pull || opts.edit) {
         let result = await pullInstructions(
           profile.directory,
-          profile.runtime,
+          runtime,
           source,
           remote,
         )
@@ -98,7 +100,7 @@ export function instructionsCommands(
           }
           result = await pullInstructions(
             profile.directory,
-            profile.runtime,
+            runtime,
             source,
             remote,
             true,
@@ -110,8 +112,7 @@ export function instructionsCommands(
         }
       }
       if (opts.edit) {
-        const editor = process.env.EDITOR || 'vi'
-        const edited = spawnSync(editor, [path], { stdio: 'inherit' })
+        const edited = spawnSync(opts.editor, [path], { stdio: 'inherit' })
         if (edited.error || edited.status !== 0)
           throw Error('Instructions editor did not finish successfully')
       }
@@ -128,7 +129,7 @@ export function instructionsCommands(
         target,
         { text, revision: stamp.remote },
       )
-      await pullInstructions(profile.directory, profile.runtime, source, saved)
+      await pullInstructions(profile.directory, runtime, source, saved)
       console.log(`committed ${repository} instructions; synced ${path}`)
     })
 }

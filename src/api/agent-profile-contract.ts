@@ -26,7 +26,7 @@ export const agentProfile = agentProfileInput.extend({
   revoked_at: z.iso.datetime().nullable(),
 }).strict()
 export const instructionsInput = z.strictObject({ text: z.string().max(65536), revision: z.string().regex(/^[a-f0-9]{64}$/) })
-export const instructions = z.object({ text: z.string(), revision: z.string(), history: z.array(z.object({ sha: z.string(), author: z.string(), at: z.string(), message: z.string() })) })
+export const instructions = z.object({ text: z.string(), revision: z.string(), preferences: agentProfileInput.shape.preferences.optional(), history: z.array(z.object({ sha: z.string(), author: z.string(), at: z.string(), message: z.string() })) })
 export const permissionInput = z.strictObject({ action: z.enum(['grants', 'suspend', 'resume', 'revoke']), grants: z.array(z.enum(['pr', 'review', 'queue'])).max(3).optional() }).refine(v => v.action !== 'grants' || v.grants !== undefined)
 export const agentProfileView = z.object({
   profile: agentProfile,
@@ -36,6 +36,7 @@ export const agentProfileView = z.object({
   tokens: z.array(z.object({ scopes: z.array(z.string()).nullable(), expires_at: z.string(), label: z.string() })),
   can_edit: z.boolean(),
   can_admin: z.boolean(),
+  can_orchestrate: z.boolean(),
 })
 export const photoInput = z.strictObject({ data: z.string().max(350000) })
 export type RepoAgentProfile = z.output<typeof agentProfile>

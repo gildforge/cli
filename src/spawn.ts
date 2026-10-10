@@ -1,10 +1,11 @@
 import { pullInstructions } from './agent-instructions'
 import { GildClient } from './api/client'
-import { describeRuntime } from './runtime-report'
+import { describeRuntime, launchSettings } from './runtime-report'
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
+import { profileArguments } from './spawn-adapters'
 import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
@@ -127,7 +128,8 @@ export function spawnCommands(
           agent === 'agent'
             ? await resolveProfile(args.shift() ?? '', args)
             : undefined
-        const profile = resolved?.profile
+        let profile = resolved?.profile
+        const extraArgs = args
         if (profile && opts.as && opts.as !== profile.name)
           throw Error(
             'A profile uses its own approved agent label; --as must match the profile name',
@@ -138,7 +140,6 @@ export function spawnCommands(
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
-        const binary = realAgent(agent, cwd)
         let identity:
           Awaited<ReturnType<NonNullable<typeof resolveIdentity>>> | undefined
         if (label && resolveIdentity) {
@@ -168,7 +169,28 @@ export function spawnCommands(
             identity.report.server + '/api/v1',
             identity.report.token,
           )
-          const remote = await client.request('agentInstructions', target)
+          const remote = await client.request(
+            'agentInstructions',
+            target,
+            undefined,
+            { history: '0' },
+          )
+          if (remote.preferences) {
+            const switched =
+              remote.preferences.runtime &&
+              remote.preferences.runtime !== profile.runtime
+            profile = {
+              ...profile,
+              ...(switched ? { model: undefined, effort: undefined } : {}),
+              ...remote.preferences,
+            }
+            agent = profile.runtime
+            args = [
+              ...profileArguments(agent, profile),
+              ...profile.args,
+              ...extraArgs,
+            ]
+          }
           const status = await pullInstructions(
             cwd,
             agent,
@@ -177,6 +199,7 @@ export function spawnCommands(
           )
           if (status.warning) console.error('gild: ' + status.warning)
         }
+        const binary = realAgent(agent, cwd)
         if (opts.detach && !supportsPty())
           throw Error(
             'Detached sessions need a PTY, unavailable on this platform',
@@ -216,7 +239,7 @@ export function spawnCommands(
         }
         const environment = await describeRuntime(
           binary,
-          profile ?? {},
+          launchSettings(args, profile ?? {}),
           !!opts.vm,
         )
         const report = identity?.report

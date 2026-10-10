@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import { open, readFile, rename, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { GildClient } from './api/client'
 export type InstructionsTarget = {
   owner: string
@@ -113,6 +113,8 @@ export class InstructionsSync {
         const remote = await this.options.client.request(
           'agentInstructions',
           this.options.target,
+          undefined,
+          { history: '0' },
         )
         const source = JSON.stringify(this.options.target)
         const status = await pullInstructions(
@@ -129,7 +131,7 @@ export class InstructionsSync {
           if (this.revision && this.revision !== remote.revision)
             this.options.enqueue(
               '[gild] your instructions changed. Re-read ' +
-                instructionPath(this.options.directory, this.options.runtime),
+                basename(instructionPath(this.options.directory, this.options.runtime)) + ' in your working directory.',
             )
           this.revision = remote.revision
         }

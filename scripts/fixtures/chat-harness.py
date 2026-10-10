@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         def log_message(self,*a):pass
         def address_string(self):return self.client_address[0]
         def do_GET(self):
-            if self.path.endswith('/instructions'):
+            if self.path.split('?',1)[0].endswith('/instructions'):
                 self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert url.path=='/api/v1/events',url.path
