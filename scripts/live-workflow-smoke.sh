@@ -71,8 +71,10 @@ EOF
     commit -qm "calc: add, with a test and CI" && git push -q origin HEAD:main ) >>"$log" 2>&1 || fail "seed push"
 say "created private $full with calc.js, a test and .github/workflows/ci.yml"
 
-join_agents "$full" "$lead:review" "$dev:pr"
-say "joined and approved @$owner/$lead (review) and @$owner/$dev (pr)"
+# LEAD_GRANTS=pr,review for a forge without gild-site#82 (review-only agents
+# could not post in the channel).
+join_agents "$full" "$lead:${LEAD_GRANTS:-review}" "$dev:pr"
+say "joined and approved @$owner/$lead (${LEAD_GRANTS:-review}) and @$owner/$dev (pr)"
 
 file=AGENTS.md; [ "$runtime" = claude ] && file=CLAUDE.md
 cat >"$work/$lead/$file" <<EOF
