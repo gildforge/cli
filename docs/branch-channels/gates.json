@@ -1,0 +1,326 @@
+{
+  "host": "Bugsy macOS ARM",
+  "lock": "lockf ~/Projects/claude/.heavy.lock",
+  "commands": [
+    {
+      "repo": "cli",
+      "cmd": "node .tmp/setup-ci-runtime.mjs",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 5.953,
+      "log": "0-cli-node-tmp-setup-ci-runtime-mjs.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "npm install --prefix .tmp/ci-npm --ignore-scripts --no-audit --no-fund npm@11.16.0",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.642,
+      "log": "0-cli-npm-install-prefix-tmp-ci-npm-ignore-scripts-no-audit-no-fund-npm-11-16-0.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun install --frozen-lockfile --ignore-scripts",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.035,
+      "log": "0-cli-bun-install-frozen-lockfile-ignore-scripts.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run build",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 0.395,
+      "log": "1-cli-bun-run-build.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bunx tsc --noEmit",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 0.844,
+      "log": "1-cli-bunx-tsc-noEmit.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:instructions:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 35.677,
+      "log": "1-cli-bun-run-test-instructions-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun test --timeout 30000",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 233.043,
+      "log": "1-cli-bun-test-timeout-30000.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:channels:branches:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 10.643,
+      "log": "2-cli-bun-run-test-channels-branches-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:receipts:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 81.485,
+      "log": "2-cli-bun-run-test-receipts-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run pack",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 1.076,
+      "log": "1-cli-bun-run-pack.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 18.373,
+      "log": "1-cli-bun-run-test-install.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:installed-pty",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 177.723,
+      "log": "1-cli-bun-run-test-installed-pty.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 14.53,
+      "log": "2-cli-bun-run-test-install-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "scripts/build-vz-helper.sh",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 3.382,
+      "log": "2-cli-scripts-build-vz-helper-sh.log"
+    }
+  ],
+  "attempts": [
+    {
+      "repo": "cli",
+      "cmd": "node .tmp/setup-ci-runtime.mjs",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 5.953,
+      "log": "0-cli-node-tmp-setup-ci-runtime-mjs.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "npm install --prefix .tmp/ci-npm --ignore-scripts --no-audit --no-fund npm@11.16.0",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.642,
+      "log": "0-cli-npm-install-prefix-tmp-ci-npm-ignore-scripts-no-audit-no-fund-npm-11-16-0.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun install --frozen-lockfile --ignore-scripts",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.035,
+      "log": "0-cli-bun-install-frozen-lockfile-ignore-scripts.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run build",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.257,
+      "log": "0-cli-bun-run-build.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bunx tsc --noEmit",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 0.719,
+      "log": "0-cli-bunx-tsc-noEmit.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:instructions:revert",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 34.985,
+      "log": "0-cli-bun-run-test-instructions-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun test --timeout 30000",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 1,
+      "seconds": 236.606,
+      "log": "0-cli-bun-test-timeout-30000.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:channels:branches:revert",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 10.54,
+      "log": "0-cli-bun-run-test-channels-branches-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:receipts:revert",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 81.368,
+      "log": "0-cli-bun-run-test-receipts-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run pack",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 1.034,
+      "log": "0-cli-bun-run-pack.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 18.731,
+      "log": "0-cli-bun-run-test-install.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:installed-pty",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 1,
+      "seconds": 175.264,
+      "log": "0-cli-bun-run-test-installed-pty.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install:revert",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 15.148,
+      "log": "0-cli-bun-run-test-install-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "scripts/build-vz-helper.sh",
+      "head": "e2324fbdf8479a05afffed755e52dab6f47cf878",
+      "status": 0,
+      "seconds": 3.04,
+      "log": "0-cli-scripts-build-vz-helper-sh.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run build",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 0.395,
+      "log": "1-cli-bun-run-build.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bunx tsc --noEmit",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 0.844,
+      "log": "1-cli-bunx-tsc-noEmit.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:instructions:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 35.677,
+      "log": "1-cli-bun-run-test-instructions-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun test --timeout 30000",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 233.043,
+      "log": "1-cli-bun-test-timeout-30000.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run pack",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 1.076,
+      "log": "1-cli-bun-run-pack.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 18.373,
+      "log": "1-cli-bun-run-test-install.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:installed-pty",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 177.723,
+      "log": "1-cli-bun-run-test-installed-pty.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:channels:branches:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 10.643,
+      "log": "2-cli-bun-run-test-channels-branches-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:receipts:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 81.485,
+      "log": "2-cli-bun-run-test-receipts-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun run test:install:revert",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 14.53,
+      "log": "2-cli-bun-run-test-install-revert.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "scripts/build-vz-helper.sh",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 3.382,
+      "log": "2-cli-scripts-build-vz-helper-sh.log"
+    }
+  ],
+  "notes": [
+    "Node 26 for site; isolated Node 24/npm 11.16 for CLI",
+    "Release/deploy/publish actions excluded",
+    "Navigation performance is a reporting-only job",
+    "Optional unavailable VM cases remain documented skips"
+  ]
+}

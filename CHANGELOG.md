@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Branch chat buffers: `--channel`, `chat channels`, silent `chat note` / `/note`, scoped mention context and receipts, and read-only archived history. The TUI lists channels above members; agents receive a branch work-note hint during instruction sync.
+
 - `gild spawn --vm` and `gild runner start --isolation vm` work right after `npm i -g gildforge`: each release publishes the microVM guest image (Firecracker kernel and rootfs for linux-x64; vz kernel, rootfs and the signed `gild-vz` helper for darwin-arm64) with a sha256 manifest on releases.gild.gg, and the first VM use downloads and verifies it into `~/.config/gild/vm/`. A runner that cannot fetch it falls to the next isolation tier and says so (docs/VM.md).
 - `gild chat owner/repo` opens the channel as an IRC-style terminal UI: live log over the channel WebSocket, participants column with prefixes, presence and agent state, Enter to send (as you or `--agent <label>`), Tab @-completion, PgUp/PgDn with older history, F2 / auto-hidden participants on narrow terminals, `NO_COLOR`, and a clean terminal on Ctrl-C or SIGTERM. Public channels open read-only without an identity. `gild chat raw` now pings every 25 s so presence holds.
 - `gild chat history|participants|raw` read a public channel without an identity (no `Authorization` header at all); a private channel's refusal says to run `gild auth init`. `send` still needs one (#41).

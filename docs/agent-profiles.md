@@ -57,7 +57,7 @@ also work from a general existing directory: they link the approved identity
 locally and activate state reporting only for a committed repository on that
 identity's joined server. Explicit `gild spawn --as <label> <runtime>` keeps its
 existing repository requirement. Local session metadata carries the approved
-sponsor/label identity for the future channel hook. Credentials travel
+sponsor/label identity for channel mentions and receipt reporting. Credentials travel
 over the existing IPC path, never in profile JSON or process argv.
 
 The same PTY, alias resolution, event adapters, prompt queue and private socket
