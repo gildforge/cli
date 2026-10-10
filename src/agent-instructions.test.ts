@@ -211,10 +211,10 @@ test('idle runtime heartbeat stays online without falsifying last activity', asy
 test('instruction sync tells the agent to post silent work notes to its current branch',async()=>{
  const dir=await directory(),prompts:string[]=[]
  let text=remote('Canonical instructions\n')
- const sync=new InstructionsSync({client:new GildClient('https://forge/api/v1','gf_fixture',async()=>Response.json(text)),target:{owner:'owner',repo:'repo',sponsor:'alice',label:'codex'},directory:dir,runtime:'codex',enqueue:p=>prompts.push(p),gild:'gild'})
+ const sync=new InstructionsSync({client:new GildClient('https://forge/api/v1','gf_fixture',async()=>Response.json(text)),target:{owner:'owner',repo:'repo',sponsor:'alice',label:'codex'},directory:dir,runtime:'codex',enqueue:p=>prompts.push(p),gild:'gild',agentLabel:'helper'})
  try {
   await sync.check();expect(prompts).toHaveLength(1)
-  expect(prompts[0]).toContain('chat note owner/repo --channel "$(git branch --show-current)" --agent codex')
+  expect(prompts[0]).toContain('chat note owner/repo --channel "$(git branch --show-current)" --agent helper')
   expect(prompts[0]).toContain('never notifies')
   expect(await readFile(join(dir,'AGENTS.md'),'utf8')).toBe(text.text)
   await sync.check();expect(prompts).toHaveLength(1)

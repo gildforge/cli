@@ -106,6 +106,7 @@ export class InstructionsSync {
       runtime: string
       enqueue: (prompt: string) => void
       gild?: string
+      agentLabel?: string
       apply?: (text: string) => Promise<string | void>
     },
   ) {}
@@ -133,7 +134,7 @@ export class InstructionsSync {
           if (this.revision !== remote.revision) {
             const target=this.options.target
             const reread=this.revision ? '[gild] your instructions changed. Re-read '+basename(instructionPath(this.options.directory,this.options.runtime))+' in your working directory.\n' : '[gild] '
-            this.options.enqueue(reread+workNoteHint(`${target.owner}/${target.repo}`,target.label,undefined,this.options.gild))
+            this.options.enqueue(reread+workNoteHint(`${target.owner}/${target.repo}`,this.options.agentLabel ?? target.label,undefined,this.options.gild))
           }
           this.revision = remote.revision
         }

@@ -650,6 +650,7 @@ async function main() {
       directory: process.cwd(),
       runtime: options.agent,
       gild: promptGild(options.hookCommand),
+      agentLabel: options.profile?.name,
       enqueue: (text) => queue!.enqueue(text),
       apply: options.vm
         ? (text) => (child as VmChild).updateInstructions(text)
