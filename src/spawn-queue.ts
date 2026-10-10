@@ -22,7 +22,27 @@ export class InjectionQueue {
     private readonly ready: () => boolean = () => true,
     private readonly structured = false,
     private readonly submitted: () => void = () => {},
+    private readonly userEnterIsPrompt = true,
+    /** The agent reports accepted prompts (Claude's UserPromptSubmit hook):
+     * re-press Enter if a typed prompt was taken as a paste, then give up. */
+    private readonly confirmSubmit = false,
+    private readonly unconfirmed: () => void = () => {},
   ) {}
+  private confirmTimer?: ReturnType<typeof setTimeout>
+  private awaitConfirm(attempt: number) {
+    clearTimeout(this.confirmTimer)
+    this.confirmTimer = setTimeout(() => {
+      if (attempt < 2) {
+        this.write('\r')
+        this.awaitConfirm(attempt + 1)
+      } else this.unconfirmed()
+    }, 1500)
+  }
+  /** The agent confirmed it accepted the last typed prompt. */
+  confirmed() {
+    clearTimeout(this.confirmTimer)
+    this.confirmTimer = undefined
+  }
   userInput(data?: Buffer) {
     if (data && this.submitTimer) {
       this.buffered.push(Buffer.from(data))
@@ -31,7 +51,10 @@ export class InjectionQueue {
     this.lastInput = Date.now()
     clearTimeout(this.escapeTimer)
     if (data) {
-      if (this.input.feed(data) && this.structured) this.submitted()
+      // A user's Enter is not proof of a prompt (it also answers startup
+      // dialogs). Agents whose hooks report UserPromptSubmit say so themselves.
+      if (this.input.feed(data) && this.structured && this.userEnterIsPrompt)
+        this.submitted()
       this.write(data)
       this.escapeTimer = setTimeout(() => {
         this.input.settleEscape()
@@ -70,6 +93,7 @@ export class InjectionQueue {
     this.schedule()
   }
   close() {
+    clearTimeout(this.confirmTimer)
     clearTimeout(this.timer)
     clearTimeout(this.submitTimer)
     clearTimeout(this.escapeTimer)
@@ -95,6 +119,7 @@ export class InjectionQueue {
           this.submitTimer = undefined
           this.write('\r')
           if (this.structured) this.submitted()
+          if (this.confirmSubmit) this.awaitConfirm(0)
           typed?.()
           for (const input of this.buffered.splice(0)) this.userInput(input)
           this.lastInput = Date.now()

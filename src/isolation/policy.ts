@@ -27,6 +27,8 @@ export interface PolicyInput {
 export interface Resolved {
   level: Level
   source: RequestSource
+  /** Set when the requested level could not be had and a weaker tier took the run. */
+  fallback?: string
 }
 
 export class IsolationRefused extends Error {}

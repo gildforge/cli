@@ -9,6 +9,7 @@ import { adapterFor } from './spawn-adapters'
 import { shellQuote } from './spawn-adapters/types'
 import { applyEvent, type AgentEvent, type SessionState } from './spawn-events'
 import { realAgent, agentEnvironment } from './spawn-binary'
+import { QuietIdle } from './spawn-quiet'
 import { StateReporter, type ReportTarget } from './spawn-report'
 import {
   MentionBridge,
@@ -105,7 +106,16 @@ let bridge: MentionBridge | undefined
 let watchdog: ReturnType<typeof startWatchdog>
 const bridgeAbort = new AbortController()
 function publish(event: AgentEvent) {
+  if (event.type !== 'message')
+    inferredBusy =
+      (event.raw as { source?: string } | null)?.source === 'pty_submit'
+  if (
+    (event.raw as { hook_event_name?: string } | undefined)?.hook_event_name ===
+    'UserPromptSubmit'
+  )
+    queue?.confirmed()
   applyEvent(state, event)
+  quiet?.changed()
   watchdog?.state(state.state)
   queue?.changed()
   broadcast(event)
@@ -120,7 +130,33 @@ function broadcast(event: AgentEvent | BridgeEvent | NudgeEvent) {
     else socket.write(line)
   }
 }
+/** True while the busy state is gild's own inference from an Enter, not a
+ * report from the agent (Codex reports only turn ends). */
+let inferredBusy = false
+const quiet = adapter?.quiet
+  ? new QuietIdle({
+      ...adapter.quiet,
+      phase: () =>
+        closing
+          ? null
+          : state.state === 'unknown'
+            ? 'startup'
+            : state.state === 'busy' && inferredBusy
+              ? 'busy'
+              : null,
+      idle: () =>
+        publish({
+          session: options.id,
+          agent: adapter!.name,
+          type: 'idle',
+          ts: new Date().toISOString(),
+          raw: { source: 'terminal_quiet' },
+        }),
+    })
+  : undefined
 function submitted() {
+  // Whatever was on screen before this Enter (a dialog it answered) is gone.
+  quiet?.input()
   publish({
     session: options.id,
     agent: adapter!.name,
@@ -509,7 +545,10 @@ async function main() {
       host = new DetachedHost({
         ...options.detach,
         resize: (cols, rows) => child?.resize(cols, rows),
-        input: (data) => queue?.userInput(data),
+        input: (data) => {
+          quiet?.input()
+          queue?.userInput(data)
+        },
       })
       host.openLog(join(directory, options.id))
     }
@@ -534,6 +573,7 @@ async function main() {
         })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
+    child.onData((data) => quiet?.output(data as unknown as Buffer))
   } catch (error) {
     return fallback(error)
   }
@@ -549,6 +589,18 @@ async function main() {
     () => !adapter || state.state === 'idle',
     !!adapter,
     submitted,
+    // Claude reports UserPromptSubmit through hooks; Codex only reports turn end.
+    adapter?.name !== 'claude',
+    adapter?.name === 'claude',
+    () =>
+      // Never left 'busy' on a guess nothing confirmed: report and fall back.
+      publish({
+        session: options.id,
+        agent: adapter!.name,
+        type: 'idle',
+        ts: new Date().toISOString(),
+        raw: { source: 'unconfirmed_submit' },
+      }),
   )
   const target = bridgeConfig ? await bridgeConfig : undefined
   watchdog = startWatchdog({
@@ -589,6 +641,7 @@ async function main() {
     return
   }
   process.stdin.on('data', (data: Buffer) => {
+    quiet?.input()
     queue!.userInput(data)
   })
   process.stdin.on('end', () => finish(0))
