@@ -439,6 +439,9 @@ test('the buffer list switches channels, keeps notes dim, and archives read-only
     expect(screen.split('\n')[0]).toContain('#bob/topic')
     expect(screen).toContain('Channels')
     expect(screen).toContain('Branch work context')
+    expect(
+      screen.split('\n').find((line) => line.includes('>#bob/topic')),
+    ).not.toContain('[3]')
     expect(screen).not.toContain('Archived work context')
     expect(s.seen.some((r) => r.path.includes('channel=bob%2Ftopic'))).toBe(
       true,

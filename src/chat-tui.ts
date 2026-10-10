@@ -162,6 +162,10 @@ export class ChatView {
     this.scroll = 0
     this.unseen = 0
     this.older = null
+    this.loadingOlder = false
+    this.archived = false
+    this.status = null
+    this.participants = []
     this.online = null
   }
   online: Set<string> | null = null
@@ -802,7 +806,9 @@ export async function runChatTui(options: {
     origin,
   )
   view.selected = selected
-  view.channels = list.channels
+  view.channels = list.channels.map((c) =>
+    (c.key ?? c.name) === selected ? { ...c, unread: 0 } : c,
+  )
   view.archived = !!list.channels.find((c) => (c.key ?? c.name) === selected)
     ?.archived
   view.participants = roster.participants
@@ -881,7 +887,9 @@ export async function runChatTui(options: {
       const list = await client.request('channelList', repo)
       if (own !== generation) return
       view.participants = fresh.participants
-      view.channels = list.channels
+      view.channels = list.channels.map((c) =>
+        (c.key ?? c.name) === selected ? { ...c, unread: 0 } : c,
+      )
       view.archived = !!list.channels.find(
         (c) => (c.key ?? c.name) === selected,
       )?.archived
@@ -1000,7 +1008,9 @@ export async function runChatTui(options: {
     view.older = page.before
     view.participants = people.participants
     view.viewer = people.viewer
-    view.channels = list.channels
+    view.channels = list.channels.map((c) =>
+      (c.key ?? c.name) === selected ? { ...c, unread: 0 } : c,
+    )
     view.archived = !!list.channels.find((c) => (c.key ?? c.name) === name)
       ?.archived
     view.canPost = people.can_post && !view.archived
