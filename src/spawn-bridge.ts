@@ -188,6 +188,8 @@ export class MentionBridge {
       enqueue: (text: string, typed: () => void) => void
       emit: (event: BridgeEvent) => void
       pause?: typeof waitForEvents
+      /** Waits between reconnects; tests pass an instant one. */
+      backoff?: (ms: number, signal: AbortSignal) => Promise<void>
     },
   ) {
     this.channels = opts.repos.map((repo) => ({ repo, state: 'connecting' }))
@@ -234,27 +236,40 @@ export class MentionBridge {
     })
   }
   private async run(channel: ChannelStatus, signal: AbortSignal) {
-    try {
-      await tailEvents(
-        this.opts.client,
-        {
-          repo: channel.repo,
-          since: this.saved.cursors[channel.repo],
-          onPage: (page) => this.page(channel, page),
-        },
-        signal,
-        () => {},
-        () => {},
-        this.opts.pause,
-      )
-    } catch (error) {
-      // The agent keeps running; the failure is visible in status and events.
-      if (!signal.aborted)
+    // A listener never gives up while the agent runs: any failure (a network
+    // drop, a 5xx, or a read check answered while the repo's access settings
+    // were briefly pending) shows in status, then it resumes from the last
+    // page it saw. Before 10 Oct one transient 404 silenced an agent for good.
+    for (let attempt = 0; !signal.aborted; attempt++) {
+      try {
+        await tailEvents(
+          this.opts.client,
+          {
+            repo: channel.repo,
+            since: this.head.get(channel.repo) ?? this.saved.cursors[channel.repo],
+            onPage: (page) => {
+              attempt = 0
+              this.page(channel, page)
+            },
+          },
+          signal,
+          () => {},
+          () => {},
+          this.opts.pause,
+        )
+        return
+      } catch (error) {
+        if (signal.aborted) return
         this.set(
           channel,
           'error',
           error instanceof Error ? error.message : String(error),
         )
+        await (this.opts.backoff ?? sleep)(
+          Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5)),
+          signal,
+        )
+      }
     }
   }
   private stage(stage: MentionStage, repo: string, m: Mention, error?: string) {
@@ -477,4 +492,13 @@ export class MentionBridge {
   flush() {
     return this.writing
   }
+}
+
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((done) => {
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', () => (clearTimeout(timer), done()), {
+      once: true,
+    })
+  })
 }
