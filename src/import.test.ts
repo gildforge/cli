@@ -166,7 +166,7 @@ test('native import preserves full history, branches, annotated tags, default br
     await new Promise<void>((r) => server.close(() => r()))
     await rm(root, { recursive: true, force: true })
   }
-})
+}, 30000)
 test('CLI status, resume and cutover use the canonical import contract', async () => {
   const seen: string[] = [],
     status = {
@@ -368,4 +368,260 @@ test('SSH source hostnames stay literal arguments even with shell metacharacters
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('local env and gh auth tokens are only used on source API requests; resume skips acknowledged records', async () => {
+  const { githubReadToken } = await import('./import/auth')
+  const { executeImport } = await import('./import/execute')
+  const { metadata, sourceURL } = await import('./import/source')
+  expect(
+    await githubReadToken(
+      false,
+      { GH_TOKEN: 'env-marker', GITHUB_TOKEN: 'other' },
+      async () => {
+        throw Error('should not run gh')
+      },
+    ),
+  ).toBe('env-marker')
+  expect(
+    await githubReadToken(
+      false,
+      { GITHUB_TOKEN: 'github-marker' },
+      async () => 'gh-marker',
+    ),
+  ).toBe('github-marker')
+  expect(await githubReadToken(false, {}, async () => 'gh-marker\n')).toBe(
+    'gh-marker',
+  )
+  expect(
+    await githubReadToken(
+      true,
+      { GH_TOKEN: 'env-marker' },
+      async () => 'gh-marker',
+    ),
+  ).toBeUndefined()
+  const seen: any[] = [],
+    at = '2020-01-01T00:00:00.000Z'
+  let checkpoint = '',
+    fail = true,
+    commits: number[] = []
+  const status = {
+    repository: 'alice/demo',
+    source: 'https://github.com/a/b',
+    mirror: false,
+    state: 'running',
+    progress: { phase: 'metadata', completed: 0, message: 'test' },
+    warnings: [],
+    error: null,
+    updated_at: at,
+    next_sync: null,
+  }
+  const f = await fixture(async (req) => {
+    const body = await req.json()
+    seen.push({ headers: Object.fromEntries(req.headers), body })
+    if (req.url.endsWith('/claim')) return Response.json(null)
+    if (req.url.endsWith('/batch')) {
+      checkpoint = body.progress.checkpoint
+      commits.push(
+        ...body.records
+          .filter((r: any) => r.kind === 'issue')
+          .map((r: any) => r.number),
+      )
+      return Response.json({ ok: true })
+    }
+    return Response.json(status)
+  })
+  const sourceRequests: string[] = [],
+    sourceTokens: string[] = []
+  const fetcher: NonNullable<Parameters<typeof executeImport>[5]> = async (
+    input,
+    init,
+  ) => {
+    const url = new URL(String(input))
+    sourceRequests.push(url.pathname)
+    sourceTokens.push(new Headers(init?.headers).get('authorization')!)
+    if (fail && url.pathname.endsWith('/issues/2/comments'))
+      return new Response(null, { status: 403 })
+    return Response.json(
+      url.pathname.endsWith('/issues')
+        ? [1, 2, 3].map((number) => ({
+            number,
+            title: 'item',
+            body: 'body',
+            created_at: at,
+            updated_at: at,
+            state: 'open',
+            labels: [],
+            user: { login: 'test' },
+          }))
+        : [],
+    )
+  }
+  const original = {
+    fetch: NativeImport.prototype.fetch,
+    push: NativeImport.prototype.push,
+    workflows: NativeImport.prototype.workflows,
+  }
+  const before = process.env.GH_TOKEN
+  try {
+    process.env.GH_TOKEN = 'env-marker'
+    await f.identity()
+    const created = await cli(f.root, [
+      'repo',
+      'import',
+      'https://github.com/a/b',
+      '--name',
+      'alice/demo',
+      '--server',
+      f.origin,
+    ])
+    expect(created.code).toBe(0)
+    expect(seen.find((r) => r.body.url)?.body.source_token).toBeUndefined()
+    expect(seen.find((r) => r.body.url)?.body.private).toBeUndefined()
+    NativeImport.prototype.fetch = async () => 'master'
+    NativeImport.prototype.push = async function (prepared) {
+      await prepared?.('import/pr')
+      return { branches: 1, tags: 0, commits: 62 }
+    }
+    NativeImport.prototype.workflows = async () => []
+    const job = {
+      repository: 'alice/demo',
+      source: 'https://github.com/a/b',
+      forge: 'github' as const,
+      token: 'gi_fixture',
+      mirror: false,
+      checkpoint: '',
+    }
+    await expect(
+      executeImport(
+        f.origin,
+        job,
+        f.root,
+        new AbortController().signal,
+        () => {},
+        fetcher,
+      ),
+    ).rejects.toThrow('Source API 403')
+    expect(commits).toEqual([1])
+    expect(JSON.parse(checkpoint)).toMatchObject({ stage: 1, index: 1 })
+    fail = false
+    sourceRequests.length = 0
+    await executeImport(
+      f.origin,
+      { ...job, checkpoint },
+      f.root,
+      new AbortController().signal,
+      () => {},
+      fetcher,
+    )
+    expect(commits).toEqual([1, 2, 3])
+    expect(sourceRequests).not.toContain('/repos/a/b/issues/1/comments')
+    expect(sourceRequests).not.toContain('/repos/a/b/issues')
+    expect(sourceRequests).not.toContain('/repos/a/b/labels')
+    expect(sourceTokens.every((t) => t === 'Bearer env-marker')).toBe(true)
+    expect(JSON.stringify(seen)).not.toContain('env-marker')
+    expect(
+      seen.every((r) =>
+        ['Bearer gi_fixture', 'Bearer gf_fixturetoken'].includes(
+          r.headers.authorization,
+        ),
+      ),
+    ).toBe(true)
+    const gh = join(f.root, 'gh')
+    await writeFile(
+      gh,
+      '#!/bin/sh\n[ "$1 $2 $3 $4" = "auth token --hostname github.com" ] || exit 1\nprintf gh-marker\n',
+    )
+    await chmod(gh, 0o700)
+    const pathBefore = process.env.PATH,
+      githubBefore = process.env.GITHUB_TOKEN
+    delete process.env.GH_TOKEN
+    delete process.env.GITHUB_TOKEN
+    process.env.PATH = f.root + ':' + pathBefore
+    try {
+      sourceTokens.length = 0
+      await executeImport(
+        f.origin,
+        job,
+        f.root,
+        new AbortController().signal,
+        () => {},
+        fetcher,
+      )
+      expect(sourceTokens.every((t) => t === 'Bearer gh-marker')).toBe(true)
+      expect(JSON.stringify(seen)).not.toContain('gh-marker')
+      sourceTokens.length = 0
+      await executeImport(
+        f.origin,
+        job,
+        f.root,
+        new AbortController().signal,
+        () => {},
+        fetcher,
+        true,
+      )
+      expect(sourceTokens.every((t) => t === null)).toBe(true)
+    } finally {
+      process.env.PATH = pathBefore
+      if (githubBefore !== undefined) process.env.GITHUB_TOKEN = githubBefore
+    }
+    // gh-derived auth travels through the same reader, with actual requests.
+    const token = await githubReadToken(false, {}, async () => 'gh-marker')
+    const recorded: any[] = []
+    for await (const _ of metadata({
+      source: sourceURL(job.source),
+      token,
+      destination: f.origin,
+      head: async () => null,
+      fetcher: async (input, init) => {
+        recorded.push({ url: String(input), headers: init?.headers })
+        return Response.json([])
+      },
+    })) {
+    }
+    expect(recorded.length).toBe(3)
+    expect(
+      recorded.every(
+        (r) =>
+          r.headers.authorization === 'Bearer gh-marker' &&
+          new URL(r.url).hostname === 'api.github.com',
+      ),
+    ).toBe(true)
+  } finally {
+    Object.assign(NativeImport.prototype, original)
+    if (before === undefined) delete process.env.GH_TOKEN
+    else process.env.GH_TOKEN = before
+    await f.close()
+  }
+})
+
+test('an already copied PR head succeeds without another push', async () => {
+  const native = new NativeImport({
+    source: 'https://github.com/a/b',
+    directory: '.tmp/unused',
+    signal: new AbortController().signal,
+    credentials: async () => ({
+      url: 'https://gild.gg/a/b.git',
+      token: 'gi_test',
+    }),
+    progress: () => {},
+  })
+  const calls: string[][] = []
+  native.git = async (args) => {
+    calls.push(args)
+    return args[0] === 'rev-parse'
+      ? 'a'.repeat(40)
+      : args[0] === 'ls-remote'
+        ? 'a'.repeat(40) + '\trefs/heads/import/pr/2'
+        : ''
+  }
+  expect(await native.head('refs/pull/2/head', 2)).toBe('import/pr/2')
+  expect(calls.some((args) => args[0] === 'push')).toBe(false)
+})
+
+test('Git error details retain the last three lines and mask URL credentials', async () => {
+  const { gitReason } = await import('./import/git')
+  expect(
+    gitReason('first\nsecond\nfatal: https://user:secret@gild.gg/repo\nlast\n'),
+  ).toBe(' (second | fatal: https://***@gild.gg/repo | last)')
 })
