@@ -11,7 +11,53 @@ permissions:
   id-token: write
 
 jobs:
+  # The microVM guest image (docs/VM.md), one job per VM platform, on hosted
+  # runners with no secrets and no environment: each gzips its files for the
+  # publish job, which writes vm/manifest.json and uploads it all.
+  vm-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun scripts/vm-release.ts build linux-x64 vm-out
+      - run: gzip -n vm-out/vmlinux vm-out/rootfs.ext4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-linux-x64
+          path: vm-out/*.gz
+          compression-level: 0
+          if-no-files-found: error
+  vm-darwin-arm64-guest:
+    # vz boots an arm64 Linux guest: kernel and rootfs build on an arm64 Linux docker host.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun scripts/vm-release.ts build darwin-arm64 vm-out
+      - run: gzip -n vm-out/Image vm-out/rootfs.ext4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-darwin-arm64-guest
+          path: vm-out/*.gz
+          compression-level: 0
+          if-no-files-found: error
+  vm-darwin-arm64-vz:
+    # The gild-vz helper, ad hoc signed with the virtualization entitlement.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/build-vz-helper.sh vm-out/gild-vz
+      - run: gzip -n vm-out/gild-vz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-darwin-arm64-vz
+          path: vm-out/gild-vz.gz
+          compression-level: 0
+          if-no-files-found: error
   publish:
+    needs: [vm-linux-x64, vm-darwin-arm64-guest, vm-darwin-arm64-vz]
     environment: release
     runs-on: ubuntu-latest
     steps:
@@ -24,7 +70,21 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run pack
       - run: bun run test:install
-      - name: Upload binaries to the release bucket (releases.gild.gg/cli)
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-linux-x64
+          path: out/${{ github.ref_name }}/vm/linux-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-darwin-arm64-guest
+          path: out/${{ github.ref_name }}/vm/darwin-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-darwin-arm64-vz
+          path: out/${{ github.ref_name }}/vm/darwin-arm64
+      - name: Write the VM image manifest (sha256 of every file, this version and guest protocol)
+        run: bun scripts/vm-release.ts manifest "out/${GITHUB_REF_NAME}/vm"
+      - name: Upload binaries and the VM image to the release bucket (releases.gild.gg/cli)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

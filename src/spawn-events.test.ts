@@ -167,6 +167,12 @@ test('Codex notify translates only turn completion; generated spawn config is na
     expect(prepared.args).toEqual([
       '-c',
       'notify=["/gild","hook","--session","test","--agent","codex"]',
+      // An injected prompt must never land in Codex's "Update available" menu,
+      // nor be held as a paste whose Enter never submits.
+      '-c',
+      'check_for_update_on_startup=false',
+      '-c',
+      'tui.disable_paste_burst=true',
       '--resume',
     ])
   } finally {
@@ -236,6 +242,82 @@ test('input tracker handles split bracketed pastes, Escape, controls, cursor key
   expect(input.unsent).toBe(true)
   expect(input.feed('\r')).toBe(true)
   expect(input.unsent).toBe(false)
+})
+test('a typed prompt the agent never accepts is re-submitted, then reported instead of left busy', async () => {
+  const writes: string[] = []
+  let unconfirmed = 0
+  const queue = new InjectionQueue(
+    (d) => writes.push(String(d)),
+    0,
+    () => true,
+    true,
+    () => {},
+    false,
+    true,
+    () => unconfirmed++,
+  )
+  try {
+    queue.enqueue('hello')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(writes).toEqual(['hello', '\r'])
+    await new Promise((r) => setTimeout(r, 1600))
+    expect(writes.filter((w) => w === '\r').length).toBe(2) // Enter pressed again
+    await new Promise((r) => setTimeout(r, 3100))
+    expect(writes.filter((w) => w === '\r').length).toBe(3)
+    expect(unconfirmed).toBe(1)
+  } finally {
+    queue.close()
+  }
+  const quiet: string[] = []
+  const ok = new InjectionQueue(
+    (d) => quiet.push(String(d)),
+    0,
+    () => true,
+    true,
+    () => {},
+    false,
+    true,
+    () => {},
+  )
+  try {
+    ok.enqueue('hi')
+    await new Promise((r) => setTimeout(r, 200))
+    ok.confirmed() // UserPromptSubmit arrived
+    await new Promise((r) => setTimeout(r, 1700))
+    expect(quiet).toEqual(['hi', '\r'])
+  } finally {
+    ok.close()
+  }
+}, 15000)
+test('a user Enter marks busy only when the agent cannot report prompts itself', async () => {
+  for (const userEnterIsPrompt of [true, false]) {
+    let busy = 0
+    const queue = new InjectionQueue(
+      () => {},
+      0,
+      () => true,
+      true,
+      () => busy++,
+      userEnterIsPrompt,
+    )
+    try {
+      queue.userInput(Buffer.from('\r')) // e.g. answering Claude's trust dialog
+      expect(busy).toBe(userEnterIsPrompt ? 1 : 0)
+    } finally {
+      queue.close()
+    }
+  }
+})
+test('mouse reports and other full-grammar CSI sequences are not typing', () => {
+  const input = new InputLine()
+  // SGR mouse press and release (a click), a bracketed focus-in, and a CSI
+  // with an intermediate byte, split across reads.
+  input.feed('\x1b[<0;12;5M\x1b[<0;12;5m')
+  input.feed('\x1b[<')
+  input.feed('64;3;9M\x1b[I\x1b[1 q')
+  expect(input.unsent).toBe(false)
+  input.feed('x')
+  expect(input.unsent).toBe(true)
 })
 test('terminal replies to agent queries are not typing', () => {
   const input = new InputLine()
@@ -341,6 +423,42 @@ test('state reporting coalesces, uses scoped token, hides raw/text/arguments and
   expect(JSON.stringify(calls)).not.toContain('private prompt')
   expect(JSON.stringify(calls)).not.toContain('secret')
 })
+test('a slow forge still receives the state report (live gild.gg took 2–4.5 s)', async () => {
+  let delivered = false,
+    aborted = false
+  const reporter = new StateReporter(
+    {
+      server: 'https://gild.test',
+      token: 'fixture-scoped-token',
+      agent: 'owner/label',
+      owner: 'owner',
+      repo: 'demo',
+      sha: 'a'.repeat(40),
+    },
+    'codex',
+    (_input, init) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          delivered = true
+          resolve(Response.json({}))
+        }, 2500)
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          clearTimeout(timer)
+          reject(init.signal!.reason)
+        })
+      }),
+  )
+  reporter.event({
+    session: 'test',
+    agent: 'codex',
+    type: 'idle',
+    ts: new Date().toISOString(),
+    raw: {},
+  })
+  await pause(3000)
+  expect({ delivered, aborted }).toEqual({ delivered: true, aborted: false })
+}, 10000)
 test('PTY events, hook command, status, subscription, gating and settings cleanup work together', async () => {
   const proc = Bun.spawn(
     ['python3', resolve('scripts/fixtures/events-harness.py')],

@@ -96,8 +96,15 @@ export function mentionPrompt(
     body,
     `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
     `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    MENTION_ETIQUETTE,
+    workflowPrompt(repo, label, gild),
   ].join('\n')
 }
+
+/** Every @tag wakes that agent, so a courtesy tag ("@bob says 42") makes it
+ * answer again and two agents can ping-pong. The rehearsal on 10 Oct did. */
+export const MENTION_ETIQUETTE =
+  'Note:    an @tag wakes that agent. Tag only whoever must act next; name others without @. If this needs nothing from you, do not reply.'
 
 /** One short prompt per fired trigger; names the read and hand-off commands. */
 export function triggerPrompt(
@@ -118,9 +125,14 @@ export function triggerPrompt(
   const what = label ? `${trigger.action} ${label}` : trigger.action
   return [
     `[gild] ${kind} #${issue.number} "${issue.title}" ${what} in ${repo} by ${actor}`,
-    `Read:  ${gild} issue view ${repo}#${issue.number}`,
+    `Read:  ${gild} ${trigger.event === 'pull_request' ? 'pr' : 'issue'} view ${repo}#${issue.number} --agent ${agent}`,
     `Post:  ${gild} chat send ${repo} --agent ${agent} "@<agent> <message>"`,
+    workflowPrompt(repo, agent, gild),
   ].join('\n')
+}
+
+function workflowPrompt(repo: string, agent: string, gild: string) {
+  return `Work: ${gild} clone ${repo} --agent ${agent}; git switch -c <branch>, commit, push; ${gild} issue create|comment|close|label and ${gild} pr create|list|view|diff|checks|comment|review|merge. Use --agent ${agent} on every forge command; reads support --json.`
 }
 
 type Saved = { cursors: Record<string, string>; delivered: string[] }

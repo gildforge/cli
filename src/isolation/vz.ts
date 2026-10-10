@@ -51,6 +51,19 @@ export const GUEST_TO_HOST_PORTS = [9100]
 export const VZ_NETWORK_MARKER = '/etc/gild/vz-network.json'
 export const VZ_SETUP_COMMAND = 'sudo scripts/vz-network-setup.sh'
 
+/** This Mac can run Virtualization.framework guests (hosted CI Macs cannot). */
+export function vzHostReady() {
+  try {
+    return (
+      execFileSync('sysctl', ['-n', 'kern.hv_support'], {
+        encoding: 'utf8',
+      }).trim() === '1'
+    )
+  } catch {
+    return false
+  }
+}
+
 export function vzAvailable(
   c: Pick<VzConfig, 'helper' | 'kernel' | 'rootfs'>,
   platform: NodeJS.Platform = process.platform,

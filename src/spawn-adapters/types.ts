@@ -21,6 +21,9 @@ export type AgentAdapter = {
     receive?: (raw: unknown) => void
   }>
   translate(session: string, raw: unknown): AgentEvent | null
+  /** For a runtime that reports only turn ends: terminal-quiet readiness
+   * (see QuietIdle). `dialogs` matches screen text with whitespace removed. */
+  quiet?: { startupMs: number; busyMs: number; dialogs?: RegExp }
 }
 export function event(
   session: string,

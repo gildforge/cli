@@ -5,6 +5,7 @@ import { ApiRequestError } from './api/client'
 import {
   MentionBridge,
   mentionPrompt,
+  MENTION_ETIQUETTE,
   triggerPrompt,
   type BridgeEvent,
 } from './spawn-bridge'
@@ -35,8 +36,16 @@ test('trigger bridge PTY: label wakes alice, her unprompted post wakes bob', asy
     clearTimeout(timer)
   }
 }, 60000)
-for (const scenario of ['', '--auth', '--receipt-failure']) {
-  test(`mention bridge PTY${scenario ? `: ${scenario} keeps the agent alive` : ''}`, async () => {
+const scenarios: Record<string, string> = {
+  '': '',
+  '--auth': ': auth failure keeps the agent alive',
+  '--receipt-failure': ': receipt failure keeps the agent alive',
+  '--codex': ': a fresh Codex session gets its first mention',
+  '--codex-trust':
+    ': Codex trust dialog is left to the person, then the mention arrives',
+}
+for (const [scenario, title] of Object.entries(scenarios)) {
+  test(`mention bridge PTY${title}`, async () => {
     const proc = Bun.spawn(
       [
         'python3',
@@ -179,12 +188,19 @@ test('prompt is short, names the history and reply commands', () => {
     },
     agent: 'owner/bob',
   })
-  expect(text.split('\n')).toEqual([
+  expect(text).toContain('clone owner/demo --agent')
+  expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
+  expect(text.split('\n').slice(0, -1)).toEqual([
     '[gild] @alice/ava mentioned you in owner/demo (message 41):',
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
+    MENTION_ETIQUETTE,
   ])
+  // Without the note, agents tag each other as a courtesy and wake each other
+  // again (rehearsal, 10 Oct: bob answered coordinator's relay of his answer).
+  expect(MENTION_ETIQUETTE).toContain('Tag only whoever must act next')
+  expect(MENTION_ETIQUETTE).toContain('do not reply')
 })
 test('prompt names the gild that spawned the session, not whatever is on PATH', () => {
   const text = mentionPrompt(
@@ -279,9 +295,11 @@ test('trigger prompt is short, names the read and hand-off commands', () => {
     'gild',
     'alice',
   )
-  expect(text.split('\n')).toEqual([
+  expect(text).toContain('clone owner/demo --agent')
+  expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
+  expect(text.split('\n').slice(0, -1)).toEqual([
     '[gild] issue #12 "Triage me" labeled triage in owner/demo by sami',
-    'Read:  gild issue view owner/demo#12',
+    'Read:  gild issue view owner/demo#12 --agent alice',
     'Post:  gild chat send owner/demo --agent alice "@<agent> <message>"',
   ])
   const pr = triggerPrompt(
@@ -296,7 +314,9 @@ test('trigger prompt is short, names the read and hand-off commands', () => {
   expect(pr).toContain(
     '[gild] pull request #4 "Add thing" opened in owner/demo by sami',
   )
-  expect(pr).toContain("Read:  '/opt/gild bin/gild' issue view owner/demo#4")
+  expect(pr).toContain(
+    "Read:  '/opt/gild bin/gild' pr view owner/demo#4 --agent alice",
+  )
 })
 
 test('a matching labeled issue is queued once; other labels and duplicates are not', async () => {
