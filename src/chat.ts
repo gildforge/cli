@@ -1,7 +1,11 @@
 import { Command, InvalidArgumentError } from 'commander'
 import { ApiRequestError, GildClient } from './api/client'
 import { routes } from './api/contract'
-import { channelCursor, type ChannelMessage } from './api/channel-contract'
+import {
+  channelCursor,
+  channelName,
+  type ChannelMessage,
+} from './api/channel-contract'
 import { tailEvents, waitForEvents } from './events-tail'
 
 type ClientOptions = { agent?: string; server?: string; channel?: string }
@@ -38,6 +42,11 @@ export function repoPair(value: string) {
 function cursor(value: string) {
   if (!channelCursor.safeParse(value).success)
     throw new InvalidArgumentError('A cursor is a non-negative integer')
+  return value
+}
+function branch(value: string) {
+  if (!channelName.safeParse(value).success)
+    throw new InvalidArgumentError('Use a valid Git branch name')
   return value
 }
 function limit(value: string) {
@@ -151,6 +160,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       .option(
         '--channel <branch>',
         'select a branch channel (default: repository)',
+        branch,
       )
       .option('--agent <label>', 'use an approved agent token')
       .option(

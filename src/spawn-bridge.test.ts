@@ -466,7 +466,10 @@ test('branch trigger prompts require membership; a direct tag can wake a non-mem
     ...pr,
     payload: {
       ...pr.payload,
-      pull_request: { ...('pull_request' in pr.payload ? pr.payload.pull_request : {}), head: { ref: 'bob/topic' } },
+      pull_request: {
+        ...('pull_request' in pr.payload ? pr.payload.pull_request : {}),
+        head: { ref: 'bob/topic' },
+      },
     },
   }
   const direct = {
