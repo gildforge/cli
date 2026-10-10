@@ -56,6 +56,11 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
             except (BrokenPipeError,ConnectionResetError):pass
         def do_POST(self):
             url=urllib.parse.urlparse(self.path)
+            if url.path.endswith('/receipts'):
+                name=AGENTS.get((self.headers.get('Authorization') or '')[7:]);assert name
+                body=json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+                self.wfile.write(json.dumps({'agent':name,**body,'updated_at':'2026-10-10T06:31:04Z'}).encode());return
             assert url.path=='/api/v1/repos/owner/demo/channel/messages',url.path
             name=AGENTS.get((self.headers.get('Authorization') or '')[7:])
             assert name,name

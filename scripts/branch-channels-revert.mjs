@@ -12,3 +12,15 @@ try {
   assert.match(result.stderr,/4 fail/,'all four feature regressions fail when fixes are reverted')
   console.log('Revert proof: flags, TUI branch switching and scoped mention prompts all fail against the original TUI')
 } finally {for(const [f,text] of saved)writeFileSync(f,text)}
+
+const reporter='src/spawn-receipts.ts',original=readFileSync(reporter,'utf8'),needle='channel ? { channel } : undefined'
+assert.ok(original.includes(needle),'receipt channel mutation reaches the real reporter')
+try {
+  writeFileSync(reporter,original.replace(needle,'undefined'))
+  const result=spawnSync('bun',['test','src/spawn-receipts.test.ts','--test-name-pattern','branch receipt reports'],{encoding:'utf8'})
+  writeFileSync('.tmp/branch-receipts-reverted.log',result.stdout+result.stderr)
+  assert.notEqual(result.status,0);assert.match(result.stderr,/expect\(|1 fail/)
+  console.log('Revert proof: branch receipt routing fails without the channel query')
+} finally {writeFileSync(reporter,original)}
+const restored=spawnSync('bun',['test','src/spawn-receipts.test.ts','--test-name-pattern','branch receipt reports'],{encoding:'utf8'})
+assert.equal(restored.status,0,restored.stderr)

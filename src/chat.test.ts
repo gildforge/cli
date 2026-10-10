@@ -219,6 +219,17 @@ test('raw streams channel frames in order, resumes from --since, never exits on 
       'three',
       'four',
     ])
+    const receipt = {
+      type: 'receipt',
+      cursor: '3',
+      receipt: {
+        agent: 'owner/bob',
+        state: 'read',
+        updated_at: '2026-10-10T06:31:04.000Z',
+      },
+    }
+    for (const socket of s.sockets) socket.send(JSON.stringify(receipt))
+    expect(await lines(first, 1)).toEqual([receipt])
     expect(first.exitCode).toBeNull()
     first.kill('SIGINT')
     expect(await first.exited).not.toBeNull()

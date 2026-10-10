@@ -1,4 +1,6 @@
 import { shellQuote } from './spawn-adapters/types'
+import { ReceiptReporter } from './spawn-receipts'
+import type { AgentEvent } from './spawn-events'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { GildClient } from './api/client'
@@ -165,6 +167,8 @@ export class MentionBridge {
   private readonly inflight = new Map<string, number>()
   private readonly head = new Map<string, string>()
   private readonly triggers: Trigger[]
+  private receipts: ReceiptReporter
+  private unread = new Map<string, { repo: string; cursor: string; channel: string }>()
   private writing: Promise<void> = Promise.resolve()
   constructor(
     private readonly opts: {
@@ -187,11 +191,16 @@ export class MentionBridge {
       /** Trigger specs from the profile (`--on`), matched on the same repos. */
       triggers?: string[]
       file: string
-      enqueue: (text: string, typed: () => void) => void
+      enqueue: (
+        text: string,
+        typed: () => void,
+        held?: (reason: string) => void,
+      ) => void
       emit: (event: BridgeEvent) => void
       pause?: typeof waitForEvents
     },
   ) {
+    this.receipts = new ReceiptReporter(opts.client)
     this.channels = opts.repos.map((repo) => ({ repo, state: 'connecting' }))
     const own = new Set(opts.repos.map((r) => r.toLowerCase()))
     this.watched = [...new Set(opts.watch ?? [])]
@@ -374,9 +383,16 @@ export class MentionBridge {
       this.opts.enqueue(
         mentionPrompt(repo, this.opts.label, m, this.opts.gild),
         () => {
+          this.receipts.report(repo, m.message.cursor, { state: 'delivered' }, m.channel)
+          this.unread.set(m.message.id, { repo, cursor: m.message.cursor, channel: m.channel ?? '' })
           this.stage('delivered', repo, m)
           this.settle(repo, m.message.id)
         },
+        (reason) =>
+          this.receipts.report(repo, m.message.cursor, {
+            state: 'held',
+            reason,
+          },m.channel),
       )
       this.stage('queued', repo, m)
     } catch (error) {
@@ -506,7 +522,18 @@ export class MentionBridge {
       })
       .catch(() => {})
   }
-  flush() {
-    return this.writing
+  event(event: AgentEvent) {
+    const raw = event.raw as { source?: string } | null
+    if (
+      raw?.source === 'pty_submit' ||
+      !['busy', 'tool_start', 'tool_end'].includes(event.type)
+    )
+      return
+    for (const { repo, cursor, channel } of this.unread.values())
+      this.receipts.report(repo, cursor, { state: 'read' }, channel)
+    this.unread.clear()
+  }
+  async flush() {
+    await Promise.all([this.writing, this.receipts.flush()])
   }
 }

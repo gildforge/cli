@@ -39,6 +39,7 @@ test('trigger bridge PTY: label wakes alice, her unprompted post wakes bob', asy
 const scenarios: Record<string, string> = {
   '': '',
   '--auth': ': auth failure keeps the agent alive',
+  '--receipt-failure': ': receipt failure keeps the agent alive',
   '--codex': ': a fresh Codex session gets its first mention',
   '--codex-trust':
     ': Codex trust dialog is left to the person, then the mention arrives',
@@ -161,6 +162,7 @@ async function bridge(
             ],
           }
         if (_op === 'issues') return backlog
+        if (_op === 'channelReceipt') return {}
         sinces.push(query.since)
         const page = pages[Math.min(index++, pages.length - 1)]()
         if (index >= pages.length + 1) controller.abort()

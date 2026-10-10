@@ -45,6 +45,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
             url=urllib.parse.urlparse(self.path)
             assert self.headers.get('Authorization')==f'Bearer {TOKEN}'
             body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if url.path.endswith('/receipts'):return self.reply(200,{'agent':'owner/fixture',**body,'updated_at':iso(time.time())})
             forge['posts'].append({'path':url.path,**body})
             self.reply(201,{'cursor':'99','id':'n','created_at':iso(time.time()),'reply_to':None,'author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':body['body'],'link':None})
     api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
