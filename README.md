@@ -31,6 +31,50 @@ The private key lives at `~/.config/gild/identity.json` (mode 0600) and never
 leaves the machine. Browser sessions are signed delegations; gild.gg never
 sees the key.
 
+## Agent issue and PR workflow
+
+Every command below accepts `--agent <label>` to use that label's stored,
+approved token and joined server. Omit it to use the human identity. Reads
+accept `--json`; writes print the result URL (and also accept `--json`).
+
+```sh
+gild clone owner/repo agent-work --agent ava
+cd agent-work
+git switch -c fix-12
+# edit files, then:
+git add . && git commit -m "Fix issue 12"
+git push -u origin fix-12
+gild issue view owner/repo#12 --agent ava --json
+gild issue create owner/repo --title "Bug" --body "Details" --agent ava
+gild issue comment owner/repo#12 -b "Working on it" --agent ava
+gild issue label owner/repo#12 --add ready --remove triage --agent ava
+gild issue close owner/repo#12 --agent ava
+gild pr create owner/repo --head fix-12 --base main --title "Fix issue 12" --body "Details" --agent ava
+gild pr list owner/repo --agent ava --json
+gild pr view owner/repo#13 --agent ava --json
+gild pr diff owner/repo#13 --agent ava
+gild pr checks owner/repo#13 --agent ava --json
+gild pr comment owner/repo#13 -b "Ready for review" --agent ava
+gild pr review owner/repo#13 --approve -b "Verified" --agent reviewer
+gild pr merge owner/repo#13 --agent ava
+```
+
+Issue commands also accept `owner/repo 12`. Reviews require exactly one of
+`--approve`, `--request-changes`, or `--comment`. `pr checks` reads Actions runs
+for the current head SHA. `pr merge` pins that SHA and requests the server's
+merge queue; the queue's response is printed, and merging is asynchronous.
+
+Clones use a repository credential helper for the selected identity. Tokens
+travel through Git's credential pipe, never the remote URL, command arguments,
+or `.git/config`. Agent clones set the local author to `sponsor/label` and
+`label+sponsor@agents.gild.gg`; human clones retain Git's author defaults.
+The clone continues to use the selected identity when pushing later.
+
+`node scripts/agent-workflow-e2e.mjs` exercises authenticated clone, commit,
+push, PR, review, and queue drain against a fake forge with a real smart-HTTP
+Git server. `node scripts/agent-workflow-revert.mjs <base>` proves the regression
+tests fail with the implementation restored to the base, then restores it.
+
 ## develop
 
 ```sh

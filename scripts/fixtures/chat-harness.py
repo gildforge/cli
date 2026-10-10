@@ -145,7 +145,9 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         context=re.search(r"Context: (.+) chat history owner/demo --agent fixture --before 6 --limit 30",first)
         reply=re.search(r'Reply:   (.+) chat send owner/demo --agent fixture --reply-to 5 "<your reply>"',first)
         assert context and reply and context[1]==reply[1],first
-        assert context[1]!='gild' and 'gild' in context[1],first # the spawning gild's own path
+        expected=os.environ.get('TEST_GILD_PROMPT_COMMAND')
+        assert context[1]==expected if expected else context[1]!='gild' and 'gild' in context[1],first
+        assert 'clone owner/demo --agent fixture' in first and 'pr create|list|view|diff|checks|comment|review|merge' in first,first
         assert TOKEN not in first
         assert run.status()['state']=='busy'
         # Duplicate delivery of the same message under a new event cursor, plus a second mention while busy.

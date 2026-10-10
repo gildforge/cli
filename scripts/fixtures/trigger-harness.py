@@ -134,7 +134,10 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         assert '[gild] issue #12 "Triage me" labeled triage in owner/demo by sami' in first,first
         context=re.search(r'Read:  (.+) issue view owner/demo#12',first)
         post=re.search(r'Post:  (.+) chat send owner/demo --agent alice',first)
-        assert context and post and context[1]==post[1] and context[1]!='gild' and 'gild' in context[1],first
+        assert context and post and context[1]==post[1],first
+        expected=os.environ.get('TEST_GILD_PROMPT_COMMAND')
+        assert context[1]==expected if expected else context[1]!='gild' and 'gild' in context[1],first
+        assert 'issue view owner/demo#12 --agent alice' in first and 'clone owner/demo --agent alice' in first,first
         # A non-matching label and a duplicate of the delivered event add nothing.
         issue(13,'Not it',label='wontfix')
         issue(12,'Triage me',label='triage',ident='issues:12:labeled:1')
