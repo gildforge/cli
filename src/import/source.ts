@@ -35,8 +35,29 @@ export interface SourceOptions {
   fetcher?:(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>; signal?:AbortSignal;
   head(ref:string, number:number):Promise<string|null>;
   branch?(ref:string):string;
+  log?(message:string):void;
+  now?():number;
+  wait?(ms:number,signal?:AbortSignal):Promise<void>;
 }
 export interface SourceEvent { records:ImportRecord[]; checkpoint?:string }
+/** Rate limit headers are trusted only on the validated source API origin. */
+export function rateLimitReset(response:Response, now:number) {
+  if (![403,429].includes(response.status)) return null
+  const retry=response.headers.get('retry-after'), reset=response.headers.get('x-ratelimit-reset')
+  if (retry===null && response.headers.get('x-ratelimit-remaining')!=='0') return null
+  const times:number[]=[]
+  if(retry!==null) times.push(/^\d+(?:\.\d+)?$/.test(retry)?now+Number(retry)*1000:Date.parse(retry))
+  if(reset!==null) times.push(Number(reset)*1000)
+  return times.filter(Number.isFinite).length?Math.max(...times.filter(Number.isFinite)):Infinity
+}
+async function waitSource(ms:number,signal?:AbortSignal) {
+  signal?.throwIfAborted()
+  await new Promise<void>((resolve,reject)=>{
+    const stop=()=>{clearTimeout(timer);reject(Error('Import cancelled; run repo resume to continue'))}
+    const timer=setTimeout(()=>{signal?.removeEventListener('abort',stop);resolve()},ms)
+    signal?.addEventListener('abort',stop,{once:true})
+  })
+}
 /** Page boundaries are explicit; a interrupted item replays deterministic IDs.
  * REST credentials go only to the source API, never to pagination links. */
 async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEvent> {
@@ -49,7 +70,7 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
   const request=async(path:string,accept?:string)=>{
     let url=new URL(source.api+path)
     const origin=url.origin
-    for(let redirects=0;redirects<=3;redirects++) {
+    for(let redirects=0, waited=0;redirects<=3;) {
       const response=await fetcher(url.toString(),{headers:{...headers,...(accept?{accept}:{})},redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(60000)]):AbortSignal.timeout(60000)})
       if([301,302,307,308].includes(response.status)) {
         const location=response.headers.get('location')
@@ -57,7 +78,20 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
         if(!location)throw Error('Source API redirect has no destination')
         const next=new URL(location,url)
         if(next.origin!==origin || next.username || next.password || !(gh ? /^\/(?:repos|repositories)\//.test(next.pathname) : next.pathname.startsWith('/api/v4/')))throw Error('Source API redirect must stay on the same forge API origin')
-        url=next;continue
+        url=next;redirects++;continue
+      }
+      const now=(options.now??Date.now)(),reset=rateLimitReset(response,now)
+      if(reset!==null) {
+        await response.body?.cancel()
+        const delay=Math.max(0,reset-now)
+        if(!Number.isFinite(reset) || delay>900000 || waited+Math.max(1000,delay)>900000)
+          throw Error(`Source API ${response.status}; rate limit resets ${Number.isFinite(reset)?new Date(reset).toISOString():'at an unknown time'}. Run gh auth login for authenticated GitHub reads, then gild repo resume (checkpoint saved).`)
+        waited+=Math.max(1000,delay)
+        for(let left=Math.max(1000,delay);left>0;left-=Math.min(1000,left)) {
+          options.log?.(`Source rate limit: retry in ${Math.ceil(left/1000)}s; Ctrl-C saves completed records`)
+          await (options.wait??waitSource)(Math.min(1000,left),options.signal)
+        }
+        continue
       }
       if(!response.ok) throw Error(`Source API ${response.status}; import can be resumed after checking access or rate limits`)
       return response
@@ -81,7 +115,7 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
   for(let stage=resume.stage;stage<lists.length;stage++) {
     for(let p=stage===resume.stage?resume.page:1;;p++) {
       const rows=await page(lists[stage],p)
-      if(!rows.length) break
+      if(!rows.length) {yield {records:[],checkpoint:JSON.stringify({stage:stage+1,page:1,index:0})};break}
       for(let i=stage===resume.stage && p===resume.page?resume.index:0;i<rows.length;i++) {
         let x=rows[i]
         if(stage===0) {
@@ -152,7 +186,7 @@ async function* metadataRecords(options:SourceOptions):AsyncGenerator<SourceEven
             }
           }
         }
-        yield {records:[],checkpoint:JSON.stringify({stage,page:p,index:i+1})}
+        yield {records:[],checkpoint:JSON.stringify(i+1===rows.length ? (rows.length<30?{stage:stage+1,page:1,index:0}:{stage,page:p+1,index:0}) : {stage,page:p,index:i+1})}
       }
       if(rows.length<30) break
     }
