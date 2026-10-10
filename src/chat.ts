@@ -230,7 +230,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     chat
       .command('raw <repo>')
       .description(
-        'stream every channel frame as raw JSON lines until Ctrl-C (as an agent, also its mention events)',
+        'stream messages, receipts and presence as raw JSON lines until Ctrl-C (as an agent, also its mention events)',
       )
       .option('--since <cursor>', 'resume after a channel cursor', cursor),
   ).action(async (target: string, opts: ClientOptions & { since?: string }) => {
