@@ -150,6 +150,8 @@ const quiet = adapter?.quiet
     })
   : undefined
 function submitted() {
+  // Whatever was on screen before this Enter (a dialog it answered) is gone.
+  quiet?.input()
   publish({
     session: options.id,
     agent: adapter!.name,

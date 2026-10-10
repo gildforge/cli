@@ -69,12 +69,14 @@ export const codexAdapter: AgentAdapter = {
   },
   // Codex's notify fires only after a turn, and its SessionStart hook only on
   // the first prompt, so nothing says a fresh TUI is ready; without this a
-  // mention to a new Codex session waits forever as "agent not idle". A busy
-  // Codex redraws its "Working (Ns)" timer every second, so 5 s of silence
-  // after an Enter means no turn is running. Its startup dialogs (trust,
-  // update) must be answered by a person, never by a channel message.
+  // mention to a new Codex session waits forever as "agent not idle". Codex
+  // draws its composer first and its trust dialog up to ~3 s later (10 Oct),
+  // so a fresh screen must stay quiet for 5 s. A busy Codex redraws its
+  // "Working (Ns)" timer every second, so 5 s of silence after an Enter means
+  // no turn is running. Its startup dialogs (trust, update) are for a person,
+  // never for a channel message.
   quiet: {
-    startupMs: 1500,
+    startupMs: 5000,
     busyMs: 5000,
     dialogs: /Trustthisfolder|Updateavailable|Updatenow/i,
   },

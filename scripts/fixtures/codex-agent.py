@@ -17,11 +17,14 @@ def turn_complete():
 # at its composer; nothing tells gild it is ready.
 for part in ['\x1b[2J', 'OpenAI Codex\r\n', '› Ask Codex to do anything\r\n']:
     os.write(1,part.encode());time.sleep(.2)
+emit({'ready':True,'argv':sys.argv[1:]})
 trust_dialog=config('--trust-dialog')
 if trust_dialog:
-    # Drawn the way Codex does: words placed by cursor moves, not spaces.
+    # Codex draws its composer first and the trust dialog ~3 s later; keys
+    # typed meanwhile wait in the terminal and land in the dialog. Drawn the
+    # way Codex does: words placed by cursor moves, not spaces.
+    time.sleep(2.5)
     os.write(1,'\x1b[5;3HTrust\x1b[5;9Hthis\x1b[5;14Hfolder?\x1b[7;3H\u203a 1. Trust and continue\x1b[9;3Henter continue \u00b7 esc quit'.encode())
-emit({'ready':True,'argv':sys.argv[1:]})
 update_menu=not config('check_for_update_on_startup=false')
 paste_burst=not config('tui.disable_paste_burst=true')
 buffer=b'';last=0.0

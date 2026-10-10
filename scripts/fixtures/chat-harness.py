@@ -108,12 +108,12 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
             mention(2,'@fixture what is 6 x 7? ask bob')
             if TRUST:
                 # A channel message must never answer the trust dialog for a person.
-                run.read(3);assert run.prompts()==[] and b'"dialog"' not in run.buf,run.buf
+                run.read(6);assert run.prompts()==[] and b'"dialog"' not in run.buf,run.buf
                 assert run.status()['held']['reason']=='agent not idle',run.status()
                 # The person presses Enter. Codex never reports that this was no
                 # prompt, so the inferred busy state must fall back to idle.
                 os.write(run.m,b'\r');run.wait(lambda:b'"dialog": "trusted", "typed": ""' in run.buf)
-            run.wait(lambda:len(run.prompts())==1,t=10)
+            run.wait(lambda:len(run.prompts())==1,t=14)
             assert 'what is 6 x 7? ask bob' in run.prompts()[0]
             assert b'"menu"' not in run.buf,run.buf
             # Its turn ends (Codex notify), so a typed one-line `gild send` goes in;

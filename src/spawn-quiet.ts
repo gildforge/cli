@@ -18,6 +18,7 @@ export function screenText(data: string) {
  *   the TUI dropped would otherwise hold every later message forever;
  * - never while the text drawn since the last keystroke shows one of the
  *   runtime's dialogs: a channel message must not answer "Trust this folder?".
+ *   The worker also clears that text on every Enter it sees or types.
  */
 export class QuietIdle {
   private timer?: ReturnType<typeof setTimeout>
