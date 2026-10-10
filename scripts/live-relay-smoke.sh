@@ -100,19 +100,22 @@ import os,pty,re,sys,time,select
 sid=sys.argv[1];cmd=sys.argv[2:]+['attach',sid]
 pid,fd=pty.fork()
 if pid==0: os.execvp(cmd[0],cmd)
-screen=b''
+screen=b'';last=time.time()
 def read(t):
-    global screen
+    global screen,last
     end=time.time()+t
     while time.time()<end:
         if select.select([fd],[],[],.1)[0]:
-            try: screen+=os.read(fd,65536)
+            try: got=os.read(fd,65536)
             except OSError: return
+            screen+=got;last=time.time()
 def text(): return re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\s',b'',screen[-20000:])
-# Codex draws its trust dialog ~3 s after its composer; give it time.
+# Codex draws its trust dialog seconds after its composer, later still when
+# the machine is busy: wait for it until the screen has been quiet for 8 s.
 trust=rb'Trustthisfolder|trustthefiles|Doyoutrust'
-end=time.time()+12
-while time.time()<end and not re.search(trust,text(),re.I): read(.5)
+end=time.time()+45
+read(2)
+while time.time()<end and not re.search(trust,text(),re.I) and time.time()-last<8: read(.5)
 if re.search(trust,text(),re.I):
     print('answered the trust dialog with Enter');os.write(fd,b'\r');read(3)
 # A click in the agent's window: an SGR mouse press and release.
