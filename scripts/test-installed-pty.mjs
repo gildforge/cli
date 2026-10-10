@@ -35,6 +35,7 @@ const child = spawn(
     'src/spawn-detach.test.ts',
     'src/spawn-nudge-pty.test.ts',
     'src/spawn-vm.test.ts',
+    'src/chat-tui.test.ts',
   ],
   {
     cwd: root,

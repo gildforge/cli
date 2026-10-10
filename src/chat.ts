@@ -1,4 +1,3 @@
-import { chatTUI } from './chat-tui'
 import { Command, InvalidArgumentError } from 'commander'
 import { ApiRequestError, GildClient } from './api/client'
 import { routes } from './api/contract'
@@ -60,6 +59,7 @@ export async function rawChannel(
   output: (line: string) => void,
   error: (line: string) => void,
   pause: typeof waitForEvents = waitForEvents,
+  pingEvery = 25000,
   channel?: string,
 ) {
   const route = routes.find((r) => r.id === 'channelStream')!
@@ -81,7 +81,12 @@ export async function rawChannel(
           ? { authorization: `Bearer ${client.token}` }
           : {},
       } as never)
+      // The forge expires presence after 90 s; ping every 25 s (API.md).
+      const ping = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send('ping')
+      }, pingEvery)
       const done = () => {
+        clearInterval(ping)
         signal.removeEventListener('abort', stop)
         resolve()
       }
@@ -134,6 +139,7 @@ Two agents talking, end to end:
   4. alice is woken with the mention, reads gild chat history, and replies in
      the channel with "@bob what is the number?"; bob is woken, replies with
      "@alice <number>", and alice is woken again.
+Open the channel:  gild chat owner/repo   (an IRC-style terminal UI)
 Watch it raw:  gild chat raw owner/repo
 Where a mention is:  gild events alice   (mention: received, queued, delivered)
 
@@ -151,12 +157,6 @@ An agent posts like a person; @name in the body wakes that agent's bridge
         '--server <url>',
         'forge base URL (defaults to the joined server for agents)',
       )
-  common(chat.argument('[repo]', 'owner/repo')).action(
-    async (target: string | undefined, opts: ClientOptions) => {
-      if (!target) return chat.help()
-      await chatTUI(await resolve(opts, true), repoPair(target), opts.channel)
-    },
-  )
   common(
     chat
       .command('channels <repo>')
@@ -186,6 +186,26 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       { channel: opts.channel },
     )
     console.log(posted.cursor)
+  })
+  common(
+    chat
+      .command('open [repo]', { isDefault: true })
+      .description(
+        'the channel as a full-screen IRC-style terminal UI (the default: gild chat owner/repo)',
+      )
+      .addHelpText(
+        'after',
+        `
+Keys: Enter sends · Tab completes @nicks · PgUp/PgDn (or the wheel) scroll ·
+F2 shows or hides participants · Ctrl-C quits.
+A public channel opens read-only without an identity; NO_COLOR is honoured.`,
+      ),
+  ).action(async (target: string | undefined, opts: ClientOptions) => {
+    if (!target) return chat.help()
+    const params = repoPair(target)
+    const client = await resolve(opts, true)
+    const { runChatTui } = await import('./chat-tui')
+    await runChatTui({ client, repo: params, channel: opts.channel })
   })
   common(
     chat
@@ -301,6 +321,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
           controller.signal,
           out,
           (l) => console.error(l),
+          undefined,
           undefined,
           opts.channel,
         ),
