@@ -1,13 +1,21 @@
 import { z } from 'zod'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   firecrackerAvailable,
+  firecrackerHostReady,
   startFirecracker,
   type FirecrackerConfig,
 } from './firecracker'
 import { networkState, networkStatusLine } from './network'
-import { startVz, vzAvailable, vzNetworkState, vzNetworkStatusLine } from './vz'
+import {
+  startVz,
+  vzAvailable,
+  vzHostReady,
+  vzNetworkState,
+  vzNetworkStatusLine,
+} from './vz'
 import { ociAvailable, startOci, type OciConfig } from './container'
 import {
   colimaMountFor,
@@ -23,27 +31,27 @@ import {
   type HostUserState,
 } from './host-user'
 import {
+  IsolationRefused,
   LEVELS,
   labelFor,
   resolveIsolation,
   type Level,
   type Resolved,
 } from './policy'
+import {
+  ensureVmImage,
+  vmImagePaths,
+  vmPlatform,
+  VmImageError,
+  type VmPlatform,
+} from './image'
 import type { Isolation } from './session'
 
 export * from './policy'
 export type { Isolation } from './session'
+export { vmImagePaths } from './image'
 
 const level = z.enum(LEVELS)
-
-/** Where `bun run vm:image` writes the guest kernel and rootfs, and where
- *  `vm` looks when isolation.json names no other files. */
-export function vmImagePaths(configDir: string) {
-  return {
-    kernel: join(configDir, 'vm', 'vmlinux'),
-    rootfs: join(configDir, 'vm', 'rootfs.ext4'),
-  }
-}
 
 /** `<config dir>/isolation.json`: what the owner set once on this host. */
 export const hostConfigSchema = (configDir: string) =>
@@ -53,8 +61,16 @@ export const hostConfigSchema = (configDir: string) =>
     vm: z
       .strictObject({
         firecracker: z.string().default('firecracker'),
-        /** macOS: the signed Virtualization.framework helper (scripts/build-vz-helper.sh). */
-        vz: z.string().default('gild-vz'),
+        /** macOS: the signed Virtualization.framework helper: the published
+         *  one in <config dir>/vm when it was fetched, else `gild-vz` on PATH
+         *  (scripts/build-vz-helper.sh). */
+        vz: z
+          .string()
+          .default(() =>
+            existsSync(vmImagePaths(configDir).vz)
+              ? vmImagePaths(configDir).vz
+              : 'gild-vz',
+          ),
         kernel: z.string().default(vmImagePaths(configDir).kernel),
         rootfs: z.string().default(vmImagePaths(configDir).rootfs),
         memoryMiB: z.number().int().min(128).default(1024),
@@ -118,6 +134,68 @@ export async function loadHostConfig(configDir: string): Promise<HostConfig> {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}
     throw new Error(`isolation.json: ${(e as Error).message}`)
+  }
+}
+
+/** The level a run asks for, before availability: what decides whether the
+ *  published VM image is worth fetching. */
+export const requestedLevel = (host: HostConfig, req: Request) =>
+  req.flag ?? req.job ?? req.profile ?? host.default
+
+export interface PreparedVm {
+  host: HostConfig
+  /** Why the published VM image could not be fetched; `vm` then falls to the next tier. */
+  vmUnavailable?: string
+}
+
+/**
+ * Load isolation.json and, when this run asks for `vm` and the owner did not
+ * point it at their own kernel and rootfs, make sure the published guest
+ * image for this gild version is in <config dir>/vm (downloaded once, then
+ * used offline) and describe `vm` with it.
+ */
+export async function prepareVm(
+  configDir: string,
+  o: {
+    want: boolean
+    log?: (line: string) => void
+    base?: string
+    platform?: VmPlatform
+    /** The backend's own prerequisites (Firecracker, /dev/kvm) are present. */
+    backendReady?: (host: HostConfig) => boolean
+  },
+): Promise<PreparedVm> {
+  const host = await loadHostConfig(configDir)
+  if (!o.want) return { host }
+  const paths = vmImagePaths(configDir)
+  if (
+    host.vm &&
+    (resolve(host.vm.kernel) !== paths.kernel ||
+      resolve(host.vm.rootfs) !== paths.rootfs)
+  )
+    return { host } // the owner's own image: theirs to manage
+  const platform = o.platform ?? vmPlatform()
+  const ready =
+    o.backendReady ??
+    ((h: HostConfig) =>
+      vmBackend() === 'vz'
+        ? vzHostReady()
+        : firecrackerHostReady(h.vm?.firecracker ?? 'firecracker'))
+  // No Firecracker, /dev/kvm or hypervisor: an image would not help; vmAvailable says what is missing.
+  if (platform && !ready(host)) return { host }
+  try {
+    await ensureVmImage({ configDir, log: o.log, base: o.base, platform })
+  } catch (e) {
+    if (!(e instanceof VmImageError)) throw e
+    return { host, vmUnavailable: e.message }
+  }
+  // Load again after the download: the vz helper default looks in <config dir>/vm.
+  const fresh = await loadHostConfig(configDir)
+  return {
+    host: {
+      ...fresh,
+      vm: fresh.vm ?? hostConfigSchema(configDir).parse({ vm: {} }).vm,
+    },
   }
 }
 
@@ -195,17 +273,52 @@ export interface Request {
   profile?: Level
 }
 
+/**
+ * Resolve a run's isolation. With `vmUnavailable` (the published VM image
+ * could not be fetched), a request for `vm` falls to the strongest other
+ * tier the floor allows, never to `none`, and the result says so.
+ */
 export function resolveForHost(
   host: HostConfig,
   req: Request,
   p?: Probes,
+  vmUnavailable?: string,
 ): Resolved {
-  return resolveIsolation({
+  const available = availableLevels(host, p)
+  const input = {
     ...req,
     hostDefault: host.default,
     floor: host.floor,
-    available: availableLevels(host, p),
-  })
+    available,
+  }
+  try {
+    return resolveIsolation(input)
+  } catch (e) {
+    if (
+      !vmUnavailable ||
+      !(e instanceof IsolationRefused) ||
+      requestedLevel(host, req) !== 'vm' ||
+      available.includes('vm')
+    )
+      throw e
+    let next: Resolved
+    try {
+      next = resolveIsolation({ floor: host.floor, available })
+    } catch (e2) {
+      throw new IsolationRefused(
+        `isolation "vm" is unavailable: ${vmUnavailable}; and no other tier can take it: ${(e2 as Error).message}`,
+      )
+    }
+    const source = resolveIsolation({
+      ...input,
+      available: [...available, 'vm'],
+    }).source
+    return {
+      level: next.level,
+      source,
+      fallback: `vm image unavailable, fell back to ${next.level}: ${vmUnavailable}`,
+    }
+  }
 }
 
 const BACKEND: Record<Exclude<Level, 'vm'>, string> = {
@@ -223,7 +336,8 @@ export const backendName = (level: Level, platform = process.platform) =>
 
 /** One line for `gild status` and job logs. */
 export function describe(resolved: Resolved, backend?: string) {
-  return `isolation: ${labelFor(resolved.level, backend ?? backendName(resolved.level))}, requested by ${resolved.source}`
+  const line = `isolation: ${labelFor(resolved.level, backend ?? backendName(resolved.level))}, requested by ${resolved.source}`
+  return resolved.fallback ? `${line} (${resolved.fallback})` : line
 }
 
 export async function startIsolation(
@@ -295,9 +409,14 @@ export function statusLines(
 }
 
 /** `gild runner start` calls this once: a runner that cannot isolate does not start. */
-export function assertCanIsolate(host: HostConfig, flag?: Level, p?: Probes) {
+export function assertCanIsolate(
+  host: HostConfig,
+  flag?: Level,
+  p?: Probes,
+  vmUnavailable?: string,
+) {
   try {
-    return resolveForHost(host, { flag }, p)
+    return resolveForHost(host, { flag }, p, vmUnavailable)
   } catch (e) {
     const message = (e as Error).message
     // Only the "nothing available" case needs the how-to-fix text; a floor or

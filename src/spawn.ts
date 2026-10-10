@@ -17,7 +17,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { loadHostConfig, parseLevel, statusLines } from './isolation'
+import { loadHostConfig, parseLevel, prepareVm, statusLines } from './isolation'
 import { Command, InvalidArgumentError } from 'commander'
 import { spawnWorkerSource } from './spawn-bundle' with { type: 'macro' }
 import {
@@ -82,7 +82,7 @@ export function spawnCommands(
     )
     .option(
       '--vm',
-      'run the agent inside a Firecracker microVM (needs isolation.json)',
+      'run the agent inside a microVM (Firecracker on Linux, vz on macOS); the guest image is fetched on first use',
     )
     .option(
       '--config-dir <path>',
@@ -149,6 +149,18 @@ export function spawnCommands(
           throw Error(
             '--vm needs an interactive terminal (or --detach); it never falls back to running on the host',
           )
+        // First --vm use: fetch the published guest image here, where the
+        // terminal shows its progress; the worker then finds it installed.
+        if (opts.vm) {
+          const { vmUnavailable } = await prepareVm(opts.configDir, {
+            want: true,
+            log: (line) => console.error(`gild: ${line}`),
+          })
+          if (vmUnavailable)
+            throw Error(
+              `--vm: ${vmUnavailable}. It never falls back to running on the host`,
+            )
+        }
         if (
           !opts.detach &&
           (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
