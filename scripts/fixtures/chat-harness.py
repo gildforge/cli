@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         mention(5,'@fixture ask @bob for the number')
         run.wait(lambda:len(run.prompts())==1)
         first=run.prompts()[0]
-        assert 'mentioned you in owner/demo (message 5)' in first and '@sami' in first and 'ask @bob for the number' in first,first
+        assert 'mentioned you in owner/demo #demo (message 5)' in first and '@sami' in first and 'ask @bob for the number' in first,first
         # The commands name the gild that spawned the session (CLI), not a PATH lookup.
         context=re.search(r"Context: (.+) chat history owner/demo --agent fixture --before 6 --limit 30",first)
         reply=re.search(r'Reply:   (.+) chat send owner/demo --agent fixture --reply-to 5 "<your reply>"',first)

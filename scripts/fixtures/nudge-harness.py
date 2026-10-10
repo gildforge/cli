@@ -155,7 +155,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
         forge['messages']['30']=[{'cursor':'31','id':'r31','created_at':iso(time.time()),'reply_to':'30','author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':'on it','link':None}]
         forge['messages']['20']=[{'cursor':'21','id':'n21','created_at':iso(time.time()),'reply_to':None,'author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':'[gild nudge] idle 1s; asked the agent for a status report','link':None}]
         mention(20,'@fixture where is the PR?')
-        run.wait(lambda:any('mentioned you in owner/demo (message 20)' in l for l in run.lines()))
+        run.wait(lambda:any('mentioned you in owner/demo #demo (message 20)' in l for l in run.lines()))
         run.hook('Stop')
         mention(30,'@fixture second question')
         run.wait(lambda:any('(message 30)' in l for l in run.lines()))
