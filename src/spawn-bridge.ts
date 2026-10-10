@@ -92,8 +92,10 @@ export function mentionPrompt(
   gild = 'gild',
 ) {
   const { cursor, body, author } = m.message
-  const channel = m.channel ?? repo.split('/')[1],
-    selection = ` --channel ${/^[A-Za-z0-9_./-]+$/.test(channel) ? channel : shellQuote(channel)}`
+  const channel = m.channel || repo.split('/')[1],
+    selection = m.channel
+      ? ` --channel ${/^[A-Za-z0-9_./-]+$/.test(m.channel) ? m.channel : shellQuote(m.channel)}`
+      : ''
   return [
     `[gild] @${author.name} mentioned you in ${repo} #${channel} (message ${cursor}):`,
     body,

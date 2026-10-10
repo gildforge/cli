@@ -40,14 +40,25 @@ function forge(tokens: string[], anonymousRead = false) {
     auth: string | null
     body?: unknown
   }[] = []
-  const sockets = new Set<{ send(data: string): void }>()
-  const state = { participants: defaultParticipants(), pings: 0 }
+  const sockets = new Set<{
+    send(data: string): void
+    data?: { channel: string }
+  }>()
+  const state = { participants: defaultParticipants(), pings: 0, scoped: false }
+  const logs = new Map([['demo', log]])
+  const channelLog = (channel = 'demo') => {
+    const key = state.scoped ? channel : 'demo'
+    if (!logs.has(key)) logs.set(key, [])
+    return logs.get(key)!
+  }
   const post = (
     name: string,
     body: string,
     reply_to: string | null = null,
     extra: Partial<Message> = {},
+    channel = 'demo',
   ) => {
+    const log = channelLog(channel)
     const message: Message = {
       cursor: String(log.length + 1),
       id: `id${log.length + 1}`,
@@ -61,7 +72,8 @@ function forge(tokens: string[], anonymousRead = false) {
     }
     log.push(message)
     for (const socket of sockets)
-      socket.send(JSON.stringify({ type: 'message', message }))
+      if (!state.scoped || socket.data?.channel === channel)
+        socket.send(JSON.stringify({ type: 'message', message }))
     return message
   }
   const presence = (online: string[]) => {
@@ -83,16 +95,25 @@ function forge(tokens: string[], anonymousRead = false) {
     const agent = auth === 'Bearer gf_agentfixture'
     if (url.pathname === '/api/v1/repos/owner/demo/channel/stream')
       return server.upgrade(request, {
-        data: { after: url.searchParams.get('after') },
+        data: {
+          after: url.searchParams.get('after'),
+          channel: url.searchParams.get('channel') ?? 'demo',
+        },
       })
         ? undefined
         : new Response('upgrade required', { status: 426 })
     if (url.pathname === '/api/v1/repos/owner/demo/channels')
       return Response.json({
         channels: [
-          { name: 'demo', archived: false, unread: 0, members: [] },
-          { name: 'bob/topic', archived: false, unread: 3, members: [] },
-          { name: 'old', archived: true, unread: 0, members: [] },
+          { name: 'demo', key: '', archived: false, unread: 0, members: [] },
+          {
+            name: 'bob/topic',
+            key: 'bob/topic',
+            archived: false,
+            unread: 3,
+            members: [],
+          },
+          { name: 'old', key: 'old', archived: true, unread: 0, members: [] },
         ],
       })
     if (url.pathname === '/api/v1/repos/owner/demo/channel/participants')
@@ -103,6 +124,8 @@ function forge(tokens: string[], anonymousRead = false) {
       })
     if (url.pathname !== '/api/v1/repos/owner/demo/channel/messages')
       return Response.json({ message: 'nope' }, { status: 404 })
+    const channel = url.searchParams.get('channel') ?? 'demo',
+      log = channelLog(channel)
     if (request.method === 'POST') {
       const body = (await request.json()) as {
         body: string
@@ -115,8 +138,9 @@ function forge(tokens: string[], anonymousRead = false) {
         agent ? 'alice/test' : 'sami',
         body.body,
         body.reply_to ?? null,
+        { kind: body.kind ?? 'message' },
+        channel,
       )
-      message.kind = body.kind ?? 'message'
       return Response.json(message, { status: 201 })
     }
     const limit = Number(url.searchParams.get('limit') ?? 50)
@@ -140,7 +164,7 @@ function forge(tokens: string[], anonymousRead = false) {
           : null,
     })
   }
-  return { log, seen, sockets, state, post, presence, handler }
+  return { log, seen, sockets, state, post, presence, handler, channelLog }
 }
 
 export async function setup(
@@ -150,7 +174,7 @@ export async function setup(
   const state = forge(tokens, anonymousRead)
   const f = await fixture(() => new Response())
   // The shared fixture owns its server; chat needs websockets, so run our own.
-  const server = Bun.serve<{ after: string | null }>({
+  const server = Bun.serve<{ after: string | null; channel: string }>({
     hostname: '127.0.0.1',
     port: 0,
     fetch: (request, s) => state.handler(request, s as never),
@@ -161,7 +185,9 @@ export async function setup(
         ws.send(
           JSON.stringify({
             type: 'ready',
-            messages: state.log.filter((m) => !after || +m.cursor > +after),
+            messages: state
+              .channelLog(ws.data.channel)
+              .filter((m) => !after || +m.cursor > +after),
           }),
         )
       },

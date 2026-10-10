@@ -189,7 +189,7 @@ export class ChatView {
     readonly colour: boolean,
     readonly origin: string,
   ) {
-    this.selected = repo.split('/')[1]
+    this.selected = ''
   }
 
   /** Merge messages (dedupe by cursor, sort numerically). A reader scrolled
@@ -366,10 +366,10 @@ export class ChatView {
     ))
       lines.push([
         {
-          text: ` ${c.name === this.selected ? '>' : ' '}#${clean(c.name)}${c.unread ? ' [' + c.unread + ']' : ''}${c.archived ? ' (archived)' : ''}`,
+          text: ` ${(c.key ?? c.name) === this.selected ? '>' : ' '}#${clean(c.name)}${c.unread ? ' [' + c.unread + ']' : ''}${c.archived ? ' (archived)' : ''}`,
           style: {
             bold: c.unread > 0,
-            reverse: c.name === this.selected,
+            reverse: (c.key ?? c.name) === this.selected,
             dim: c.archived,
           },
         },
@@ -585,7 +585,7 @@ export class ChatView {
     const left: Line = [
       { text: ' gild ', style: { reverse: true, bold: true, fg: 33 } },
       {
-        text: ` #${this.selected}${this.archived ? ' (archived)' : ''} `,
+        text: ` #${this.selected || this.repo.split('/')[1]}${this.archived ? ' (archived)' : ''} `,
         style: { reverse: true, bold: true },
       },
       {
@@ -780,17 +780,17 @@ export async function runChatTui(options: {
     throw Error(
       'gild chat <owner/repo> needs a terminal; in scripts use gild chat history, send or raw',
     )
-  let selected = options.channel ?? repo.repo
+  let selected = options.channel ?? ''
   let generation = 0
   const target = `${repo.owner}/${repo.repo}`
   // Load before taking over the screen: a refusal prints like any command.
   const [roster, page, list] = await Promise.all([
     client.request('channelParticipants', repo, undefined, {
-      channel: selected,
+      channel: selected || undefined,
     }),
     client.request('channelMessages', repo, undefined, {
       limit: 100,
-      channel: selected,
+      channel: selected || undefined,
     }),
     client.request('channelList', repo),
   ])
@@ -803,9 +803,10 @@ export async function runChatTui(options: {
   )
   view.selected = selected
   view.channels = list.channels
-  view.archived = !!list.channels.find((c) => c.name === selected)?.archived
+  view.archived = !!list.channels.find((c) => (c.key ?? c.name) === selected)
+    ?.archived
   view.participants = roster.participants
-  view.canPost = roster.can_post
+  view.canPost = roster.can_post && !view.archived
   view.viewer = roster.viewer
   view.add(page.messages)
   view.older = page.before
@@ -868,17 +869,22 @@ export async function runChatTui(options: {
 
   let roster_timer: ReturnType<typeof setTimeout> | undefined
   const refreshRoster = async () => {
+    const own = generation
     try {
       const fresh = await client.request(
         'channelParticipants',
         repo,
         undefined,
-        { channel: selected },
+        { channel: selected || undefined },
       )
-      view.participants = fresh.participants
+      if (own !== generation) return
       const list = await client.request('channelList', repo)
+      if (own !== generation) return
+      view.participants = fresh.participants
       view.channels = list.channels
-      view.archived = !!list.channels.find((c) => c.name === selected)?.archived
+      view.archived = !!list.channels.find(
+        (c) => (c.key ?? c.name) === selected,
+      )?.archived
       view.canPost = fresh.can_post && !view.archived
       view.viewer = fresh.viewer
       redraw()
@@ -892,18 +898,21 @@ export async function runChatTui(options: {
 
   /** A `ready` frame with `after` set means more history than one page. */
   const catchUp = async (after: string) => {
+    const own = generation,
+      channel = selected
     let next: string | null = after
-    while (next && !controller.signal.aborted) {
+    while (next && own === generation && !controller.signal.aborted) {
       const more: ChannelPage = await client.request(
         'channelMessages',
         repo,
         undefined,
         {
-          channel: selected,
+          channel: channel || undefined,
           after: next,
           limit: 200,
         },
       )
+      if (own !== generation) return
       view.add(more.messages)
       next = more.after
       redraw()
@@ -978,10 +987,12 @@ export async function runChatTui(options: {
     redraw()
     const [page, people, list] = await Promise.all([
       client.request('channelMessages', repo, undefined, {
-        channel: name,
+        channel: name || undefined,
         limit: 100,
       }),
-      client.request('channelParticipants', repo, undefined, { channel: name }),
+      client.request('channelParticipants', repo, undefined, {
+        channel: name || undefined,
+      }),
       client.request('channelList', repo),
     ])
     if (own !== generation) return
@@ -990,7 +1001,8 @@ export async function runChatTui(options: {
     view.participants = people.participants
     view.viewer = people.viewer
     view.channels = list.channels
-    view.archived = !!list.channels.find((c) => c.name === name)?.archived
+    view.archived = !!list.channels.find((c) => (c.key ?? c.name) === name)
+      ?.archived
     view.canPost = people.can_post && !view.archived
     stream = streamFrom(page.cursor)
     redraw()
@@ -998,22 +1010,26 @@ export async function runChatTui(options: {
 
   const loadOlder = async () => {
     if (!view.older || view.loadingOlder) return
+    const own = generation
     view.loadingOlder = true
     redraw()
     try {
       const more = await client.request('channelMessages', repo, undefined, {
-        channel: selected,
+        channel: selected || undefined,
         before: view.older,
         limit: 100,
       })
+      if (own !== generation) return
       view.add(more.messages)
       view.older = more.before
     } catch (error) {
+      if (own !== generation) return
       view.status = {
         text: `older messages: ${(error as Error).message}`,
         error: true,
       }
     } finally {
+      if (own !== generation) return
       view.loadingOlder = false
       redraw()
     }
@@ -1024,7 +1040,11 @@ export async function runChatTui(options: {
     if (body.startsWith('/channel ')) {
       view.killLine()
       try {
-        await switchChannel(body.slice(9).trim().replace(/^#/, ''))
+        await switchChannel(
+          body.slice(9).trim() === '#' + repo.repo
+            ? ''
+            : body.slice(9).trim().replace(/^#/, ''),
+        )
       } catch (error) {
         view.status = { text: String(error), error: true }
       }
@@ -1046,6 +1066,7 @@ export async function runChatTui(options: {
       }
       return
     }
+    const own = generation
     view.killLine()
     view.status = { text: 'sending…', error: false }
     redraw()
@@ -1057,13 +1078,15 @@ export async function runChatTui(options: {
           body: body.startsWith('/note ') ? body.slice(6) : body,
           ...(body.startsWith('/note ') ? { kind: 'note' as const } : {}),
         },
-        { channel: selected },
+        { channel: selected || undefined },
       )
+      if (own !== generation) return
       view.status = null
       view.scroll = 0
       view.unseen = 0
       view.add([posted])
     } catch (error) {
+      if (own !== generation) return
       // Give the text back so nothing typed is lost.
       if (!view.input) {
         view.input = body

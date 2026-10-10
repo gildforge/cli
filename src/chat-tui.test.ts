@@ -427,7 +427,9 @@ test('NO_COLOR drops colours; message text can never inject terminal escapes', a
 test('the buffer list switches channels, keeps notes dim, and archives read-only', async () => {
   const s = await setup()
   try {
-    seed(s)
+    s.state.scoped = true
+    s.post('sami', 'Branch work context', null, {}, 'bob/topic')
+    s.post('sami', 'Archived work context', null, {}, 'old')
     const tui = open(
       s,
       ['owner/demo', '--channel', 'bob/topic', '--agent', 'test'],
@@ -436,6 +438,8 @@ test('the buffer list switches channels, keeps notes dim, and archives read-only
     let screen = await tui.settle('● live')
     expect(screen.split('\n')[0]).toContain('#bob/topic')
     expect(screen).toContain('Channels')
+    expect(screen).toContain('Branch work context')
+    expect(screen).not.toContain('Archived work context')
     expect(s.seen.some((r) => r.path.includes('channel=bob%2Ftopic'))).toBe(
       true,
     )
@@ -454,6 +458,8 @@ test('the buffer list switches channels, keeps notes dim, and archives read-only
       'archived channel',
     )
     expect(screen).toContain('read-only')
+    expect(screen).toContain('Archived work context')
+    expect(screen).not.toContain('Branch work context')
     const posted = s.seen.filter((r) => r.method === 'POST').length
     tui.type('late post\r')
     await Bun.sleep(150)
