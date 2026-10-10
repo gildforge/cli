@@ -105,6 +105,11 @@ let bridge: MentionBridge | undefined
 let watchdog: ReturnType<typeof startWatchdog>
 const bridgeAbort = new AbortController()
 function publish(event: AgentEvent) {
+  if (
+    (event.raw as { hook_event_name?: string } | undefined)?.hook_event_name ===
+    'UserPromptSubmit'
+  )
+    queue?.confirmed()
   applyEvent(state, event)
   watchdog?.state(state.state)
   queue?.changed()
@@ -551,6 +556,16 @@ async function main() {
     submitted,
     // Claude reports UserPromptSubmit through hooks; Codex only reports turn end.
     adapter?.name !== 'claude',
+    adapter?.name === 'claude',
+    () =>
+      // Never left 'busy' on a guess nothing confirmed: report and fall back.
+      publish({
+        session: options.id,
+        agent: adapter!.name,
+        type: 'idle',
+        ts: new Date().toISOString(),
+        raw: { source: 'unconfirmed_submit' },
+      }),
   )
   const target = bridgeConfig ? await bridgeConfig : undefined
   watchdog = startWatchdog({
