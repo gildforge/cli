@@ -411,7 +411,10 @@ test('instructions command round trip uses the sponsor for writes and protects l
         )
       text = body.text
       writes.push(auth)
-    } else expect(['Bearer gf_agentfixture', 'Bearer gf_fixturetoken']).toContain(auth)
+    } else
+      expect(['Bearer gf_agentfixture', 'Bearer gf_fixturetoken']).toContain(
+        auth ?? '',
+      )
     return Response.json({
       text,
       revision: revision(),
