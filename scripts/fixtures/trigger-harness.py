@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         def address_string(self):return self.client_address[0]
         def do_GET(self):
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
+            if url.path=='/api/v1/repos/owner/demo/issues': # start-up backlog: none open yet
+                self.send_response(200);self.send_header('content-type','application/json');self.end_headers();self.wfile.write(b'[]');return
             assert url.path=='/api/v1/events',url.path
             if self.headers.get('Authorization') not in [f'Bearer {t}' for t in AGENTS]:
                 self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers()
@@ -147,7 +149,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         assert alice.stages('trigger','issues:13:labeled:2')==[],alice.events.decode()
         assert bob.prompts()==[],bob.prompts()
         saved=json.loads(pathlib.Path(home/'.gild/sessions/alice.mentions.json').read_text())
-        assert saved['delivered']==['trigger:issues:12:labeled:1'] and saved['cursors']['owner/demo']==str(len(forge['events'])),saved
+        assert saved['delivered']==['trigger:owner/demo#12:issues.labeled:triage'] and saved['cursors']['owner/demo']==str(len(forge['events'])),saved
         # Restart: the persisted cursor and delivered ids stop any replay.
         alice.hook('Stop');alice.stop();alice=None
         forge['requests'].clear()
