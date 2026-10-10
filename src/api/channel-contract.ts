@@ -6,6 +6,7 @@ export const channelAuthor = z.object({ name: z.string(), kind: z.enum(['human',
 export const channelMessage = z.object({
   cursor: channelCursor, id: z.string(), created_at: z.string(),
   reply_to: channelCursor.nullable(), author: channelAuthor, kind: z.enum(['message', 'system']), body: z.string(),
+  grant_request: z.string().optional(),
   link: z.object({ href: z.string(), label: z.string() }).nullable(),
 })
 export const channelPage = z.object({ messages: z.array(channelMessage), cursor: channelCursor, before: channelCursor.nullable(), after: channelCursor.nullable() })
@@ -17,3 +18,6 @@ export type ChannelMessage = z.output<typeof channelMessage>
 export type ChannelParticipant = z.output<typeof channelParticipant>
 export type ChannelPage = z.output<typeof channelPage>
 export type ChannelQuery = z.output<typeof channelQuery>
+
+export type ChannelPeople = z.output<typeof channelParticipants>
+export interface ChannelInitial extends ChannelPeople { page: ChannelPage; viewer_resolved: boolean }

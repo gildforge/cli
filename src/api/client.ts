@@ -6,6 +6,7 @@ import {
   type Output,
   type Query,
 } from './contract.ts'
+import { grantRequestHint } from './grant-request-contract.ts'
 export class ApiRequestError extends Error {
   readonly status: number
   constructor(status: number, message: string) {
@@ -21,6 +22,7 @@ export class GildClient {
       input: RequestInfo | URL,
       init?: RequestInit,
     ) => Promise<Response> = fetch,
+    readonly agentLabel?: string,
   ) {}
   async request<I extends Operation>(
     operation: I,
@@ -60,11 +62,17 @@ export class GildClient {
     const data = res.status === 204 ? null : await res
       .json()
       .catch(() => ({ message: `HTTP ${res.status}` }))
-    if (!res.ok)
+    if (!res.ok) {
+      let message=data.message ?? `HTTP ${res.status}`
+      if(this.agentLabel && res.status===403 && /scope|grant/i.test(message) && params.owner && params.repo && ['repo:write','issues:write','pulls:write'].includes(route.scope??'')) {
+        const grants=operation==='createReview'?'review':['mergePull','dequeuePull'].includes(operation)?'queue':'pr'
+        message+=`\nRequest access: ${grantRequestHint(`${params.owner}/${params.repo}`,this.agentLabel,'gild',grants)}`
+      }
       throw new ApiRequestError(
         res.status,
-        data.message ?? `HTTP ${res.status}`,
+        message,
       )
+    }
     return route.output.parse(data) as Output<I>
   }
 }

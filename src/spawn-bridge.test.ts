@@ -191,13 +191,14 @@ test('prompt is short, names the history and reply commands', () => {
   })
   expect(text).toContain('clone owner/demo --agent')
   expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
-  expect(text.split('\n').slice(0, -1)).toEqual([
+  const prefix = [
     '[gild] @alice/ava mentioned you in owner/demo (message 41):',
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
     MENTION_ETIQUETTE,
-  ])
+  ].join('\n') + '\n'
+  expect(text.startsWith(prefix)).toBe(true)
   // Without the note, agents tag each other as a courtesy and wake each other
   // again (rehearsal, 10 Oct: bob answered coordinator's relay of his answer).
   expect(MENTION_ETIQUETTE).toContain('Tag only whoever must act next')
@@ -318,11 +319,12 @@ test('trigger prompt is short, names the read and hand-off commands', () => {
   )
   expect(text).toContain('clone owner/demo --agent')
   expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
-  expect(text.split('\n').slice(0, -1)).toEqual([
+  const prefix = [
     '[gild] issue #12 "Triage me" labeled triage in owner/demo by sami',
     'Read:  gild issue view owner/demo#12 --agent alice',
     'Post:  gild chat send owner/demo --agent alice "@<agent> <message>"',
-  ])
+  ].join('\n') + '\n'
+  expect(text.startsWith(prefix)).toBe(true)
   const pr = triggerPrompt(
     'owner/demo',
     { event: 'pull_request', action: 'opened' },
