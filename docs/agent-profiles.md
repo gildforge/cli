@@ -148,9 +148,10 @@ prompt queue delivers `[gild] your instructions changed` after a successful
 update. A local conflict keeps the file and queues no replacement prompt.
 
 Status/session reports expose runtime/version, effective model/effort,
-VM/host isolation, host name, session start, state and last activity, with
+`vm`/`none` isolation, host name, session start, state and last activity, with
 redaction and no environment values or credentials. VM versions come from the
-guest binary. Idle heartbeats preserve last activity and let the server show
+guest binary. Ordinary native launches add no isolation and report `none`;
+`host` is reserved for the dedicated OS-user tier. Idle heartbeats preserve last activity and let the server show
 whether a receipt is still online.
 
 -codex

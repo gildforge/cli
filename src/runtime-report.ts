@@ -55,7 +55,8 @@ export async function describeRuntime(
     runtime_version: version,
     model: settings.model,
     effort: settings.effort,
-    isolation: vm ? 'vm' : 'host',
+    // Ordinary spawn adds no isolation; `host` means the dedicated OS-user tier.
+    isolation: vm ? 'vm' : 'none',
     host: redact(hostname(), 120),
   })
 }

@@ -10,6 +10,17 @@ for (const [
   args = ['src/agent-instructions.test.ts'],
 ] of [
   [
+    'native-isolation',
+    'src/runtime-report.ts',
+    (s) =>
+      s.replace(
+        "isolation: vm ? 'vm' : 'none'",
+        "isolation: vm ? 'vm' : 'host'",
+      ),
+    /profile-instructions/,
+    ['src/agent-profiles.test.ts', '-t', 'profile PTY: profile-instructions'],
+  ],
+  [
     'command-sponsor',
     'src/instructions-command.ts',
     (s) => s.replace('!!(opts.edit || opts.push)', 'false'),

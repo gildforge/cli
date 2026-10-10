@@ -165,6 +165,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert status()['environment']['model']=='web-model'
             assert status()['environment']['effort']=='low'
             assert status()['environment']['runtime_version']=='claude fixture 1.0'
+            assert status()['environment']['isolation']=='none'
+            assert status()['environment']['host']
         settings=home/f'.gild/sessions/{session}/settings.json';assert settings.stat().st_mode&0o777==0o600
         proc.send_signal(signal.SIGTERM);assert proc.wait(timeout=8)==143
         assert not path.exists() and not settings.exists()
