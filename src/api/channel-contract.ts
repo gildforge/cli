@@ -17,3 +17,6 @@ export type ChannelMessage = z.output<typeof channelMessage>
 export type ChannelParticipant = z.output<typeof channelParticipant>
 export type ChannelPage = z.output<typeof channelPage>
 export type ChannelQuery = z.output<typeof channelQuery>
+
+export type ChannelPeople = z.output<typeof channelParticipants>
+export interface ChannelInitial extends ChannelPeople { page: ChannelPage; viewer_resolved: boolean }

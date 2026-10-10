@@ -228,3 +228,19 @@ A guest image built for another gild version is refused at boot with that same
 command as the fix. Details: [docs/VM.md](docs/VM.md).
 
 -codex
+
+### Deployment environments
+
+Environment rules travel with the repository on `_meta`. All listed reviewers must approve a deployment, and agents authenticate with their own identity.
+
+```sh
+gild env list owner/repo
+gild env create owner/repo production --reviewer sami --branch main --wait-timer 5 --allowed-agent sami/codex
+gild env edit owner/repo production --wait-timer 10
+gild secret set owner/repo TOKEN --env production < token-file
+gild var set owner/repo HOST --env production < host-file
+gild run approve owner/repo 42 --agent reviewer
+gild run reject owner/repo 42
+```
+
+Secret and variable values come from stdin and are never echoed. Omitting `--env` sets a repository value. `--reviewer`, `--branch`, and `--allowed-agent` accept repeated flags; `env edit` preserves rules whose flags were omitted. The default branch policy is `any`, with no agent-triggered deployments allowed until `--allowed-agent` is supplied.
