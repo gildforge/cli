@@ -35,8 +35,10 @@ const child = spawn(
     'src/spawn-detach.test.ts',
     'src/spawn-nudge-pty.test.ts',
     'src/spawn-vm.test.ts',
+    'src/chat-tui.test.ts',
     'src/spawn-bridge.test.ts',
     'src/agent-workflow.e2e.test.ts',
+
   ],
   {
     cwd: root,

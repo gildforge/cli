@@ -1,3 +1,7 @@
+import { workNoteHint } from './work-notes'
+import { shellQuote } from './spawn-adapters/types'
+import { ReceiptReporter } from './spawn-receipts'
+import type { AgentEvent } from './spawn-events'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { GildClient } from './api/client'
@@ -51,6 +55,7 @@ export type BridgeEvent =
     }
 
 const mention = z.object({
+  channel: z.string().optional(),
   repository: z.object({ full_name: z.string() }),
   message: z.object({
     cursor: z.string(),
@@ -69,6 +74,7 @@ const subject = z.object({
   title: z.string(),
   labels: z.array(z.object({ name: z.string() })),
   user: z.object({ login: z.string() }).optional(),
+  head: z.object({ ref: z.string() }).optional(),
 })
 const triggerPayload = z.object({
   action: z.string().optional(),
@@ -89,11 +95,16 @@ export function mentionPrompt(
   gild = 'gild',
 ) {
   const { cursor, body, author } = m.message
+  const channel = m.channel || repo.split('/')[1],
+    selection = m.channel
+      ? ` --channel ${/^[A-Za-z0-9_./-]+$/.test(m.channel) ? m.channel : shellQuote(m.channel)}`
+      : ''
   return [
-    `[gild] @${author.name} mentioned you in ${repo} (message ${cursor}):`,
+    `[gild] @${author.name} mentioned you in ${repo} #${channel} (message ${cursor}):`,
     body,
-    `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
-    `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    `Context: ${gild} chat history ${repo}${selection} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
+    `Reply:   ${gild} chat send ${repo}${selection} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    workNoteHint(repo,label,m.channel,gild),
     MENTION_ETIQUETTE,
     workflowPrompt(repo, label, gild),
   ].join('\n')
@@ -157,6 +168,8 @@ export class MentionBridge {
   private readonly inflight = new Map<string, number>()
   private readonly head = new Map<string, string>()
   private readonly triggers: Trigger[]
+  private receipts: ReceiptReporter
+  private unread = new Map<string, { repo: string; cursor: string; channel: string }>()
   private writing: Promise<void> = Promise.resolve()
   constructor(
     private readonly opts: {
@@ -179,13 +192,18 @@ export class MentionBridge {
       /** Trigger specs from the profile (`--on`), matched on the same repos. */
       triggers?: string[]
       file: string
-      enqueue: (text: string, typed: () => void) => void
+      enqueue: (
+        text: string,
+        typed: () => void,
+        held?: (reason: string) => void,
+      ) => void
       emit: (event: BridgeEvent) => void
       pause?: typeof waitForEvents
       /** Waits between reconnects; tests pass an instant one. */
       backoff?: (ms: number, signal: AbortSignal) => Promise<void>
     },
   ) {
+    this.receipts = new ReceiptReporter(opts.client)
     this.channels = opts.repos.map((repo) => ({ repo, state: 'connecting' }))
     const own = new Set(opts.repos.map((r) => r.toLowerCase()))
     this.watched = [...new Set(opts.watch ?? [])]
@@ -311,7 +329,7 @@ export class MentionBridge {
       ...(error ? { error } : {}),
     })
   }
-  private page(
+  private async page(
     channel: ChannelStatus,
     page: { events: StreamRecord[]; cursor: string },
   ) {
@@ -321,7 +339,42 @@ export class MentionBridge {
     if (this.watched.includes(channel)) return this.save(repo, page.cursor)
     for (const event of page.events) {
       if (event.event === 'channel.mention') this.mention(repo, event)
-      else this.trigger(repo, event)
+      else {
+        const payload = triggerPayload.safeParse(event.payload)
+        const branch = payload.success
+          ? payload.data.pull_request?.head?.ref
+          : undefined
+        if (
+          branch &&
+          payload.success &&
+          this.matchTrigger(event.event, payload.data)
+        ) {
+          const [owner, name] = repo.split('/')
+          const list = await this.opts.client.request('channelList', {
+            owner,
+            repo: name,
+          })
+          const member = list.channels
+            .find((c) => (c.key ?? c.name) === branch)
+            ?.members.some((p) => p.name === this.opts.agent)
+          const coordinator = list.channels
+            .find(
+              (c) => c.key === '' || (c.key === undefined && c.name === name),
+            )
+            ?.members.some(
+              (p) =>
+                p.name === this.opts.agent &&
+                (p.prefix === '%' || p.prefix === '@'),
+            )
+          if (
+            !member &&
+            !coordinator &&
+            payload.data.pull_request?.user?.login !== this.opts.agent
+          )
+            continue
+        }
+        this.trigger(repo, event)
+      }
     }
     this.head.set(repo, page.cursor)
     // A cursor may only pass an enqueued prompt once it has been typed, so a
@@ -346,9 +399,16 @@ export class MentionBridge {
       this.opts.enqueue(
         mentionPrompt(repo, this.opts.label, m, this.opts.gild),
         () => {
+          this.receipts.report(repo, m.message.cursor, { state: 'delivered' }, m.channel)
+          this.unread.set(m.message.id, { repo, cursor: m.message.cursor, channel: m.channel ?? '' })
           this.stage('delivered', repo, m)
           this.settle(repo, m.message.id)
         },
+        (reason) =>
+          this.receipts.report(repo, m.message.cursor, {
+            state: 'held',
+            reason,
+          },m.channel),
       )
       this.stage('queued', repo, m)
     } catch (error) {
@@ -478,8 +538,19 @@ export class MentionBridge {
       })
       .catch(() => {})
   }
-  flush() {
-    return this.writing
+  event(event: AgentEvent) {
+    const raw = event.raw as { source?: string } | null
+    if (
+      raw?.source === 'pty_submit' ||
+      !['busy', 'tool_start', 'tool_end'].includes(event.type)
+    )
+      return
+    for (const { repo, cursor, channel } of this.unread.values())
+      this.receipts.report(repo, cursor, { state: 'read' }, channel)
+    this.unread.clear()
+  }
+  async flush() {
+    await Promise.all([this.writing, this.receipts.flush()])
   }
 }
 

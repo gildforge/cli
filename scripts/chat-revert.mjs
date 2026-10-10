@@ -7,6 +7,8 @@ const bridge = 'src/spawn-bridge.ts'
 const worker = 'src/spawn-worker.ts'
 const chat = 'src/chat.ts'
 const queue = 'src/spawn-queue.ts'
+const tui = 'src/chat-tui.ts'
+const tuiTest = 'src/chat-tui.test.ts'
 // [name, file, from, to, test file]
 const mutations = [
   [
@@ -72,6 +74,69 @@ const mutations = [
     "if (after) url.searchParams.set('after', after)",
     '',
     'src/chat.test.ts',
+  ],
+  [
+    'stream ping',
+    chat,
+    "if (socket.readyState === WebSocket.OPEN) socket.send('ping')",
+    '',
+    'src/chat.test.ts',
+  ],
+  // gild chat <owner/repo>: the terminal UI, driven through a PTY.
+  ['tui agent state', tui, 'if (p.state) {', 'if (false) {', tuiTest],
+  [
+    'tui live message',
+    tui,
+    "frame.type === 'message' && frame.message",
+    'false && frame.message',
+    tuiTest,
+  ],
+  [
+    'tui presence',
+    tui,
+    'view.online = new Set(frame.online)',
+    'void frame.online',
+    tuiTest,
+  ],
+  ['tui enter sends', tui, 'void send()', '', tuiTest],
+  ['tui read-only guard', tui, 'if (!view.canPost) {', 'if (false) {', tuiTest],
+  ['tui completion', tui, 'this.replaceWord(start, options[0])', '', tuiTest],
+  [
+    'tui completion cycles',
+    tui,
+    'c.index = (c.index + 1) % c.options.length',
+    'c.index = c.index',
+    tuiTest,
+  ],
+  [
+    'tui quiet redraw',
+    tui,
+    'if (!changed && cursor === previousCursor) return',
+    '',
+    tuiTest,
+  ],
+  ['tui resize', tui, "output.on('resize', onResize)", '', tuiTest],
+  ['tui narrow hides participants', tui, 'cols >= 72', 'cols >= 0', tuiTest],
+  ['tui F2', tui, 'view.togglePanel(size().cols)', '', tuiTest],
+  ['tui older pages', tui, 'if (view.atTop()) void loadOlder()', '', tuiTest],
+  [
+    'tui keeps place',
+    tui,
+    'this.scroll += this.logLines(this.bodyWidth).length - before',
+    '',
+    tuiTest,
+  ],
+  ['tui unseen count', tui, 'this.unseen += fresh', '', tuiTest],
+  ['tui leaves alt screen', tui, 'output.write(LEAVE)', '', tuiTest],
+  ['tui restores modes', tui, 'input.setRawMode(false)', '', tuiTest],
+  ['tui SIGTERM restores', tui, "process.on('SIGTERM', onSignal)", '', tuiTest],
+  ['tui NO_COLOR', tui, 'if (colour && style?.fg)', 'if (style?.fg)', tuiTest],
+  [
+    'tui strips escapes',
+    tui,
+    ".replace(/[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]/g, '')",
+    '',
+    tuiTest,
   ],
 ]
 mkdirSync('.tmp', { recursive: true })

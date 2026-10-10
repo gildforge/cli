@@ -1,3 +1,4 @@
+import hashlib
 """Watchdog nudges end to end: fake forge + `gild spawn --nudge … agent` + the PTY fixture agent."""
 import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios
 ROOT=pathlib.Path(__file__).resolve().parents[2]
@@ -26,6 +27,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
                 self.send_response(code);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(body).encode())
             except (BrokenPipeError,ConnectionResetError):pass
         def do_GET(self):
+            if self.path.split('?',1)[0].endswith('/instructions'):
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert self.headers.get('Authorization')==f'Bearer {TOKEN}'
             if url.path=='/api/v1/events':
@@ -45,6 +48,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
             url=urllib.parse.urlparse(self.path)
             assert self.headers.get('Authorization')==f'Bearer {TOKEN}'
             body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if url.path.endswith('/receipts'):return self.reply(200,{'agent':'owner/fixture',**body,'updated_at':iso(time.time())})
             forge['posts'].append({'path':url.path,**body})
             self.reply(201,{'cursor':'99','id':'n','created_at':iso(time.time()),'reply_to':None,'author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':body['body'],'link':None})
     api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
@@ -155,7 +159,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
         forge['messages']['30']=[{'cursor':'31','id':'r31','created_at':iso(time.time()),'reply_to':'30','author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':'on it','link':None}]
         forge['messages']['20']=[{'cursor':'21','id':'n21','created_at':iso(time.time()),'reply_to':None,'author':{'name':'owner/fixture','kind':'agent'},'kind':'message','body':'[gild nudge] idle 1s; asked the agent for a status report','link':None}]
         mention(20,'@fixture where is the PR?')
-        run.wait(lambda:any('mentioned you in owner/demo (message 20)' in l for l in run.lines()))
+        run.wait(lambda:any('mentioned you in owner/demo #demo (message 20)' in l for l in run.lines()))
         run.hook('Stop')
         mention(30,'@fixture second question')
         run.wait(lambda:any('(message 30)' in l for l in run.lines()))

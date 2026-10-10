@@ -1,3 +1,4 @@
+import hashlib
 """Trigger bridge end to end: fake forge + `gild spawn agent` alice (trigger) and bob (channel).
 
 alice carries `--on issues.labeled:triage`; bob is a plain channel agent. Labeling
@@ -36,6 +37,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         def log_message(self,*a):pass
         def address_string(self):return self.client_address[0]
         def do_GET(self):
+            if self.path.split('?',1)[0].endswith('/instructions'):
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             if url.path=='/api/v1/repos/owner/demo/issues': # start-up backlog: none open yet
                 self.send_response(200);self.send_header('content-type','application/json');self.end_headers();self.wfile.write(b'[]');return
@@ -56,6 +59,11 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
             except (BrokenPipeError,ConnectionResetError):pass
         def do_POST(self):
             url=urllib.parse.urlparse(self.path)
+            if url.path.endswith('/receipts'):
+                name=AGENTS.get((self.headers.get('Authorization') or '')[7:]);assert name
+                body=json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+                self.wfile.write(json.dumps({'agent':name,**body,'updated_at':'2026-10-10T06:31:04Z'}).encode());return
             assert url.path=='/api/v1/repos/owner/demo/channel/messages',url.path
             name=AGENTS.get((self.headers.get('Authorization') or '')[7:])
             assert name,name

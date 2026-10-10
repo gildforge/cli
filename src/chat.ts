@@ -1,10 +1,14 @@
 import { Command, InvalidArgumentError } from 'commander'
 import { ApiRequestError, GildClient } from './api/client'
 import { routes } from './api/contract'
-import { channelCursor, type ChannelMessage } from './api/channel-contract'
+import {
+  channelCursor,
+  channelName,
+  type ChannelMessage,
+} from './api/channel-contract'
 import { tailEvents, waitForEvents } from './events-tail'
 
-type ClientOptions = { agent?: string; server?: string }
+type ClientOptions = { agent?: string; server?: string; channel?: string }
 /** `read` asks for a reader: with no identity it is anonymous (public
  *  channels accept anonymous readers, docs/channel/API.md). */
 type Resolve = (opts: ClientOptions, read?: boolean) => Promise<GildClient>
@@ -40,6 +44,11 @@ function cursor(value: string) {
     throw new InvalidArgumentError('A cursor is a non-negative integer')
   return value
 }
+function branch(value: string) {
+  if (!channelName.safeParse(value).success)
+    throw new InvalidArgumentError('Use a valid Git branch name')
+  return value
+}
 function limit(value: string) {
   const number = Number(value)
   if (!Number.isInteger(number) || number < 1 || number > 200)
@@ -59,6 +68,8 @@ export async function rawChannel(
   output: (line: string) => void,
   error: (line: string) => void,
   pause: typeof waitForEvents = waitForEvents,
+  pingEvery = 25000,
+  channel?: string,
 ) {
   const route = routes.find((r) => r.id === 'channelStream')!
   let after = since,
@@ -70,6 +81,7 @@ export async function rawChannel(
           .replace('{owner}', encodeURIComponent(repo.owner))
           .replace('{repo}', encodeURIComponent(repo.repo)),
     )
+    if (channel) url.searchParams.set('channel', channel)
     if (after) url.searchParams.set('after', after)
     await new Promise<void>((resolve) => {
       // Bun accepts request headers here, which keeps the token out of the URL.
@@ -78,7 +90,12 @@ export async function rawChannel(
           ? { authorization: `Bearer ${client.token}` }
           : {},
       } as never)
+      // The forge expires presence after 90 s; ping every 25 s (API.md).
+      const ping = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send('ping')
+      }, pingEvery)
       const done = () => {
+        clearInterval(ping)
         signal.removeEventListener('abort', stop)
         resolve()
       }
@@ -131,6 +148,7 @@ Two agents talking, end to end:
   4. alice is woken with the mention, reads gild chat history, and replies in
      the channel with "@bob what is the number?"; bob is woken, replies with
      "@alice <number>", and alice is woken again.
+Open the channel:  gild chat owner/repo   (an IRC-style terminal UI)
 Watch it raw:  gild chat raw owner/repo
 Where a mention is:  gild events alice   (mention: received, queued, delivered)
 
@@ -139,11 +157,66 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     )
   const common = (command: Command) =>
     command
+      .option(
+        '--channel <branch>',
+        'select a branch channel (default: repository)',
+        branch,
+      )
       .option('--agent <label>', 'use an approved agent token')
       .option(
         '--server <url>',
         'forge base URL (defaults to the joined server for agents)',
       )
+  common(
+    chat
+      .command('channels <repo>')
+      .description('list buffers, unread counts and members')
+      .option('--json', 'print JSON'),
+  ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
+    const d = await (
+      await resolve(opts, true)
+    ).request('channelList', repoPair(target))
+    if (opts.json) return console.log(JSON.stringify(d))
+    for (const c of d.channels)
+      console.log(
+        `#${c.name}\t${c.archived ? 'archived' : 'active'}\t${c.unread} unread\t${c.members.map((m) => m.prefix + m.name).join(', ')}`,
+      )
+  })
+  common(
+    chat
+      .command('note <repo> <message>')
+      .description('post progress or context without notifying anyone'),
+  ).action(async (target: string, message: string, opts: ClientOptions) => {
+    const posted = await (
+      await resolve(opts)
+    ).request(
+      'channelPost',
+      repoPair(target),
+      { body: message, kind: 'note' },
+      { channel: opts.channel },
+    )
+    console.log(posted.cursor)
+  })
+  common(
+    chat
+      .command('open [repo]', { isDefault: true })
+      .description(
+        'the channel as a full-screen IRC-style terminal UI (the default: gild chat owner/repo)',
+      )
+      .addHelpText(
+        'after',
+        `
+Keys: Enter sends · Tab completes @nicks · PgUp/PgDn (or the wheel) scroll ·
+F2 shows or hides participants · Ctrl-C quits.
+A public channel opens read-only without an identity; NO_COLOR is honoured.`,
+      ),
+  ).action(async (target: string | undefined, opts: ClientOptions) => {
+    if (!target) return chat.help()
+    const params = repoPair(target)
+    const client = await resolve(opts, true)
+    const { runChatTui } = await import('./chat-tui')
+    await runChatTui({ client, repo: params, channel: opts.channel })
+  })
   common(
     chat
       .command('history <repo>')
@@ -168,6 +241,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       const page = await (
         await resolve(opts, true)
       ).request('channelMessages', params, undefined, {
+        channel: opts.channel,
         limit: opts.limit,
         before: opts.before,
         after: opts.after,
@@ -198,10 +272,15 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       }
       const posted = await (
         await resolve(opts)
-      ).request('channelPost', repoPair(target), {
-        body: message,
-        reply_to: opts.replyTo,
-      })
+      ).request(
+        'channelPost',
+        repoPair(target),
+        {
+          body: message,
+          reply_to: opts.replyTo,
+        },
+        { channel: opts.channel },
+      )
       console.log(posted.cursor)
     },
   )
@@ -213,7 +292,9 @@ An agent posts like a person; @name in the body wakes that agent's bridge
   ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
     const result = await (
       await resolve(opts, true)
-    ).request('channelParticipants', repoPair(target))
+    ).request('channelParticipants', repoPair(target), undefined, {
+      channel: opts.channel,
+    })
     if (opts.json) return console.log(JSON.stringify(result))
     for (const p of result.participants)
       console.log(
@@ -230,7 +311,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     chat
       .command('raw <repo>')
       .description(
-        'stream every channel frame as raw JSON lines until Ctrl-C (as an agent, also its mention events)',
+        'stream messages, receipts and presence as raw JSON lines until Ctrl-C (as an agent, also its mention events)',
       )
       .option('--since <cursor>', 'resume after a channel cursor', cursor),
   ).action(async (target: string, opts: ClientOptions & { since?: string }) => {
@@ -243,8 +324,16 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     const out = (line: string) => console.log(line)
     try {
       await Promise.all([
-        rawChannel(client, params, opts.since, controller.signal, out, (l) =>
-          console.error(l),
+        rawChannel(
+          client,
+          params,
+          opts.since,
+          controller.signal,
+          out,
+          (l) => console.error(l),
+          undefined,
+          undefined,
+          opts.channel,
         ),
         opts.agent
           ? mentionEvents(client, target, controller.signal, out)

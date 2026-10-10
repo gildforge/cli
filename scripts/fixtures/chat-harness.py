@@ -1,8 +1,10 @@
+import hashlib
 """Mention bridge end to end: fake forge + `gild spawn agent` + the PTY fixture agent."""
 import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,re,socketserver
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 AUTH='--auth' in sys.argv
+RECEIPT_FAILURE='--receipt-failure' in sys.argv
 TRUST='--codex-trust' in sys.argv # Codex opens on its trust dialog; a person answers it
 CODEX='--codex' in sys.argv or TRUST # a runtime with no startup hook (Codex)
 TOKEN='fixture-scoped-token'
@@ -16,7 +18,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py');(bin/'codex').symlink_to(ROOT/'scripts/fixtures/codex-agent.py')
     for p in [home/'.claude/settings.json']:p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"hooks":{}}')
     env={**os.environ,'HOME':d,'PATH':str(bin)+os.pathsep+os.environ['PATH']}
-    forge={'events':[],'requests':[],'lock':threading.Lock()}
+    forge={'events':[],'requests':[],'receipts':[],'lock':threading.Lock()}
     def mention(cursor,body,agent='owner/fixture',author='sami',mid=None,repo='owner/demo'):
         mid=mid or f'm{cursor}'
         message={'cursor':str(cursor),'id':mid,'created_at':'2026-10-09T00:00:00Z','reply_to':None,'author':{'name':author,'kind':'human'},'kind':'message','body':body,'link':None}
@@ -26,7 +28,16 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
     class API(http.server.BaseHTTPRequestHandler):
         def log_message(self,*a):pass
         def address_string(self):return self.client_address[0]
+        def do_POST(self):
+            assert self.headers.get('Authorization')==f'Bearer {TOKEN}'
+            assert self.path.endswith('/receipts'),self.path
+            body=json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+            forge['receipts'].append({'cursor':self.path.split('/')[-2],**body})
+            self.send_response(503 if RECEIPT_FAILURE else 200);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps({'message':'receipt outage'} if RECEIPT_FAILURE else {'agent':'owner/fixture',**body,'updated_at':'2026-10-10T06:31:04Z'}).encode())
         def do_GET(self):
+            if self.path.split('?',1)[0].endswith('/instructions'):
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
             assert url.path=='/api/v1/events',url.path
             if self.headers.get('Authorization')!=f'Bearer {TOKEN}' or AUTH:
@@ -140,7 +151,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         mention(5,'@fixture ask @bob for the number')
         run.wait(lambda:len(run.prompts())==1)
         first=run.prompts()[0]
-        assert 'mentioned you in owner/demo (message 5)' in first and '@sami' in first and 'ask @bob for the number' in first,first
+        assert 'mentioned you in owner/demo #demo (message 5)' in first and '@sami' in first and 'ask @bob for the number' in first,first
         # The commands name the gild that spawned the session (CLI), not a PATH lookup.
         context=re.search(r"Context: (.+) chat history owner/demo --agent fixture --before 6 --limit 30",first)
         reply=re.search(r'Reply:   (.+) chat send owner/demo --agent fixture --reply-to 5 "<your reply>"',first)
@@ -150,18 +161,22 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
         assert 'clone owner/demo --agent fixture' in first and 'pr create|list|view|diff|checks|comment|review|merge' in first,first
         assert TOKEN not in first
         assert run.status()['state']=='busy'
+        run.wait(lambda:[r['state'] for r in forge['receipts'] if r['cursor']=='5'][-2:]==['delivered','read'])
         # Duplicate delivery of the same message under a new event cursor, plus a second mention while busy.
         mention(5,'@fixture ask @bob for the number',mid='m5')
         mention(7,'@fixture second')
         run.wait(lambda:forge['requests'][-1]['since']==str(len(forge['events'])));run.read(.3)
         assert len(run.prompts())==1,run.prompts() # held: agent busy
+        run.wait(lambda:any(r['cursor']=='7' and r['state']=='held' and r['reason']=='agent not idle' for r in forge['receipts']))
         assert not any('not you' in l for l in run.lines())
         assert run.status()['held']['queued']==1,run.status()
         # A draft in the composer holds the queued mention until cleared.
         os.write(run.m,b'draft');run.hook('Stop');run.read(.5)
         assert len(run.prompts())==1,run.prompts()
+        run.wait(lambda:any(r['cursor']=='7' and r['state']=='held' and 'unsent draft' in r['reason'] for r in forge['receipts']))
         os.write(run.m,b'\x15');run.wait(lambda:len(run.prompts())==2)
         assert 'message 7' in run.prompts()[1]
+        run.wait(lambda:[r['state'] for r in forge['receipts'] if r['cursor']=='7'][-2:]==['delivered','read'])
         run.wait(lambda:[s for _,s in run.stages('m5')]==['received','queued','delivered'])
         run.wait(lambda:[s for _,s in run.stages('m7')]==['received','queued','delivered'])
         assert run.stages('m3')==[],run.stages('m3')

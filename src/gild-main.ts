@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { instructionsCommands } from './instructions-command'
 import { importCommands } from './import/commands'
 import { ApiRequestError, GildClient } from './api/client'
 import { ProofClient } from './api/bootstrap-contract'
@@ -845,6 +846,20 @@ const agentCmd = program
   )
 
 profileCommands(agentCmd)
+instructionsCommands(agentCmd, async (label, write, override) => {
+  const agent = await loadAgent(label)
+  if (!agent?.token) throw Error('Use an approved local agent identity')
+  const server = agentServer(agent, override)
+  if (!write)
+    return {
+      client: new GildClient(server + '/api/v1', agent.token),
+      agent: agent.name,
+    }
+  const identity = await loadIdentity()
+  if (!identity)
+    throw Error('Run gild auth init as the sponsor before editing instructions')
+  return { client: await clientFor(server, identity), agent: agent.name }
+})
 
 agentCmd
   .command('join <label>')

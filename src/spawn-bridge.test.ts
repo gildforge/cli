@@ -39,6 +39,7 @@ test('trigger bridge PTY: label wakes alice, her unprompted post wakes bob', asy
 const scenarios: Record<string, string> = {
   '': '',
   '--auth': ': auth failure keeps the agent alive',
+  '--receipt-failure': ': receipt failure keeps the agent alive',
   '--codex': ': a fresh Codex session gets its first mention',
   '--codex-trust':
     ': Codex trust dialog is left to the person, then the mention arrives',
@@ -131,6 +132,7 @@ async function bridge(
   pages: (() => unknown)[],
   file?: string,
   triggers: string[] = [],
+  branchMembers: string[] = ['owner/bob'],
   backlog: unknown[] = [],
 ) {
   await mkdir('.tmp', { recursive: true })
@@ -149,7 +151,18 @@ async function bridge(
         _b: unknown,
         query: { since?: string },
       ) => {
+        if (_op === 'channelList')
+          return {
+            channels: [
+              { name: 'demo', members: [] },
+              {
+                name: 'bob/topic',
+                members: branchMembers.map((name) => ({ name, prefix: '+' })),
+              },
+            ],
+          }
         if (_op === 'issues') return backlog
+        if (_op === 'channelReceipt') return {}
         sinces.push(query.since)
         const page = pages[Math.min(index++, pages.length - 1)]
         if (index >= pages.length + 1) controller.abort()
@@ -192,10 +205,12 @@ test('prompt is short, names the history and reply commands', () => {
   expect(text).toContain('clone owner/demo --agent')
   expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
   expect(text.split('\n').slice(0, -1)).toEqual([
-    '[gild] @alice/ava mentioned you in owner/demo (message 41):',
+    '[gild] @alice/ava mentioned you in owner/demo #demo (message 41):',
+
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
     'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
+    'Work notes: gild chat note owner/demo --channel "$(git branch --show-current)" --agent bob "<progress, decisions, blockers or tests>" (never notifies).',
     MENTION_ETIQUETTE,
   ])
   // Without the note, agents tag each other as a courtesy and wake each other
@@ -449,8 +464,60 @@ test('a restart skips delivered trigger ids and resumes from the cursor', async 
   await run.b.flush()
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
     cursors: { 'owner/demo': '8' },
-    delivered: ['trigger:owner/demo#12:issues.labeled:triage', 'trigger:owner/demo#13:issues.labeled:triage'],
+    delivered: [
+      'trigger:owner/demo#12:issues.labeled:triage',
+      'trigger:owner/demo#13:issues.labeled:triage',
+    ],
   })
+})
+
+test('the repo event bridge delivers mentions from every branch and prompts select the same channel', async () => {
+  const one = mentionEvent(1),
+    two = mentionEvent(2)
+  const a = { ...one, payload: { ...one.payload, channel: 'bob/topic' } }
+  const b = { ...two, payload: { ...two.payload, channel: 'alice/topic' } }
+  const run = await bridge([
+    () => ({ events: [a, b], cursor: '2' }),
+    () => ({ events: [], cursor: '2' }),
+  ])
+  await run.done
+  expect(run.prompts).toHaveLength(2)
+  expect(run.prompts[0]).toContain('#bob/topic')
+  expect(run.prompts[0]).toContain('--channel bob/topic')
+  expect(run.prompts[1]).toContain('--channel alice/topic')
+  expect(run.prompts.every((p) => p.includes('chat note'))).toBe(true)
+})
+
+test('branch trigger prompts require membership; a direct tag can wake a non-member', async () => {
+  const pr = issueEvent(1, { event: 'pull_request', action: 'opened' })
+  const scoped = {
+    ...pr,
+    payload: {
+      ...pr.payload,
+      pull_request: {
+        ...('pull_request' in pr.payload ? pr.payload.pull_request : {}),
+        head: { ref: 'bob/topic' },
+      },
+    },
+  }
+  const direct = {
+    ...mentionEvent(2),
+    payload: { ...mentionEvent(2).payload, channel: 'bob/topic' },
+  }
+  for (const members of [[], ['owner/bob']]) {
+    const run = await bridge(
+      [
+        () => ({ events: [scoped, direct], cursor: '2' }),
+        () => ({ events: [], cursor: '2' }),
+      ],
+      undefined,
+      ['pull_request.opened'],
+      members,
+    )
+    await run.done
+    expect(run.prompts).toHaveLength(members.length ? 2 : 1)
+    expect(run.prompts.at(-1)).toContain('#bob/topic')
+  }
 })
 
 test('a labeled trigger also fires for an issue opened with the label, once', async () => {
@@ -458,7 +525,11 @@ test('a labeled trigger also fires for an issue opened with the label, once', as
     [
       () => ({
         events: [
-          issueEvent(1, { action: 'opened', labels: ['triage'], label: undefined }),
+          issueEvent(1, {
+            action: 'opened',
+            labels: ['triage'],
+            label: undefined,
+          }),
           issueEvent(2, { label: 'triage' }), // the same issue labeled too
           issueEvent(3, { action: 'opened', number: 13, labels: ['other'] }),
         ],
@@ -479,7 +550,15 @@ test('open issues already carrying the label are picked up on start', async () =
     [() => ({ events: [], cursor: '1' })],
     undefined,
     ['issues.labeled:triage'],
-    [{ number: 7, title: 'Backlog task', labels: [{ name: 'triage' }], user: { login: 'sami' } }],
+    undefined,
+    [
+      {
+        number: 7,
+        title: 'Backlog task',
+        labels: [{ name: 'triage' }],
+        user: { login: 'sami' },
+      },
+    ],
   )
   await run.done
   expect(run.prompts).toHaveLength(1)
