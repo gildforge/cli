@@ -3,7 +3,8 @@ import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcn
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 AUTH='--auth' in sys.argv
-CODEX='--codex' in sys.argv # a runtime with no startup hook (Codex)
+TRUST='--codex-trust' in sys.argv # Codex opens on its trust dialog; a person answers it
+CODEX='--codex' in sys.argv or TRUST # a runtime with no startup hook (Codex)
 TOKEN='fixture-scoped-token'
 class Server(http.server.ThreadingHTTPServer):
     def server_bind(self):
@@ -48,7 +49,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
     agent_file.write_text(json.dumps({'schema':1,'name':'owner/fixture','server':origin,'token':TOKEN,'publicKey':'test-public','secretKey':'test-private','requestId':'test-request','createdAt':'2026-10-08T00:00:00Z'}));agent_file.chmod(0o600)
     work=home/'workspace';work.mkdir()
     profile_file=home/'.gild/agents/fixture.json';profile_file.parent.mkdir(parents=True)
-    profile_file.write_text(json.dumps({'name':'fixture','runtime':'codex' if CODEX else 'claude','directory':str(work),'args':[],'channels':['owner/demo'],'env':['PATH','HOME']}))
+    profile_file.write_text(json.dumps({'name':'fixture','runtime':'codex' if CODEX else 'claude','directory':str(work),'args':['--trust-dialog'] if TRUST else [],'channels':['owner/demo'],'env':['PATH','HOME']}))
     path=home/'.gild/sessions/fixture.sock'
     class Run:
         def __init__(self):
@@ -105,7 +106,14 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='chat-') as d:
             # the session turns them off; either one leaves the prompt unsent.
             run.wait(lambda:run.status()['channels']==[{'repo':'owner/demo','state':'listening'}])
             mention(2,'@fixture what is 6 x 7? ask bob')
-            run.wait(lambda:len(run.prompts())==1,t=8)
+            if TRUST:
+                # A channel message must never answer the trust dialog for a person.
+                run.read(3);assert run.prompts()==[] and b'"dialog"' not in run.buf,run.buf
+                assert run.status()['held']['reason']=='agent not idle',run.status()
+                # The person presses Enter. Codex never reports that this was no
+                # prompt, so the inferred busy state must fall back to idle.
+                os.write(run.m,b'\r');run.wait(lambda:b'"dialog": "trusted", "typed": ""' in run.buf)
+            run.wait(lambda:len(run.prompts())==1,t=10)
             assert 'what is 6 x 7? ask bob' in run.prompts()[0]
             assert b'"menu"' not in run.buf,run.buf
             # Its turn ends (Codex notify), so a typed one-line `gild send` goes in;

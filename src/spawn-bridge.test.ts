@@ -40,6 +40,8 @@ const scenarios: Record<string, string> = {
   '': '',
   '--auth': ': auth failure keeps the agent alive',
   '--codex': ': a fresh Codex session gets its first mention',
+  '--codex-trust':
+    ': Codex trust dialog is left to the person, then the mention arrives',
 }
 for (const [scenario, title] of Object.entries(scenarios)) {
   test(`mention bridge PTY${title}`, async () => {

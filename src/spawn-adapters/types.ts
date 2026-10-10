@@ -21,9 +21,9 @@ export type AgentAdapter = {
     receive?: (raw: unknown) => void
   }>
   translate(session: string, raw: unknown): AgentEvent | null
-  /** For a runtime with no startup hook: once its first screen has drawn and
-   * the terminal has been quiet this long, it sits at its prompt (idle). */
-  startupQuietMs?: number
+  /** For a runtime that reports only turn ends: terminal-quiet readiness
+   * (see QuietIdle). `dialogs` matches screen text with whitespace removed. */
+  quiet?: { startupMs: number; busyMs: number; dialogs?: RegExp }
 }
 export function event(
   session: string,
