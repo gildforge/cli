@@ -13,6 +13,11 @@ export type ReportTarget = {
   repo: string
   sha: string
 }
+/** gild.gg answered a commit-session receipt in 2–4.5 s on 10 Oct; a 1 s
+ * abort dropped every report, so the channel never showed an agent's state.
+ * Only one request is in flight and the latest state wins, so a slow answer
+ * delays the next update rather than piling them up. */
+export const REPORT_TIMEOUT_MS = 10_000
 /** One in-flight update, latest state wins. No local content reaches the API. */
 export class StateReporter {
   private readonly id = randomUUID()
@@ -56,7 +61,7 @@ export class StateReporter {
       Math.max(0, 1000 - (Date.now() - this.lastSent)),
     )
   }
-  private async send() {
+  private async send(timeoutMs = REPORT_TIMEOUT_MS) {
     if (this.sending || !this.pending) return
     const state = this.pending
     this.pending = undefined
@@ -90,7 +95,7 @@ export class StateReporter {
           notes: '',
         }),
         undefined,
-        { signal: AbortSignal.timeout(1000) },
+        { signal: AbortSignal.timeout(timeoutMs) },
       )
       .then(
         () => {},
@@ -113,6 +118,7 @@ export class StateReporter {
     await new Promise((resolve) =>
       setTimeout(resolve, Math.max(0, 1000 - (Date.now() - this.lastSent))),
     )
-    await this.send()
+    // Exit waits for this one, so it gets less time than a live update.
+    await this.send(5000)
   }
 }
