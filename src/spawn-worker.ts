@@ -549,6 +549,8 @@ async function main() {
     () => !adapter || state.state === 'idle',
     !!adapter,
     submitted,
+    // Claude reports UserPromptSubmit through hooks; Codex only reports turn end.
+    adapter?.name !== 'claude',
   )
   const target = bridgeConfig ? await bridgeConfig : undefined
   watchdog = startWatchdog({
