@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { environmentCommands } from './environments'
 import { importCommands } from './import/commands'
 import { ApiRequestError, GildClient } from './api/client'
 import { ProofClient } from './api/bootstrap-contract'
@@ -1287,6 +1288,7 @@ async function chatClient(
   if (!identity) throw Error('Run gild auth init first')
   return clientFor(opts.server ?? 'https://gild.gg', identity)
 }
+environmentCommands(program, chatClient)
 chatCommands(program, chatClient)
 issueCommands(program, chatClient)
 prCommands(program, chatClient)

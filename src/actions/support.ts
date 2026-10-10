@@ -24,6 +24,6 @@ export function actionSupport(uses:string,values:Record<string,unknown>) {
   return {error,warnings}
 }
 export const workflowKeys=['name','on','env','defaults','jobs','permissions']
-export const jobKeys=['name','runs-on','needs','if','env','strategy','steps','timeout-minutes','defaults','permissions']
+export const jobKeys=['name','runs-on','needs','if','env','strategy','steps','timeout-minutes','defaults','permissions','environment']
 export const stepKeys=['id','name','run','uses','shell','working-directory','env','with','if','continue-on-error','timeout-minutes']
 export const eventKeys=['push','pull_request','workflow_dispatch']
