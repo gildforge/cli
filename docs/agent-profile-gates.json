@@ -1,0 +1,150 @@
+{
+  "date": "2026-10-10",
+  "host": "bugsy (macOS arm64)",
+  "lock": "lockf ~/Projects/claude/.heavy.lock",
+  "site_source": "c923f97a8a127181e95a8fc2021d8debbe7e00a3",
+  "cli_source": "59b3a00e13083f56aea477b309504ff92cada411",
+  "signoff": "-codex",
+  "gates": [
+    {
+      "repo": "cli",
+      "label": "cli-install",
+      "command": "bun install --frozen-lockfile --ignore-scripts",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-npm",
+      "command": "npm install --prefix .tmp/npm-gates npm@11.16.0 --ignore-scripts --no-audit --no-fund",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-typecheck",
+      "command": "bun run typecheck",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-build",
+      "command": "bun run build",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-setup-node",
+      "command": "bun test src/runner-setup-node.test.ts",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-unit",
+      "command": "bun test --timeout 30000",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-instructions-revert",
+      "command": "bun run test:instructions:revert",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-vz",
+      "command": "scripts/build-vz-helper.sh",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-pack",
+      "command": "bun run pack",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-install-proof",
+      "command": "bun run test:install",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-installed-pty",
+      "command": "bun run test:installed-pty",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "cli-install-revert",
+      "command": "bun run test:install:revert",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-instructions-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun run test:instructions:revert",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-pack-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun run pack",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-install-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun run test:install",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-installed-pty-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun run test:installed-pty",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-install-revert-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun run test:install:revert",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-unit-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun test --timeout 30000",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "final-cli-setup-node24",
+      "command": "env 'PATH=$PWD/.tmp/ci-node/bin:$PATH' bun test src/runner-setup-node.test.ts",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "companion-import-typecheck-node24",
+      "command": "bun run typecheck (Node 24 PATH)",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "companion-import-build-node24",
+      "command": "bun run build (Node 24 PATH)",
+      "exit_code": 0
+    },
+    {
+      "repo": "cli",
+      "label": "companion-import-reverts-node24",
+      "command": "node scripts/import-metadata-revert.mjs (Node 24 PATH)",
+      "exit_code": 0
+    }
+  ],
+  "proofs": {
+    "instruction_reverts": 9,
+    "import_reverts": 5
+  },
+  "verification_stages": "Full workflow commands followed by focused final repeats after repairs. Source SHAs identify the assembled branches; earlier full passes preceded the documented local fixes.",
+  "notes": [
+    "Live VM, container/network and dedicated host tests are opt-in and skipped; native PTY profile flows and the VZ helper compilation ran."
+  ]
+}

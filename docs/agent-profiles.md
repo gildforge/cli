@@ -154,4 +154,12 @@ guest binary. Ordinary native launches add no isolation and report `none`;
 `host` is reserved for the dedicated OS-user tier. Idle heartbeats preserve last activity and let the server show
 whether a receipt is still online.
 
+`bun run test:instructions:revert` removes nine instruction/runtime behaviors
+independently and requires their effect assertions to fail. The installed PTY
+gate includes native profile launch, browser-style instruction updates, dirty
+local-file protection, prompt delivery and observed runtime reports.
+[Gate evidence](agent-profile-gates.json) records the bugsy commands and the
+existing opt-in VM/host/network skips. The site companion supplies the real
+web edit, Git/D1, private-reader and cropped-photo browser proof.
+
 -codex
