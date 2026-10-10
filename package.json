@@ -18,7 +18,8 @@
     "format:check": "prettier --check src scripts",
     "test:pack": "node scripts/check-packages.mjs",
     "test:install": "node scripts/check-install.mjs",
-    "test:installed-pty": "node scripts/test-installed-pty.mjs"
+    "test:installed-pty": "node scripts/test-installed-pty.mjs",
+    "test:install:revert": "node scripts/no-install-scripts-revert.mjs"
   },
   "dependencies": {
     "chalk": "^5.6.2",

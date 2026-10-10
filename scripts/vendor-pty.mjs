@@ -10,16 +10,24 @@ import {
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import pin from './node-pty.json' with { type: 'json' }
+import pkg from '../package.json' with { type: 'json' }
 
 export const sha256 = (bytes) =>
   createHash('sha256').update(bytes).digest('hex')
-export const ptyFiles = (platform) =>
-  Object.keys(pin.files).filter(
+export function ptyFiles(platform) {
+  if (!pin.files[`prebuilds/${platform}/pty.node`])
+    throw new Error(`No pinned node-pty prebuild for ${platform}`)
+  return Object.keys(pin.files).filter(
     (file) =>
       !file.startsWith('prebuilds/') ||
       file.startsWith(`prebuilds/${platform}/`),
   )
+}
 export async function vendorPty(root, targets) {
+  if (pkg.devDependencies['node-pty'] !== pin.version)
+    throw new Error(
+      'node-pty development version must match the vendored tarball pin',
+    )
   const cache = join(root, '.tmp', `node-pty-${pin.version}`)
   mkdirSync(cache, { recursive: true })
   const archive = join(cache, 'upstream.tgz')

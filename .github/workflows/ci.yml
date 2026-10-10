@@ -21,7 +21,7 @@ jobs:
           node-version: '24'
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test src/runner-setup-node.test.ts
-      - run: npm install -g npm@12.2.0
+      - run: npm install -g npm@11.16.0
       - run: bun run pack
       - run: bun run test:install
       - run: bun run test:installed-pty
@@ -45,9 +45,10 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test --timeout 30000
-      - run: npm install -g npm@12.2.0
+      - run: npm install -g npm@11.16.0
       - run: bun run pack
       - name: Check packed manifests, dependency graph and warning-free global install
         run: bun run test:install
       - name: Exercise PTY sessions through the installed npm launcher
         run: bun run test:installed-pty
+      - run: bun run test:install:revert

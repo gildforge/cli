@@ -25,6 +25,8 @@ const child = spawn(
   'bun',
   [
     'test',
+    '--timeout',
+    '30000',
     'src/spawn.test.ts',
     'src/spawn-regressions.test.ts',
     'src/spawn-events.test.ts',

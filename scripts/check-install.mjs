@@ -2,15 +2,18 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   root,
   npm,
   packPackages,
   packedRegistry,
   noInstallScripts,
+  runNpm as packNpm,
 } from './packed-packages.mjs'
 
-const dest = join(root, '.tmp', 'install')
+const reverted = process.argv.includes('--revert-node-pty')
+const dest = join(root, '.tmp', reverted ? 'install-revert' : 'install')
 rmSync(dest, { recursive: true, force: true })
 for (const dir of ['home', 'prefix', 'graph', 'cache'])
   mkdirSync(join(dest, dir), { recursive: true })
@@ -52,7 +55,52 @@ function run(command, args, label, cwd = root) {
 const runNpm = (args, label, cwd) =>
   run(npm[0], [...npm.slice(1), ...args], label, cwd)
 const packages = packPackages()
+if (reverted) {
+  // Repack only a scratch launcher; preserve source and the working install.
+  const original = packages.get('gildforge')
+  const scratch = join(dest, 'old-launcher')
+  mkdirSync(join(scratch, 'bin'), { recursive: true })
+  const { copyFileSync } = await import('node:fs')
+  for (const bin of ['gild.js', 'gild-server.js'])
+    copyFileSync(
+      join(root, 'packages', 'gildforge', 'bin', bin),
+      join(scratch, 'bin', bin),
+    )
+  const pkg = {
+    ...original.pkg,
+    optionalDependencies: {
+      ...original.pkg.optionalDependencies,
+      'node-pty': '1.1.0',
+    },
+  }
+  writeFileSync(join(scratch, 'package.json'), JSON.stringify(pkg))
+  try {
+    noInstallScripts(pkg, 'reverted launcher')
+    throw new Error('reverted dependency passed the packed manifest guard')
+  } catch (error) {
+    if (!String(error).includes('still depends on node-pty')) throw error
+    console.log(String(error))
+  }
+  const result = JSON.parse(
+    packNpm([
+      'pack',
+      scratch,
+      '--json',
+      '--ignore-scripts',
+      '--pack-destination',
+      dest,
+    ]),
+  )
+  if (result.error) throw new Error(JSON.stringify(result.error))
+  const [packed] = Array.isArray(result) ? result : Object.values(result)
+  packages.set('gildforge', {
+    pkg,
+    tarball: join(dest, packed.filename),
+    integrity: packed.integrity,
+  })
+}
 const registry = await packedRegistry(packages)
+let smokeStarted = false
 try {
   const installed = await runNpm(
     [
@@ -77,7 +125,7 @@ try {
   )
     throw new Error('global npm install emitted warnings')
   // npm's lock resolves even optional packages for foreign os/cpu. No hook is
-  // executed here; the separate global install below uses npm's default policy.
+  // executed here; the fresh global install above uses npm's default policy.
   writeFileSync(
     join(dest, 'graph', 'package.json'),
     JSON.stringify({
@@ -153,7 +201,25 @@ try {
   ]) {
     const result = await run('gild', args, label)
     console.log(`gild ${args.join(' ')}: ${result.stdout.trim()}`)
+    if (label === 'spawn') smokeStarted = true
+    if (label === 'status' && !JSON.parse(result.stdout).detached)
+      throw new Error('spawn did not create a detached PTY session')
+    if (label === 'send') {
+      const log = join(dest, 'home', '.gild', 'sessions', 't', 'output.log')
+      let delivered = false
+      for (let attempt = 0; attempt < 40 && !delivered; attempt++) {
+        await delay(100)
+        try {
+          delivered = readFileSync(log, 'utf8').includes('hi')
+        } catch {}
+      }
+      if (!delivered) throw new Error('gild send did not reach the cat PTY')
+      console.log('verified: cat PTY output contains hi')
+    }
+    if (label === 'stop') smokeStarted = false
   }
 } finally {
+  if (smokeStarted)
+    await run('gild', ['stop', 't'], 'cleanup-stop').catch(() => {})
   await registry.close()
 }

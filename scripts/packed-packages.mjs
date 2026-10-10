@@ -1,5 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, mkdirSync, rmSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  readdirSync,
+} from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
 import pin from './node-pty.json' with { type: 'json' }
@@ -33,12 +39,7 @@ export function packPackages() {
   rmSync(dest, { recursive: true, force: true })
   mkdirSync(dest, { recursive: true })
   const packages = new Map()
-  for (const name of [
-    'gildforge',
-    'cli-darwin-arm64',
-    'cli-darwin-x64',
-    'cli-linux-x64',
-  ]) {
+  for (const name of readdirSync(join(root, 'packages')).sort()) {
     const output = runNpm([
       'pack',
       join(root, 'packages', name),
@@ -47,6 +48,7 @@ export function packPackages() {
       '--pack-destination',
       dest,
     ])
+    writeFileSync(join(dest, `${name}.pack.json`), output)
     const result = JSON.parse(output)
     if (result.error)
       throw new Error(`npm pack failed: ${JSON.stringify(result.error)}`)
