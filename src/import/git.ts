@@ -25,7 +25,7 @@ export function importSSHCommand(address: string, hostname: string) {
  * token-bearing argv, or Worker pack buffering. */
 export class NativeImport {
   private addresses: string[] = []
-  private metaBranch = 'import/source/_meta'
+  private metaBranch = 'source/_meta'
   private pullPrefix = 'import/pr'
   branch(ref: string) {
     return ref === '_meta' ? this.metaBranch : ref
@@ -112,7 +112,8 @@ export class NativeImport {
         else
           reject(
             Error(
-              'Git transfer failed; check source access and retry the import',
+              'Git transfer failed; check source access and retry the import' +
+                gitReason(stderr),
             ),
           )
       })
@@ -172,7 +173,7 @@ export class NativeImport {
       return { oid, ref }
     })
   }
-  async push() {
+  async push(beforePush?: (prefix: string) => Promise<void>) {
     const o = this.options,
       refs = await this.refs(),
       sourceMeta = refs.find((r) => r.ref === 'refs/heads/_meta')
@@ -185,9 +186,19 @@ export class NativeImport {
       )
     )
       namespace += '_'
-    const reserved = 'refs/heads/' + namespace + '/source/_meta'
-    this.metaBranch = namespace + '/source/_meta'
+    let metaName = 'source'
+    while (
+      refs.some(
+        (r) =>
+          r.ref === 'refs/heads/' + metaName ||
+          r.ref.startsWith('refs/heads/' + metaName + '/'),
+      )
+    )
+      metaName += '_'
+    const reserved = 'refs/heads/' + metaName + '/_meta'
+    this.metaBranch = metaName + '/_meta'
     this.pullPrefix = namespace + '/pr'
+    await beforePush?.(this.pullPrefix)
     const expected = refs.map((r) => ({
       ...r,
       ref: r === sourceMeta ? reserved : r.ref,
@@ -266,15 +277,21 @@ export class NativeImport {
     )
       return null
     const credentials = await this.options.credentials()
-    await this.git(
-      [
-        'push',
-        '--force',
-        credentials.url,
-        `refs/heads/${head}:refs/heads/${head}`,
-      ],
+    const oid = await this.git(['rev-parse', 'refs/heads/' + head])
+    const remote = await this.git(
+      ['ls-remote', '--refs', credentials.url, 'refs/heads/' + head],
       credentials,
     )
+    if (remote?.split(/\s+/)[0] !== oid)
+      await this.git(
+        [
+          'push',
+          '--force',
+          credentials.url,
+          `refs/heads/${head}:refs/heads/${head}`,
+        ],
+        credentials,
+      )
     return head
   }
   async workflows(branch: string): Promise<{ file: string; text: string }[]> {
@@ -309,4 +326,17 @@ export class NativeImport {
     }
     return results
   }
+}
+
+/** Last three stderr lines, with URL credentials masked. */
+export function gitReason(stderr: string) {
+  const line = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join(' | ')
+  return line
+    ? ` (${line.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300)})`
+    : ''
 }

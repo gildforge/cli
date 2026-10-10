@@ -7,6 +7,8 @@ import type { importAssignment, ImportRecord } from '../api/import-contract'
 import { sourceURL, metadata } from './source'
 import { publicFetch } from './http'
 import { NativeImport } from './git'
+import { githubReadToken } from './auth'
+import { snapshotFetch } from './snapshot'
 export async function executeImport(
   server: string,
   job: z.infer<typeof importAssignment>,
@@ -14,6 +16,7 @@ export async function executeImport(
   signal: AbortSignal,
   log: (message: string) => void = console.log,
   sourceFetch: typeof publicFetch = publicFetch,
+  anonymous = false,
 ) {
   const [owner, repo] = job.repository.split('/'),
     params = { owner, repo },
@@ -71,35 +74,63 @@ export async function executeImport(
   })
   try {
     const branch = await native.fetch(),
-      stats = await native.push()
+      stats = await native.push(async (internal_prefix) => {
+        await retry(() =>
+          client.request(
+            'importHeartbeat',
+            params,
+            {
+              progress: {
+                ...progress,
+                default_branch: native.branch(branch),
+                internal_prefix,
+              },
+            },
+            {},
+            { signal },
+          ),
+        )
+      })
     log(
       `Git verified: ${stats.branches} branches, ${stats.tags} tags, ${stats.commits} commits`,
     )
     progress = {
       phase: 'metadata',
-      completed: 0,
+      completed: job.checkpoint
+        ? (JSON.parse(job.checkpoint).completed ?? 0)
+        : 0,
       message: 'Importing source metadata',
     }
     let records: ImportRecord[] = [],
       bytes = 0,
       checkpoint = job.checkpoint
+    const metadataToken =
+      job.source_token ??
+      (job.forge === 'github' ? await githubReadToken(anonymous) : undefined)
     const flush = async (next?: string) => {
       if (heartbeatError) throw heartbeatError
       if (signal.aborted) throw Error('Import cancelled')
       if (!records.length && next === undefined) return
-      progress.completed += records.length
+      const completed = progress.completed + records.length
+      if (next !== undefined)
+        next = JSON.stringify({ ...JSON.parse(next), completed })
       await retry(() =>
         client.request(
           'importBatch',
           params,
           {
             records,
-            progress: { ...progress, checkpoint: next ?? checkpoint },
+            progress: {
+              ...progress,
+              completed,
+              checkpoint: next ?? checkpoint,
+            },
           },
           {},
           { signal },
         ),
       )
+      progress.completed = completed
       if (next !== undefined) checkpoint = next
       records = []
       bytes = 0
@@ -107,11 +138,16 @@ export async function executeImport(
     }
     for await (const event of metadata({
       source: sourceURL(job.source, job.forge),
-      token: job.source_token,
+      token: metadataToken,
       destination: server + '/' + job.repository,
       checkpoint: job.checkpoint,
       signal,
-      fetcher: sourceFetch,
+      fetcher: await snapshotFetch(
+        path + '.metadata',
+        !!job.checkpoint,
+        sourceFetch,
+      ),
+      log,
       head: (ref, n) => native.head(ref, n),
       branch: (ref) => native.branch(ref),
     })) {
@@ -123,7 +159,7 @@ export async function executeImport(
         records.push(record)
         bytes += size
       }
-      if (event.checkpoint !== undefined) checkpoint = event.checkpoint
+      if (event.checkpoint !== undefined) await flush(event.checkpoint)
     }
     await flush()
     const recordCount = progress.completed

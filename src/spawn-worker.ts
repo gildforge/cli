@@ -1,3 +1,6 @@
+import { InstructionsSync, type InstructionsTarget } from './agent-instructions'
+import type { z } from 'zod'
+import type { runtimeReport } from './api/agent-profile-contract'
 import { runNative, debugFallback, supportsPty } from './spawn-native'
 import { promptGild } from './gild-invocation'
 import { createRequire } from 'node:module'
@@ -40,6 +43,8 @@ import {
 } from './spawn-sessions'
 
 type Options = {
+  environment?: z.output<typeof runtimeReport>
+  instructionTarget?: InstructionsTarget
   agent: string
   args: string[]
   id: string
@@ -103,6 +108,8 @@ const state: SessionState = {
 }
 const subscribers = new Set<Socket>()
 let reporter: StateReporter | undefined
+let instructionSync: InstructionsSync | undefined
+let instructionTimer: ReturnType<typeof setInterval> | undefined
 let bridge: MentionBridge | undefined
 let watchdog: ReturnType<typeof startWatchdog>
 const bridgeAbort = new AbortController()
@@ -196,6 +203,7 @@ function restore() {
     rawOwned = false
   }
   bridgeAbort.abort()
+  clearInterval(instructionTimer)
   watchdog?.close()
   queue?.close()
   adapterCleanup?.()
@@ -423,6 +431,8 @@ async function main() {
             childPid: 'dispose' in child ? -1 : child.pid,
             started,
             ...state,
+            environment: options.environment,
+            instructions: instructionSync?.status,
             held: queue?.held,
             nudges: watchdog?.status(),
             ...host?.info,
@@ -574,11 +584,22 @@ async function main() {
         })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
+    else child.onData((data) => output.push(data))
+    if (options.environment && 'runtimeVersion' in child)
+      options.environment.runtime_version = child.runtimeVersion
     child.onData((data) => quiet?.output(data as unknown as Buffer))
   } catch (error) {
     return fallback(error)
   }
-  if (reportConfig) reporter = new StateReporter(await reportConfig!, 'unknown')
+  if (reportConfig) {
+    reporter = new StateReporter(
+      await reportConfig!,
+      options.environment?.model ?? 'unknown',
+      undefined,
+      options.environment,
+    )
+    reporter.snapshot(state)
+  }
   if (!options.detach) {
     process.stdin.setRawMode(true)
     rawOwned = true
@@ -614,6 +635,20 @@ async function main() {
     emit: broadcast,
   })
   if (watchdog) watchdog.state(state.state)
+  if (target && options.instructionTarget) {
+    instructionSync = new InstructionsSync({
+      client: new GildClient(target.server + '/api/v1', target.token),
+      target: options.instructionTarget,
+      directory: process.cwd(),
+      runtime: options.agent,
+      enqueue: (text) => queue!.enqueue(text),
+      apply: options.vm
+        ? (text) => (child as VmChild).updateInstructions(text)
+        : undefined,
+    })
+    await instructionSync.check()
+    instructionTimer = setInterval(() => void instructionSync?.check(), 30000)
+  }
   if (target && options.profile) {
     bridge = new MentionBridge({
       client: new GildClient(target.server + '/api/v1', target.token),
@@ -621,12 +656,33 @@ async function main() {
       label: options.profile.name,
       gild: promptGild(options.hookCommand),
       session: options.id,
-      repos: options.profile.channels ?? [],
+      repos: [
+        ...new Set([
+          ...(options.profile.channels ?? []),
+          ...(options.instructionTarget
+            ? [
+                `${options.instructionTarget.owner}/${options.instructionTarget.repo}`,
+              ]
+            : []),
+        ]),
+      ],
       triggers: options.profile.on ?? [],
       file: join(directory, `${options.id}.mentions.json`),
       enqueue: (text, typed) => queue!.enqueue(text, typed),
       watch: watchdog?.repos,
-      observe: (repo, events) => watchdog?.events(repo, events),
+      observe: (repo, events) => {
+        watchdog?.events(repo, events)
+        if (
+          events.some(
+            (e) =>
+              e.event === 'agent_profile' &&
+              (e.payload as { agent?: string; action?: string })?.agent ===
+                target.agent &&
+              (e.payload as { action?: string }).action === 'instructions',
+          )
+        )
+          void instructionSync?.check()
+      },
       emit: (event) => {
         broadcast(event)
         watchdog?.bridge(event)
@@ -650,7 +706,6 @@ async function main() {
   process.on('SIGWINCH', () =>
     child!.resize(process.stdout.columns || 80, process.stdout.rows || 24),
   )
-  child.onData((data) => output.push(data))
   process.stdout.on('error', failed)
   child.onExit(({ exitCode, signal }) => {
     finish(signal ? 128 + signal : exitCode, false)
