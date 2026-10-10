@@ -94,8 +94,14 @@ export function mentionPrompt(
     body,
     `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
     `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    MENTION_ETIQUETTE,
   ].join('\n')
 }
+
+/** Every @tag wakes that agent, so a courtesy tag ("@bob says 42") makes it
+ * answer again and two agents can ping-pong. The rehearsal on 10 Oct did. */
+export const MENTION_ETIQUETTE =
+  'Note:    an @tag wakes that agent. Tag only whoever must act next; name others without @. If this needs nothing from you, do not reply.'
 
 /** One short prompt per fired trigger; names the read and hand-off commands. */
 export function triggerPrompt(
