@@ -10,6 +10,13 @@ for (const [
   args = ['src/agent-instructions.test.ts'],
 ] of [
   [
+    'command-sponsor',
+    'src/instructions-command.ts',
+    (s) => s.replace('!!(opts.edit || opts.push)', 'false'),
+    /instructions command round trip/,
+    ['src/agent-profiles.test.ts', '-t', 'instructions command round trip'],
+  ],
+  [
     'heartbeat',
     'src/spawn-report.ts',
     (s) =>

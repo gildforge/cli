@@ -131,7 +131,10 @@ export class InstructionsSync {
           if (this.revision && this.revision !== remote.revision)
             this.options.enqueue(
               '[gild] your instructions changed. Re-read ' +
-                basename(instructionPath(this.options.directory, this.options.runtime)) + ' in your working directory.',
+                basename(
+                  instructionPath(this.options.directory, this.options.runtime),
+                ) +
+                ' in your working directory.',
             )
           this.revision = remote.revision
         }
