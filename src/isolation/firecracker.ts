@@ -50,19 +50,28 @@ export interface FirecrackerConfig {
 
 export const GUEST_WORK = '/workspace'
 
-export function firecrackerAvailable(
-  c: Pick<FirecrackerConfig, 'firecracker' | 'kernel' | 'rootfs'>,
-) {
+/** /dev/kvm, Firecracker and mke2fs: what this host needs besides the guest image. */
+export function firecrackerHostReady(firecracker: string) {
   try {
     accessSync('/dev/kvm', constants.R_OK | constants.W_OK)
-    accessSync(c.kernel, constants.R_OK)
-    accessSync(c.rootfs, constants.R_OK)
-    execFileSync(c.firecracker, ['--version'], { stdio: 'ignore' })
+    execFileSync(firecracker, ['--version'], { stdio: 'ignore' })
     execFileSync('mke2fs', ['-V'], { stdio: 'ignore' })
     return true
   } catch {
     return false
   }
+}
+
+export function firecrackerAvailable(
+  c: Pick<FirecrackerConfig, 'firecracker' | 'kernel' | 'rootfs'>,
+) {
+  try {
+    accessSync(c.kernel, constants.R_OK)
+    accessSync(c.rootfs, constants.R_OK)
+  } catch {
+    return false
+  }
+  return firecrackerHostReady(c.firecracker)
 }
 
 // Minimal HTTP/1.1 over the API unix socket (Bun's node:http lacks socketPath).

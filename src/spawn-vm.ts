@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
-  loadHostConfig,
+  prepareVm,
   startVm,
   vmAvailable,
   vmBackend,
@@ -74,12 +74,17 @@ export async function startVmChild(opts: {
   rows: number
   log?: (line: string) => void
 }): Promise<VmChild> {
-  const host = await loadHostConfig(opts.configDir)
+  // `gild spawn` fetched the published image already; this finds it installed.
+  const { host, vmUnavailable } = await prepareVm(opts.configDir, {
+    want: true,
+    log: opts.log,
+  })
+  if (vmUnavailable) throw new Error(vmUnavailable)
   if (!host.vm || !vmAvailable(host.vm))
     throw new Error(
       vmBackend() === 'vz'
-        ? '--vm needs a working vz setup: describe `vm` (kernel, rootfs, vz helper) in <config dir>/isolation.json (see FINDINGS.md)'
-        : '--vm needs a working Firecracker setup: describe `vm` in <config dir>/isolation.json (see FINDINGS.md) and make /dev/kvm accessible',
+        ? '--vm needs a working vz setup: the published guest image and gild-vz helper (fetched on first use), or `vm` (kernel, rootfs, vz helper) in <config dir>/isolation.json (docs/VM.md)'
+        : '--vm needs a working Firecracker setup: Firecracker on PATH (or `vm.firecracker` in <config dir>/isolation.json), mke2fs, and an accessible /dev/kvm (docs/VM.md)',
     )
   const kb = Number(
     execFileSync('du', ['-sk', opts.cwd], { encoding: 'utf8' }).split(/\s+/)[0],

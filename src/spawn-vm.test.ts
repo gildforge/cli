@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { guestEnvironment } from './spawn-vm'
 import { loadHostConfig } from './isolation'
@@ -30,6 +30,13 @@ test('spawn --vm --detach starts the VM worker (no TTY needed) and reports why a
   try {
     const config = join(home, 'config')
     await mkdir(config)
+    // The owner's own (missing) image: nothing is fetched, the worker reports why.
+    await writeFile(
+      join(config, 'isolation.json'),
+      JSON.stringify({
+        vm: { kernel: '/nope/vmlinux', rootfs: '/nope/rootfs' },
+      }),
+    )
     const command: string[] = JSON.parse(
       process.env.TEST_GILD_COMMAND ??
         JSON.stringify([process.execPath, 'run', resolve('src/gild.ts')]),

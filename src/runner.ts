@@ -13,6 +13,8 @@ import {
   describe as describeIsolation,
   assertCanIsolate,
   loadHostConfig,
+  prepareVm,
+  requestedLevel,
   parseLevel,
   resolveForHost,
   startIsolation,
@@ -574,11 +576,21 @@ export async function executeJob(
   try {
     const bootstrap = new LogBatch(config, job, 0, counter(0))
     try {
-      const hostIsolation = await loadHostConfig(root),
-        resolved = resolveForHost(hostIsolation, {
+      const request = {
           flag: parseLevel(isolationFlag, '--isolation'),
           job: parseLevel(job.isolation, 'job isolation'),
-        })
+        },
+        // Fetched at runner start; a job asking for vm on its own fetches it here.
+        { host: hostIsolation, vmUnavailable } = await prepareVm(root, {
+          want: requestedLevel(await loadHostConfig(root), request) === 'vm',
+          log: (l) => void bootstrap.line(`[gild: ${l}]`),
+        }),
+        resolved = resolveForHost(
+          hostIsolation,
+          request,
+          undefined,
+          vmUnavailable,
+        )
       await bootstrap.line(`[gild: ${describeIsolation(resolved)}]`)
       // Runner-scoped token proves only this repo's read/job access; no owner
       // API token or git credentials are available to workflow subprocesses.
@@ -1016,10 +1028,18 @@ export function runnerCommands(
       'vm, container, host or none (none = unisolated); default per isolation.json',
     )
     .action(async (opts) => {
-      assertCanIsolate(
-        await loadHostConfig(opts.configDir),
-        parseLevel(opts.isolation, '--isolation'),
-      )
+      const flag = parseLevel(opts.isolation, '--isolation')
+      // `--isolation vm` (or a vm host default): fetch the published guest
+      // image now, once; without it vm falls to the next tier and says so.
+      const { host, vmUnavailable } = await prepareVm(opts.configDir, {
+        want:
+          requestedLevel(await loadHostConfig(opts.configDir), { flag }) ===
+          'vm',
+        log: (line) => console.error(`gild: ${line}`),
+      })
+      const isolation = assertCanIsolate(host, flag, undefined, vmUnavailable)
+      if (isolation.fallback)
+        console.error(`gild: ${describeIsolation(isolation)}`)
       assertRunnerHost(opts.allowRoot)
       const configs = await listRunners(opts.configDir),
         config = opts.name

@@ -34,7 +34,9 @@ if [ ! -s "$out/rootfs.ext4" ]; then
     printf '127.0.0.1 localhost\n::1 localhost\n' > /r/etc/hosts
     printf 'nameserver 1.1.1.1\n' > /r/etc/resolv.conf
     truncate -s $size /out/rootfs.ext4.part
-    mke2fs -q -t ext4 -L gild-root -d /r -F /out/rootfs.ext4.part
+    # Fixed UUID, hash seed and filesystem timestamps (as guest-agent/image/Dockerfile).
+    E2FSPROGS_FAKE_TIME=0 mke2fs -q -t ext4 -L gild-root -U 6b1d0b9e-3f1a-4c5e-9a57-67696c64766d \\
+      -E hash_seed=6b1d0b9e-3f1a-4c5e-9a57-67696c64766d,root_owner=0:0 -d /r -F /out/rootfs.ext4.part
     mv /out/rootfs.ext4.part /out/rootfs.ext4"
   docker rm -f "$cid" >/dev/null
 fi

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `gild spawn --vm` and `gild runner start --isolation vm` work right after `npm i -g gildforge`: each release publishes the microVM guest image (Firecracker kernel and rootfs for linux-x64; vz kernel, rootfs and the signed `gild-vz` helper for darwin-arm64) with a sha256 manifest on releases.gild.gg, and the first VM use downloads and verifies it into `~/.config/gild/vm/`. A runner that cannot fetch it falls to the next isolation tier and says so (docs/VM.md).
 - `gild chat history|participants|raw` read a public channel without an identity (no `Authorization` header at all); a private channel's refusal says to run `gild auth init`. `send` still needs one (#41).
 - `gild spawn --vm --detach` runs a detached session in a microVM, so an orchestrator's children can be VM-isolated; a VM that cannot start is reported by `spawn` with its reason (#40).
 - The microVM guest agent and the CLI check each other's protocol version at boot: an outdated (or newer) guest image fails before the session starts, naming the image and the fix. `bun run vm:image` builds the guest image reproducibly from the checkout (pinned kernel, Dockerfile rootfs with the guest agent built from source, now with curl) into `~/.config/gild/vm/`, where `vm` looks when isolation.json names no kernel or rootfs (#39).
