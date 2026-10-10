@@ -5,15 +5,23 @@ export const channelCursor = z.string().regex(/^(0|[1-9][0-9]{0,14})$/)
 export const channelAuthor = z.object({ name: z.string(), kind: z.enum(['human', 'agent']) })
 export const channelMessage = z.object({
   cursor: channelCursor, id: z.string(), created_at: z.string(),
-  reply_to: channelCursor.nullable(), author: channelAuthor, kind: z.enum(['message', 'system']), body: z.string(),
+  reply_to: channelCursor.nullable(), author: channelAuthor, kind: z.enum(['message', 'system', 'note']), body: z.string(),
   link: z.object({ href: z.string(), label: z.string() }).nullable(),
 })
 export const channelPage = z.object({ messages: z.array(channelMessage), cursor: channelCursor, before: channelCursor.nullable(), after: channelCursor.nullable() })
-export const channelQuery = z.object({ before: channelCursor.optional(), after: channelCursor.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).refine(q => !(q.before && q.after), 'Use before or after, not both')
-export const channelInput = z.object({ body: z.string().trim().min(1).max(4000), reply_to: channelCursor.optional() })
+export const channelName = z.string().min(1).max(255).refine(n => !n.startsWith('/') && !n.endsWith('/') && !n.includes('..') && !/[\s~^:?*\[\]\\\x00-\x1f]/.test(n) && n.split('/').every(p => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock')), 'Invalid channel name')
+export const channelSelection = z.object({ channel: channelName.optional() })
+export const channelQuery = channelSelection.extend({ before: channelCursor.optional(), after: channelCursor.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).refine(q => !(q.before && q.after), 'Use before or after, not both')
+export const channelInput = z.object({ body: z.string().trim().min(1).max(4000), reply_to: channelCursor.optional(), kind: z.enum(['message','note']).optional() })
 export const channelParticipant = channelAuthor.extend({ prefix: z.enum(['@', '%', '+', '']), sponsor: z.string().nullable(), scopes: z.array(z.string()), online: z.boolean(), state: channelState.nullable().optional() })
 export const channelParticipants = z.object({ participants: z.array(channelParticipant), can_post: z.boolean(), viewer: z.string().nullable() })
+export const channelSummary = z.object({ name: z.string(), archived: z.boolean(), unread: z.number().int().nonnegative(), members: z.array(channelParticipant) })
+export const channelList = z.object({ channels: z.array(channelSummary) })
+export type ChannelSummary = z.output<typeof channelSummary>
 export type ChannelMessage = z.output<typeof channelMessage>
 export type ChannelParticipant = z.output<typeof channelParticipant>
 export type ChannelPage = z.output<typeof channelPage>
 export type ChannelQuery = z.output<typeof channelQuery>
+
+export type ChannelPeople = z.output<typeof channelParticipants>
+export interface ChannelInitial extends ChannelPeople { page: ChannelPage; viewer_resolved: boolean; selected_channel?: string; channels?: ChannelSummary[]; archived?: boolean }

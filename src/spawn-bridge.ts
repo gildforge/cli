@@ -51,6 +51,7 @@ export type BridgeEvent =
     }
 
 const mention = z.object({
+  channel: z.string().optional(),
   repository: z.object({ full_name: z.string() }),
   message: z.object({
     cursor: z.string(),
@@ -89,11 +90,14 @@ export function mentionPrompt(
   gild = 'gild',
 ) {
   const { cursor, body, author } = m.message
+  const channel = m.channel ?? repo.split('/')[1],
+    selection = ` --channel ${channel}`
   return [
-    `[gild] @${author.name} mentioned you in ${repo} (message ${cursor}):`,
+    `[gild] @${author.name} mentioned you in ${repo} #${channel} (message ${cursor}):`,
     body,
-    `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
-    `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    `Context: ${gild} chat history ${repo}${selection} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
+    `Reply:   ${gild} chat send ${repo}${selection} --agent ${label} --reply-to ${cursor} "<your reply>"`,
+    `Work notes: ${gild} chat note ${repo}${selection} --agent ${label} "<progress, decisions, blockers or tests>" (never notifies).`,
     MENTION_ETIQUETTE,
   ].join('\n')
 }

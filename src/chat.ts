@@ -1,10 +1,11 @@
+import { chatTUI } from './chat-tui'
 import { Command, InvalidArgumentError } from 'commander'
 import { ApiRequestError, GildClient } from './api/client'
 import { routes } from './api/contract'
 import { channelCursor, type ChannelMessage } from './api/channel-contract'
 import { tailEvents, waitForEvents } from './events-tail'
 
-type ClientOptions = { agent?: string; server?: string }
+type ClientOptions = { agent?: string; server?: string; channel?: string }
 /** `read` asks for a reader: with no identity it is anonymous (public
  *  channels accept anonymous readers, docs/channel/API.md). */
 type Resolve = (opts: ClientOptions, read?: boolean) => Promise<GildClient>
@@ -59,6 +60,7 @@ export async function rawChannel(
   output: (line: string) => void,
   error: (line: string) => void,
   pause: typeof waitForEvents = waitForEvents,
+  channel?: string,
 ) {
   const route = routes.find((r) => r.id === 'channelStream')!
   let after = since,
@@ -70,6 +72,7 @@ export async function rawChannel(
           .replace('{owner}', encodeURIComponent(repo.owner))
           .replace('{repo}', encodeURIComponent(repo.repo)),
     )
+    if (channel) url.searchParams.set('channel', channel)
     if (after) url.searchParams.set('after', after)
     await new Promise<void>((resolve) => {
       // Bun accepts request headers here, which keeps the token out of the URL.
@@ -139,11 +142,51 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     )
   const common = (command: Command) =>
     command
+      .option(
+        '--channel <branch>',
+        'select a branch channel (default: repository)',
+      )
       .option('--agent <label>', 'use an approved agent token')
       .option(
         '--server <url>',
         'forge base URL (defaults to the joined server for agents)',
       )
+  common(chat.argument('[repo]', 'owner/repo')).action(
+    async (target: string | undefined, opts: ClientOptions) => {
+      if (!target) return chat.help()
+      await chatTUI(await resolve(opts, true), repoPair(target), opts.channel)
+    },
+  )
+  common(
+    chat
+      .command('channels <repo>')
+      .description('list buffers, unread counts and members')
+      .option('--json', 'print JSON'),
+  ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
+    const d = await (
+      await resolve(opts, true)
+    ).request('channelList', repoPair(target))
+    if (opts.json) return console.log(JSON.stringify(d))
+    for (const c of d.channels)
+      console.log(
+        `#${c.name}\t${c.archived ? 'archived' : 'active'}\t${c.unread} unread\t${c.members.map((m) => m.prefix + m.name).join(', ')}`,
+      )
+  })
+  common(
+    chat
+      .command('note <repo> <message>')
+      .description('post progress or context without notifying anyone'),
+  ).action(async (target: string, message: string, opts: ClientOptions) => {
+    const posted = await (
+      await resolve(opts)
+    ).request(
+      'channelPost',
+      repoPair(target),
+      { body: message, kind: 'note' },
+      { channel: opts.channel },
+    )
+    console.log(posted.cursor)
+  })
   common(
     chat
       .command('history <repo>')
@@ -168,6 +211,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       const page = await (
         await resolve(opts, true)
       ).request('channelMessages', params, undefined, {
+        channel: opts.channel,
         limit: opts.limit,
         before: opts.before,
         after: opts.after,
@@ -198,10 +242,15 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       }
       const posted = await (
         await resolve(opts)
-      ).request('channelPost', repoPair(target), {
-        body: message,
-        reply_to: opts.replyTo,
-      })
+      ).request(
+        'channelPost',
+        repoPair(target),
+        {
+          body: message,
+          reply_to: opts.replyTo,
+        },
+        { channel: opts.channel },
+      )
       console.log(posted.cursor)
     },
   )
@@ -213,7 +262,9 @@ An agent posts like a person; @name in the body wakes that agent's bridge
   ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
     const result = await (
       await resolve(opts, true)
-    ).request('channelParticipants', repoPair(target))
+    ).request('channelParticipants', repoPair(target), undefined, {
+      channel: opts.channel,
+    })
     if (opts.json) return console.log(JSON.stringify(result))
     for (const p of result.participants)
       console.log(
@@ -243,8 +294,15 @@ An agent posts like a person; @name in the body wakes that agent's bridge
     const out = (line: string) => console.log(line)
     try {
       await Promise.all([
-        rawChannel(client, params, opts.since, controller.signal, out, (l) =>
-          console.error(l),
+        rawChannel(
+          client,
+          params,
+          opts.since,
+          controller.signal,
+          out,
+          (l) => console.error(l),
+          undefined,
+          opts.channel,
         ),
         opts.agent
           ? mentionEvents(client, target, controller.signal, out)

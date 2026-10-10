@@ -187,10 +187,11 @@ test('prompt is short, names the history and reply commands', () => {
     agent: 'owner/bob',
   })
   expect(text.split('\n')).toEqual([
-    '[gild] @alice/ava mentioned you in owner/demo (message 41):',
+    '[gild] @alice/ava mentioned you in owner/demo #demo (message 41):',
     'hi',
-    'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
-    'Reply:   gild chat send owner/demo --agent bob --reply-to 41 "<your reply>"',
+    'Context: gild chat history owner/demo --channel demo --agent bob --before 42 --limit 30',
+    'Reply:   gild chat send owner/demo --channel demo --agent bob --reply-to 41 "<your reply>"',
+    'Work notes: gild chat note owner/demo --channel demo --agent bob "<progress, decisions, blockers or tests>" (never notifies).',
     MENTION_ETIQUETTE,
   ])
   // Without the note, agents tag each other as a courtesy and wake each other
@@ -210,7 +211,7 @@ test('prompt names the gild that spawned the session, not whatever is on PATH', 
     "'/opt/gild bin/gild'",
   )
   expect(text).toContain(
-    "Context: '/opt/gild bin/gild' chat history owner/demo --agent bob",
+    "Context: '/opt/gild bin/gild' chat history owner/demo --channel demo --agent bob",
   )
   expect(text).toContain("Reply:   '/opt/gild bin/gild' chat send owner/demo")
 })

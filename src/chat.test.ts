@@ -8,7 +8,7 @@ type Message = {
   created_at: string
   reply_to: string | null
   author: { name: string; kind: 'human' | 'agent' }
-  kind: 'message'
+  kind: 'message' | 'note'
   body: string
   link: null
 }
@@ -51,6 +51,14 @@ function forge(tokens: string[], anonymousRead = false) {
       })
         ? undefined
         : new Response('upgrade required', { status: 426 })
+    if (url.pathname === '/api/v1/repos/owner/demo/channels')
+      return Response.json({
+        channels: [
+          { name: 'demo', archived: false, unread: 0, members: [] },
+          { name: 'bob/topic', archived: false, unread: 3, members: [] },
+          { name: 'old', archived: true, unread: 0, members: [] },
+        ],
+      })
     if (url.pathname === '/api/v1/repos/owner/demo/channel/participants')
       return Response.json({
         participants: [
@@ -78,14 +86,21 @@ function forge(tokens: string[], anonymousRead = false) {
     if (url.pathname !== '/api/v1/repos/owner/demo/channel/messages')
       return Response.json({ message: 'nope' }, { status: 404 })
     if (request.method === 'POST') {
-      const body = (await request.json()) as { body: string; reply_to?: string }
+      const body = (await request.json()) as {
+        body: string
+        reply_to?: string
+        kind?: 'message' | 'note'
+      }
       seen.at(-1)!.body = body
       const agent = auth === 'Bearer gf_agentfixture'
       // gild-site#55: agents post unprompted; @name in the body wakes them.
-      return Response.json(
-        post(agent ? 'alice/test' : 'sami', body.body, body.reply_to ?? null),
-        { status: 201 },
+      const message = post(
+        agent ? 'alice/test' : 'sami',
+        body.body,
+        body.reply_to ?? null,
       )
+      message.kind = body.kind ?? 'message'
+      return Response.json(message, { status: 201 })
     }
     const limit = Number(url.searchParams.get('limit') ?? 50)
     const before = url.searchParams.get('before'),
@@ -459,6 +474,74 @@ test('history, participants and raw read a public channel with no identity; send
     expect(priv.code).toBe(1)
     expect(priv.err).toContain('Bad credentials')
     expect(priv.err).toContain('gild auth init')
+  } finally {
+    await s.close()
+  }
+}, 30000)
+
+test('branch selectors reach every chat endpoint; notes and channel listing use their contract', async () => {
+  const s = await setup()
+  try {
+    for (const args of [
+      ['history', 'owner/demo'],
+      ['participants', 'owner/demo'],
+      ['send', 'owner/demo', 'context'],
+      ['note', 'owner/demo', '@bob tests passed'],
+    ]) {
+      const run = await cli(s.root, [
+        'chat',
+        ...args,
+        '--channel',
+        'bob/topic',
+        '--agent',
+        'test',
+      ])
+      expect(run.code).toBe(0)
+      expect(s.seen.at(-1)!.path).toContain('channel=bob%2Ftopic')
+    }
+    expect(s.log.at(-1)!.kind).toBe('note')
+    expect(s.seen.at(-1)!.body).toMatchObject({
+      kind: 'note',
+      body: '@bob tests passed',
+    })
+    const buffers = await cli(s.root, [
+      'chat',
+      'channels',
+      'owner/demo',
+      '--agent',
+      'test',
+      '--json',
+    ])
+    expect(buffers.code).toBe(0)
+    expect(
+      JSON.parse(buffers.out).channels.map((c: any) => [
+        c.name,
+        c.archived,
+        c.unread,
+      ]),
+    ).toEqual([
+      ['demo', false, 0],
+      ['bob/topic', false, 3],
+      ['old', true, 0],
+    ])
+    const raw = startCLI(s.root, [
+      'chat',
+      'raw',
+      'owner/demo',
+      '--channel',
+      'bob/topic',
+      '--server',
+      s.origin,
+    ])
+    await lines(raw, 1)
+    expect(
+      s.seen.find(
+        (r) =>
+          r.path.includes('/stream') && r.path.includes('channel=bob%2Ftopic'),
+      ),
+    ).toBeDefined()
+    raw.kill('SIGINT')
+    await raw.exited
   } finally {
     await s.close()
   }
