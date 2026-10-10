@@ -1,10 +1,48 @@
 # microVM guest image
 
-`gild spawn --vm` and `gild runner start --isolation vm` boot a Firecracker
-microVM from two files: a kernel and a read-only ext4 root filesystem holding
-`gild-guest-agent` and `/init-gild.sh`. Both come out of this repository.
+`gild spawn --vm` and `gild runner start --isolation vm` boot a microVM
+(Firecracker on Linux, Virtualization.framework on macOS) from a kernel and a
+read-only ext4 root filesystem holding `gild-guest-agent` and `/init-gild.sh`.
+All of it comes out of this repository.
 
-## Build it
+## Published images (nothing to build)
+
+Every release publishes the guest image for each VM platform next to the CLI
+binaries, built by `.github/workflows/release.yml` on GitHub's hosted runners:
+
+| platform | files | built on |
+|---|---|---|
+| `linux-x64` (Firecracker) | `vmlinux`, `rootfs.ext4` | `ubuntu-latest`: `bun scripts/vm-release.ts build linux-x64` (the recipe below) |
+| `darwin-arm64` (vz) | `Image`, `rootfs.ext4`, `gild-vz` | `ubuntu-24.04-arm`: `scripts/build-vm-guest.sh`; `macos-15`: `scripts/build-vz-helper.sh` (ad hoc signed) |
+
+```
+releases.gild.gg/cli/v<version>/vm/manifest.json         version, guest protocol, commit, sha256 of every file
+releases.gild.gg/cli/v<version>/vm/<platform>/<name>.gz
+```
+
+On first VM use (`--vm`, `--isolation vm`, a job or host default asking for
+`vm`) gild downloads the image for its own version and platform into
+`~/.config/gild/vm/`, showing progress. It refuses a manifest for another gild
+version or guest protocol, and any file whose sha256 (gzipped or unpacked) is
+not the manifest's; nothing is replaced until every file checks out, and
+`vm/image.json` records what was installed. Later runs use it offline. At
+boot the guest agent handshake below checks the protocol again.
+
+When the image cannot be fetched (offline, no image for this version or
+platform), `gild spawn --vm` fails with the reason, since it never runs an
+agent on the host; `gild runner` falls to the next tier the floor allows
+(`container`, then `host`, never `none`) and says so in its log line:
+
+```
+isolation: container (oci), requested by flag (vm image unavailable, fell back to container: could not fetch …)
+```
+
+Nothing is downloaded when isolation.json points `vm` at your own kernel and
+rootfs, when `vm/image.json` is a local build (`bun run vm:image`), or when
+the host cannot run the backend anyway (no Firecracker, `/dev/kvm` or
+`mke2fs`; a Mac without a hypervisor). Firecracker itself is not shipped.
+
+## Build it yourself
 
 On an x86_64 Linux host with `/dev/kvm`, Firecracker, `mke2fs` and Docker
 (BuildKit), from a checkout of the gild version you run:

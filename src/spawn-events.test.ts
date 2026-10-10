@@ -237,6 +237,29 @@ test('input tracker handles split bracketed pastes, Escape, controls, cursor key
   expect(input.feed('\r')).toBe(true)
   expect(input.unsent).toBe(false)
 })
+test('a user Enter marks busy only when the agent cannot report prompts itself', async () => {
+  for (const userEnterIsPrompt of [true, false]) {
+    let busy = 0
+    const queue = new InjectionQueue(() => {}, 0, () => true, true, () => busy++, userEnterIsPrompt)
+    try {
+      queue.userInput(Buffer.from('\r')) // e.g. answering Claude's trust dialog
+      expect(busy).toBe(userEnterIsPrompt ? 1 : 0)
+    } finally {
+      queue.close()
+    }
+  }
+})
+test('mouse reports and other full-grammar CSI sequences are not typing', () => {
+  const input = new InputLine()
+  // SGR mouse press and release (a click), a bracketed focus-in, and a CSI
+  // with an intermediate byte, split across reads.
+  input.feed('\x1b[<0;12;5M\x1b[<0;12;5m')
+  input.feed('\x1b[<')
+  input.feed('64;3;9M\x1b[I\x1b[1 q')
+  expect(input.unsent).toBe(false)
+  input.feed('x')
+  expect(input.unsent).toBe(true)
+})
 test('terminal replies to agent queries are not typing', () => {
   const input = new InputLine()
   // OSC 11 background colour (BEL and ST forms, split across reads), DCS
