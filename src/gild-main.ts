@@ -435,8 +435,10 @@ repoCmd
           {},
           { name, description: opts.description, private: !!opts.private },
         )
-    console.log(chalk.green(`created ${data.full_name}`))
-    console.log(`  clone: gild clone ${data.full_name}`)
+    // Nothing is written locally: say where the repo lives and how to get a copy.
+    console.log(chalk.green(`created ${data.full_name} on ${new URL(opts.server).host}`))
+    console.log(`  ${new URL(`/${data.full_name}`, opts.server).href}`)
+    console.log(`  to work on it locally: gild clone ${data.full_name}`)
   })
 
 async function repositoryClient(opts: { repo?: string; server: string }) {
