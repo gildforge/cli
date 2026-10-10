@@ -344,6 +344,42 @@ test('state reporting coalesces, uses scoped token, hides raw/text/arguments and
   expect(JSON.stringify(calls)).not.toContain('private prompt')
   expect(JSON.stringify(calls)).not.toContain('secret')
 })
+test('a slow forge still receives the state report (live gild.gg took 2–4.5 s)', async () => {
+  let delivered = false,
+    aborted = false
+  const reporter = new StateReporter(
+    {
+      server: 'https://gild.test',
+      token: 'fixture-scoped-token',
+      agent: 'owner/label',
+      owner: 'owner',
+      repo: 'demo',
+      sha: 'a'.repeat(40),
+    },
+    'codex',
+    (_input, init) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          delivered = true
+          resolve(Response.json({}))
+        }, 2500)
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          clearTimeout(timer)
+          reject(init.signal!.reason)
+        })
+      }),
+  )
+  reporter.event({
+    session: 'test',
+    agent: 'codex',
+    type: 'idle',
+    ts: new Date().toISOString(),
+    raw: {},
+  })
+  await pause(3000)
+  expect({ delivered, aborted }).toEqual({ delivered: true, aborted: false })
+}, 10000)
 test('PTY events, hook command, status, subscription, gating and settings cleanup work together', async () => {
   const proc = Bun.spawn(
     ['python3', resolve('scripts/fixtures/events-harness.py')],
