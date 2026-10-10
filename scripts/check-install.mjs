@@ -20,6 +20,7 @@ for (const dir of ['home', 'prefix', 'graph', 'cache'])
 const env = {
   ...process.env,
   HOME: join(dest, 'home'),
+  TMPDIR: join(root, '.tmp'),
   npm_config_cache: join(dest, 'cache'),
   npm_config_userconfig: join(dest, 'user.npmrc'),
   npm_config_globalconfig: join(dest, 'global.npmrc'),

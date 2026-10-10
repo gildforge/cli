@@ -20,6 +20,13 @@ export const runNpm = (args, options = {}) =>
     cwd: root,
     encoding: 'utf8',
     timeout: 180000,
+    env: {
+      ...process.env,
+      TMPDIR: join(root, '.tmp'),
+      npm_config_cache: join(root, '.tmp', 'npm-cache'),
+      npm_config_userconfig: join(root, '.tmp', 'pack-user.npmrc'),
+      npm_config_globalconfig: join(root, '.tmp', 'pack-global.npmrc'),
+    },
     ...options,
   })
 export function noInstallScripts(pkg, label) {
