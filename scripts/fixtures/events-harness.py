@@ -22,6 +22,13 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         class API(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
             def address_string(self):return self.client_address[0]
+            def do_GET(self):
+                if self.path.endswith('/instructions'):
+                    body={'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}
+                    self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(body).encode())
+                elif self.path.startswith('/api/v1/events'):
+                    time.sleep(.5);self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"events":[],"cursor":"0"}')
+                else:self.send_response(404);self.end_headers()
             def do_POST(self):
                 assert self.headers.get('Authorization')=='Bearer fixture-scoped-token'
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))

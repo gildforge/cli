@@ -11,6 +11,10 @@ export type ChannelStatus = {
   error?: string
 }
 export type LocalSession = SessionState & {
+  environment?: import('zod').z.output<
+    typeof import('./api/agent-profile-contract').runtimeReport
+  >
+  instructions?: import('./agent-instructions').InstructionStatus
   id: string
   agent: string
   profile?: string

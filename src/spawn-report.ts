@@ -1,3 +1,6 @@
+import { redactSession } from './session-redaction'
+import type { z } from 'zod'
+import type { runtimeReport } from './api/agent-profile-contract'
 import { randomUUID } from 'node:crypto'
 import { GildClient } from './api/client'
 import type { AgentEvent } from './spawn-events'
@@ -24,6 +27,7 @@ export class StateReporter {
     private readonly target: ReportTarget,
     private readonly model: string,
     fetcher?: ConstructorParameters<typeof GildClient>[2],
+    private readonly environment?: z.output<typeof runtimeReport>,
   ) {
     this.client = new GildClient(
       target.server + '/api/v1',
@@ -65,8 +69,14 @@ export class StateReporter {
           repo: this.target.repo,
           sha: this.target.sha,
         },
-        {
+        redactSession({
           id: this.id,
+          ...(this.environment
+            ? {
+                environment: this.environment,
+                runtime: this.environment.runtime,
+              }
+            : {}),
           agent: this.target.agent,
           started_at: this.started,
           ended_at: state.status === 'ended' ? state.last_activity : null,
@@ -78,7 +88,7 @@ export class StateReporter {
           commands: [],
           files: { read: [], written: [] },
           notes: '',
-        },
+        }),
         undefined,
         { signal: AbortSignal.timeout(1000) },
       )

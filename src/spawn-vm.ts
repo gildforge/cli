@@ -3,6 +3,7 @@
 // and everything else (spawn-worker.ts). This file only builds the guest
 // child and the hook relay.
 import { createConnection } from 'node:net'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
@@ -21,6 +22,8 @@ import {
   syncBack,
   type SyncResult,
 } from './isolation/sync'
+import { instructionPath } from './agent-instructions'
+import { redact } from './session-redaction'
 
 export const GUEST_AGENT = '/usr/local/bin/gild-guest-agent'
 const GUEST_PATH =
@@ -28,6 +31,8 @@ const GUEST_PATH =
 const MAX_UPLOAD = 1 << 20
 
 export interface VmChild {
+  runtimeVersion?: string
+  updateInstructions(text: string): Promise<string | void>
   pid: number
   write(data: string | Uint8Array): void
   resize(cols: number, rows: number): void
@@ -154,6 +159,28 @@ export async function startVmChild(opts: {
       basename(opts.binary)
     const args: string[] = []
     for (const a of opts.args) args.push((await upload(a, false)) ?? a)
+    let runtimeVersion: string | undefined
+    if (['claude', 'codex'].includes(basename(opts.binary))) {
+      const lines: string[] = []
+      try {
+        const code = await iso.exec([program, '--version'], {
+          cwd: '/workspace',
+          env: opts.env,
+          timeoutMs: 2000,
+          signal: AbortSignal.timeout(3000),
+          onLine: async (line) => {
+            if (lines.length < 1) lines.push(line.slice(0, 120))
+          },
+        })
+        if (code === 0 && lines.length) runtimeVersion = redact(lines[0]!, 120)
+      } catch {}
+    }
+    const instructionFile = ['claude', 'codex'].includes(basename(opts.binary))
+      ? basename(instructionPath(opts.cwd, opts.binary))
+      : undefined
+    let instructionHash = instructionFile
+      ? baseline.get(instructionFile)?.h
+      : undefined
     const pty = await iso.pty!({
       argv: [program, ...args],
       env: opts.env,
@@ -186,6 +213,22 @@ export async function startVmChild(opts: {
     }
     let disposed: Promise<SyncResult | undefined> | undefined
     return {
+      runtimeVersion,
+      async updateInstructions(text) {
+        if (!instructionFile || !iso.files) return
+        const entry = (await iso.files.list('/workspace')).find(
+          (e) => e.p === instructionFile,
+        )
+        const next = createHash('sha256').update(text).digest('hex')
+        if (
+          entry &&
+          (entry.k !== 'f' || (entry.h !== instructionHash && entry.h !== next))
+        )
+          return `Kept locally edited guest ${instructionFile}; synchronize the VM before pulling instructions`
+        if (entry?.h !== next)
+          await iso.put(`/workspace/${instructionFile}`, text, 0o600)
+        instructionHash = next
+      },
       pid: -1,
       write: (d) => pty.write(d),
       resize: (c, r) => pty.resize(c, r),

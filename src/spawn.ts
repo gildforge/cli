@@ -1,3 +1,6 @@
+import { pullInstructions } from './agent-instructions'
+import { GildClient } from './api/client'
+import { describeRuntime } from './runtime-report'
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
@@ -136,6 +139,44 @@ export function spawnCommands(
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
         const binary = realAgent(agent, cwd)
+        let identity:
+          Awaited<ReturnType<NonNullable<typeof resolveIdentity>>> | undefined
+        if (label && resolveIdentity) {
+          try {
+            identity = await resolveIdentity(label, cwd, !!profile)
+          } catch (e) {
+            if (
+              !profile ||
+              opts.detach ||
+              (process.stdin.isTTY && process.stdout.isTTY)
+            )
+              throw e
+          }
+        }
+        if (
+          profile &&
+          identity?.report &&
+          ['claude', 'codex'].includes(agent.split('/').at(-1)!)
+        ) {
+          const target = {
+            owner: identity.report.owner,
+            repo: identity.report.repo,
+            sponsor: identity.agent.split('/')[0],
+            label: identity.agent.split('/')[1],
+          }
+          const client = new GildClient(
+            identity.report.server + '/api/v1',
+            identity.report.token,
+          )
+          const remote = await client.request('agentInstructions', target)
+          const status = await pullInstructions(
+            cwd,
+            agent,
+            JSON.stringify(target),
+            remote,
+          )
+          if (status.warning) console.error('gild: ' + status.warning)
+        }
         if (opts.detach && !supportsPty())
           throw Error(
             'Detached sessions need a PTY, unavailable on this platform',
@@ -173,10 +214,11 @@ export function spawnCommands(
           )
           return
         }
-        const identity =
-          label && resolveIdentity
-            ? await resolveIdentity(label, cwd, !!profile)
-            : undefined
+        const environment = await describeRuntime(
+          binary,
+          profile ?? {},
+          !!opts.vm,
+        )
         const report = identity?.report
         const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
         const rules = nudges.map(parseNudge)
@@ -193,7 +235,9 @@ export function spawnCommands(
             'mention-unanswered nudges need an agent profile with --channel and an approved identity',
           )
         const bridge =
-          profile?.channels?.length || rules.some((r) => r.kind === 'ci')
+          (profile && identity?.report) ||
+          profile?.channels?.length ||
+          rules.some((r) => r.kind === 'ci')
             ? identity?.bridge
             : undefined
         const id =
@@ -218,6 +262,16 @@ export function spawnCommands(
             await workerFile(),
             JSON.stringify({
               agent,
+              environment,
+              instructionTarget:
+                profile && report
+                  ? {
+                      owner: report.owner,
+                      repo: report.repo,
+                      sponsor: identity!.agent.split('/')[0],
+                      label: identity!.agent.split('/')[1],
+                    }
+                  : undefined,
               args,
               id,
               idleMs: opts.idleMs,

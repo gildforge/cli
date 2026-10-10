@@ -44,6 +44,7 @@ jobs:
       # The safe-alias test drives a real zsh alias (the shell users alias gild in).
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
       - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run test:instructions:revert
       - run: bun test --timeout 30000
       - run: npm install -g npm@11.16.0
       - run: bun run pack
