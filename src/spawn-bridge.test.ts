@@ -131,6 +131,7 @@ async function bridge(
   pages: (() => unknown)[],
   file?: string,
   triggers: string[] = [],
+  backlog: unknown[] = [],
 ) {
   await mkdir('.tmp', { recursive: true })
   file ??= join(await mkdtemp(resolve('.tmp/br-')), 'bob.mentions.json')
@@ -148,6 +149,7 @@ async function bridge(
         _b: unknown,
         query: { since?: string },
       ) => {
+        if (_op === 'issues') return backlog
         sinces.push(query.since)
         const page = pages[Math.min(index++, pages.length - 1)]()
         if (index >= pages.length + 1) controller.abort()
@@ -358,7 +360,7 @@ test('a matching labeled issue is queued once; other labels and duplicates are n
   await run.b.flush()
   expect(JSON.parse(await readFile(run.file, 'utf8'))).toEqual({
     cursors: { 'owner/demo': '3' },
-    delivered: ['trigger:evt2'],
+    delivered: ['trigger:owner/demo#12:issues.labeled:triage'],
   })
 })
 
@@ -402,7 +404,7 @@ test('a restart skips delivered trigger ids and resumes from the cursor', async 
     file,
     JSON.stringify({
       cursors: { 'owner/demo': '7' },
-      delivered: ['trigger:evt2'],
+      delivered: ['trigger:owner/demo#12:issues.labeled:triage'],
     }),
   )
   const run = await bridge(
@@ -426,6 +428,39 @@ test('a restart skips delivered trigger ids and resumes from the cursor', async 
   await run.b.flush()
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
     cursors: { 'owner/demo': '8' },
-    delivered: ['trigger:evt2', 'trigger:evt8'],
+    delivered: ['trigger:owner/demo#12:issues.labeled:triage', 'trigger:owner/demo#13:issues.labeled:triage'],
   })
+})
+
+test('a labeled trigger also fires for an issue opened with the label, once', async () => {
+  const run = await bridge(
+    [
+      () => ({
+        events: [
+          issueEvent(1, { action: 'opened', labels: ['triage'], label: undefined }),
+          issueEvent(2, { label: 'triage' }), // the same issue labeled too
+          issueEvent(3, { action: 'opened', number: 13, labels: ['other'] }),
+        ],
+        cursor: '3',
+      }),
+      () => ({ events: [], cursor: '3' }),
+    ],
+    undefined,
+    ['issues.labeled:triage'],
+  )
+  await run.done
+  expect(run.prompts).toHaveLength(1)
+  expect(run.prompts[0]).toContain('issue #12')
+})
+
+test('open issues already carrying the label are picked up on start', async () => {
+  const run = await bridge(
+    [() => ({ events: [], cursor: '1' })],
+    undefined,
+    ['issues.labeled:triage'],
+    [{ number: 7, title: 'Backlog task', labels: [{ name: 'triage' }], user: { login: 'sami' } }],
+  )
+  await run.done
+  expect(run.prompts).toHaveLength(1)
+  expect(run.prompts[0]).toContain('issue #7 "Backlog task"')
 })
