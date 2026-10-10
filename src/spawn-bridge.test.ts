@@ -178,7 +178,9 @@ test('prompt is short, names the history and reply commands', () => {
     },
     agent: 'owner/bob',
   })
-  expect(text.split('\n')).toEqual([
+  expect(text).toContain('clone owner/demo --agent')
+  expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
+  expect(text.split('\n').slice(0, -1)).toEqual([
     '[gild] @alice/ava mentioned you in owner/demo (message 41):',
     'hi',
     'Context: gild chat history owner/demo --agent bob --before 42 --limit 30',
@@ -278,9 +280,11 @@ test('trigger prompt is short, names the read and hand-off commands', () => {
     'gild',
     'alice',
   )
-  expect(text.split('\n')).toEqual([
+  expect(text).toContain('clone owner/demo --agent')
+  expect(text).toContain('pr create|list|view|diff|checks|comment|review|merge')
+  expect(text.split('\n').slice(0, -1)).toEqual([
     '[gild] issue #12 "Triage me" labeled triage in owner/demo by sami',
-    'Read:  gild issue view owner/demo#12',
+    'Read:  gild issue view owner/demo#12 --agent alice',
     'Post:  gild chat send owner/demo --agent alice "@<agent> <message>"',
   ])
   const pr = triggerPrompt(
@@ -295,7 +299,9 @@ test('trigger prompt is short, names the read and hand-off commands', () => {
   expect(pr).toContain(
     '[gild] pull request #4 "Add thing" opened in owner/demo by sami',
   )
-  expect(pr).toContain("Read:  '/opt/gild bin/gild' issue view owner/demo#4")
+  expect(pr).toContain(
+    "Read:  '/opt/gild bin/gild' pr view owner/demo#4 --agent alice",
+  )
 })
 
 test('a matching labeled issue is queued once; other labels and duplicates are not', async () => {
