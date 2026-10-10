@@ -189,13 +189,17 @@ export function spawnCommands(
           opts.name ??
           `agent-${randomBytes(3).toString('hex')}`
         socketPath(id)
-        const resolveFrom = [
-          ...(!import.meta.url.includes('$bunfs') &&
-          import.meta.url.startsWith('file:')
-            ? [new URL(import.meta.url).pathname]
-            : []),
-          join(dirname(process.execPath), 'gild.js'),
-        ]
+        const ptyModule = import.meta.url.includes('$bunfs')
+          ? join(
+              dirname(process.execPath),
+              '..',
+              'vendor',
+              'node-pty',
+              'lib',
+              'index.js',
+            )
+          : new URL('../node_modules/node-pty/lib/index.js', import.meta.url)
+              .pathname
         const worker = spawn(
           'node',
           [
@@ -205,7 +209,7 @@ export function spawnCommands(
               args,
               id,
               idleMs: opts.idleMs,
-              resolveFrom,
+              ptyModule,
               vm: opts.vm ? { configDir: opts.configDir } : undefined,
               // Inside the guest the hook is the guest agent, which relays over vsock.
               hookCommand: opts.vm

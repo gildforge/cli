@@ -23,16 +23,21 @@ On macOS x64, `node-pty` 1.1.0's prebuilt `spawn-helper` lacked its executable
 bit. After correcting that, `/bin/echo pty-ok` through node-pty worked under
 Node 26.3.1 but hung in Bun's PTY read path. The hanging probe was stopped by its
 own process/session, without affecting other agents. Production uses Node for
-PTY ownership and embeds its bundled companion with a Bun macro. Optional
-`node-pty` is resolved by Node relative to the source/install/executable, not
+PTY ownership and embeds its bundled companion with a Bun macro.
+`node-pty` is loaded by Node from the installed platform package (vendored at
+pack time from the hash-pinned npm tarball), or the development dependency, not
 Bun's virtual compiled filesystem. The npm launcher forwards signals and uses
 an IPC lifetime link so killing any launcher layer hangs up the PTY owner.
 
-All three existing platform binaries build (macOS arm64/x64 and Linux x64).
-The macOS x64 binary and copied npm package layout run the integration suite.
-Linux execution and arm64 execution are not local evidence from this Intel
-Mac; CI now repeats the PTY suite through its Linux npm layout. Linux's native
-addon needs the upstream build tools because 1.1.0 has no Linux prebuild.
+All three npm platform packages ship the loader and native prebuild from
+`node-pty@1.2.0-beta.15`. Stable 1.1.0 has no Linux prebuild; the pinned beta
+includes Linux x64. Linux does not require a spawn-helper; macOS ships it with
+its executable bit set and retains the runtime chmod fix. `scripts/node-pty.json`
+records the npm tarball integrity, SHA-256, and each shipped file's SHA-256.
+`bun run test:install` checks the actual npm pack files, all-platform published
+dependency graph, fresh global npm install output, and detached spawn/send/status/
+stop. `bun run test:installed-pty` runs the CI PTY suite (including attach) through
+that install with an empty HOME. CI runs these checks on all three platforms.
 When Node, node-pty, or PTY creation is unavailable, `spawn` silently launches
 the original agent with inherited stdio and its exit status. Windows and
 pipes/redirects also take this native path, without hooks, injection or a socket.

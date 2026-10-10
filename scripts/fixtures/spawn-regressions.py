@@ -27,12 +27,12 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp', prefix='r-') as d:
     cmd=CLI+['spawn',str(native)]+args
     if CASE=='no-node':env['PATH']=str(root)
     if CASE in ('no-addon','pty-failure','windows'):
-        options={'agent':str(native),'args':args,'id':'test','idleMs':50,'resolveFrom':[],'hookCommand':CLI}
+        options={'agent':str(native),'args':args,'id':'test','idleMs':50,'ptyModule':'','hookCommand':CLI}
         if CASE=='pty-failure':
             module=root/'node_modules/node-pty';module.mkdir(parents=True)
             (module/'package.json').write_text('{"main":"index.js"}')
             (module/'index.js').write_text('exports.spawn = () => { throw new Error("fixture PTY creation failure") }')
-            options['resolveFrom']=[str(root/'entry.js')]
+            options['ptyModule']=str(module/'index.js')
         if CASE=='windows':
             options['agent']='claude'
             env['PATH']=str(root)+os.pathsep+os.environ['PATH']

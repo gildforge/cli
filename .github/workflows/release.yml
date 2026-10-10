@@ -21,8 +21,9 @@ jobs:
         with:
           node-version: '24'
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run pack
+      - run: bun run test:install
       - name: Upload binaries to the release bucket (releases.gild.gg/cli)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

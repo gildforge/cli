@@ -19,8 +19,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test src/runner-setup-node.test.ts
+      - run: npm install -g npm@12.2.0
+      - run: bun run pack
+      - run: bun run test:install
+      - run: bun run test:installed-pty
   vz-helper:
     # The macOS `vm` backend's launcher: must compile and carry the entitlement.
     environment: public-ci
@@ -39,18 +43,11 @@ jobs:
           node-version: '24'
       # The safe-alias test drives a real zsh alias (the shell users alias gild in).
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test --timeout 30000
-      - name: Pack and smoke-test the npm layout
-        run: |
-          bun run pack
-          mkdir -p /tmp/nstest/node_modules/@gildforge
-          cp -R packages/gildforge /tmp/nstest/node_modules/gildforge
-          cp -R packages/cli-linux-x64 /tmp/nstest/node_modules/@gildforge/cli-linux-x64
-          node /tmp/nstest/node_modules/gildforge/bin/gild.js --version
-          HOME=/tmp/nstest node /tmp/nstest/node_modules/gildforge/bin/gild.js auth init --yes
-          HOME=/tmp/nstest node /tmp/nstest/node_modules/gildforge/bin/gild.js auth status
+      - run: npm install -g npm@12.2.0
+      - run: bun run pack
+      - name: Check packed manifests, dependency graph and warning-free global install
+        run: bun run test:install
       - name: Exercise PTY sessions through the installed npm launcher
-        run: |
-          cp -R node_modules/node-pty /tmp/nstest/node_modules/node-pty
-          TEST_GILD_COMMAND='["node","/tmp/nstest/node_modules/gildforge/bin/gild.js"]' TEST_GILD_HOOK_COMMAND='["/tmp/nstest/node_modules/@gildforge/cli-linux-x64/bin/gild"]' bun test src/spawn.test.ts src/spawn-regressions.test.ts src/spawn-events.test.ts src/spawn-notify.test.ts src/agent-profiles.test.ts src/spawn-detach.test.ts src/spawn-nudge-pty.test.ts src/spawn-vm.test.ts
+        run: bun run test:installed-pty

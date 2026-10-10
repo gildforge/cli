@@ -42,7 +42,7 @@ type Options = {
   args: string[]
   id: string
   idleMs: number
-  resolveFrom: string[]
+  ptyModule: string
   hookCommand: string[]
   printId?: boolean
   reporting?: boolean
@@ -291,19 +291,13 @@ async function main() {
     return fallback('PTY unavailable')
   let pty: typeof import('node-pty')
   try {
-    let nodePty: string | undefined
-    for (const from of options.resolveFrom) {
-      try {
-        nodePty = createRequire(from).resolve('node-pty')
-        break
-      } catch {}
-    }
+    const nodePty = options.ptyModule
     if (!nodePty)
       throw new Error(
-        'spawn needs the optional node-pty dependency. Install gildforge with npm (without --omit=optional); standalone downloads do not include node-pty.',
+        'spawn needs the PTY module shipped in the gildforge platform package.',
       )
     const require = createRequire(nodePty)
-    // npm 1.1.0's macOS prebuild helper arrives without its executable bit.
+    // Keep the macOS helper executable, including installs with restrictive modes.
     const ptyRoot = dirname(nodePty)
     if (process.platform === 'darwin') {
       const helper = join(

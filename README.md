@@ -111,7 +111,7 @@ hyphens. Duplicate names fail without disturbing the existing session. Listing
 removes stale sockets. Temporary observer settings/plugins are private and
 removed on exit; the user's Claude settings are left intact.
 
-Interactive PTYs require Node.js on PATH and the optional `node-pty` dependency.
+Interactive PTYs require Node.js on PATH and the PTY module bundled in the npm platform package.
 Install `gildforge` with npm without omitting optional dependencies. macOS uses
 upstream prebuilds; Linux installation needs Python and C++ build tools. The
 standalone Bun binary embeds its Node companion, but a downloaded binary alone

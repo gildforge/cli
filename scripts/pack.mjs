@@ -14,6 +14,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import pkg from '../package.json'
+import { vendorPty } from './vendor-pty.mjs'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const TARGETS = [
@@ -61,7 +62,7 @@ for (const t of TARGETS) {
         type: 'module',
         os: [t.os],
         cpu: [t.cpu],
-        files: ['bin'],
+        files: ['bin', 'vendor'],
         repository: {
           type: 'git',
           url: 'git+https://github.com/gildforge/cli.git',
@@ -74,6 +75,8 @@ for (const t of TARGETS) {
   )
   console.log(`built ${t.name}`)
 }
+
+await vendorPty(ROOT, TARGETS)
 
 const launcher = (family, bin) => `#!/usr/bin/env node
 // Picks the platform binary installed via optionalDependencies and execs it.
@@ -129,7 +132,6 @@ writeFileSync(
       },
       publishConfig: { access: 'public' },
       optionalDependencies: {
-        'node-pty': pkg.optionalDependencies['node-pty'],
         ...Object.fromEntries(
           TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version]),
         ),
