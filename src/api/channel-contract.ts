@@ -8,7 +8,7 @@ export const channelMessage = z.object({
   link: z.object({ href: z.string(), label: z.string() }).nullable(),
 })
 export const channelPage = z.object({ messages: z.array(channelMessage), cursor: channelCursor, before: channelCursor.nullable(), after: channelCursor.nullable() })
-export const channelName = z.string().min(1).max(255).refine(n => n!=='@' && !n.includes('@{') && !n.startsWith('/') && !n.endsWith('/') && !n.includes('..') && !/[\s~^:?*\[\]\\\x00-\x1f]/.test(n) && n.split('/').every(p => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock')), 'Invalid channel name')
+export const channelName = z.string().min(1).max(255).refine(n => !n.includes('@{') && !n.startsWith('/') && !n.endsWith('/') && !n.includes('..') && !n.endsWith('.') && !/[\s~^:?*\[\\\x00-\x1f\x7f]/.test(n) && n.split('/').every(p => p && !p.startsWith('.') && !p.endsWith('.lock')), 'Invalid channel name')
 export const channelSelection = z.object({ channel: channelName.optional() })
 export const channelQuery = channelSelection.extend({ before: channelCursor.optional(), after: channelCursor.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).refine(q => !(q.before && q.after), 'Use before or after, not both')
 export const channelInput = z.object({ body: z.string().trim().min(1).max(4000), reply_to: channelCursor.optional(), kind: z.enum(['message','note']).optional() })
