@@ -329,10 +329,12 @@ export class MentionBridge {
             repo: name,
           })
           const member = list.channels
-            .find((c) => c.name === branch)
+            .find((c) => (c.key ?? c.name) === branch)
             ?.members.some((p) => p.name === this.opts.agent)
           const coordinator = list.channels
-            .find((c) => c.name === name)
+            .find(
+              (c) => c.key === '' || (c.key === undefined && c.name === name),
+            )
             ?.members.some(
               (p) =>
                 p.name === this.opts.agent &&
