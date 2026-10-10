@@ -31,7 +31,7 @@ test('CLI grant request, list, approve and deny use canonical operations and the
     })
     return Response.json(
       r.method === 'GET'
-        ? [request]
+        ? (path.endsWith('/request-id') ? request : [request])
         : {
             ...request,
             ...(body?.decision
@@ -92,6 +92,10 @@ test('CLI grant request, list, approve and deny use canonical operations and the
         '/api/v1/agents/grant-requests/request-id',
       )
       expect(calls.at(-1)?.token).toBe('Bearer gf_fixturetoken')
+      if(decision==='approve') {
+        expect(calls.at(-2)?.method).toBe('GET')
+        expect(calls.at(-1)?.body).toEqual({decision:'approve',grants:['review']})
+      }
     }
     expect(calls.at(-1)?.body).toEqual({
       decision: 'deny',

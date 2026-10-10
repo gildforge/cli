@@ -54,12 +54,12 @@ export function grantRequestCommands(
       .option('--reason <text>', 'optional denial reason')
       .option('--server <url>', 'forge base URL')
       .action(async (id: string, opts) => {
-        const r = await (
-          await clientFor(opts)
-        ).request(
+        const client = await clientFor(opts)
+        const current = decision === 'approve' ? await client.request('grantRequest', { id }) : null
+        const r = await client.request(
           'decideGrantRequest',
           { id },
-          { decision, reason: opts.reason },
+          { decision, reason: opts.reason, ...(decision === 'approve' ? { grants: current!.grants } : {}) },
         )
         console.log(
           `${r.status}: ${r.grants.join(', ')} for @${r.agent} on ${r.repo}${r.denialReason ? ` — ${r.denialReason}` : ''}`,

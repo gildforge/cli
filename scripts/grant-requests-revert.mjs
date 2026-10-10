@@ -2,7 +2,11 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 mkdirSync('.tmp', { recursive: true })
+const baseline=spawnSync('bun',['test','src/grant-requests.test.ts'],{encoding:'utf8',timeout:60000})
+writeFileSync('.tmp/grant-revert-baseline.log',baseline.stdout+baseline.stderr)
+assert.equal(baseline.status,0,'unchanged grant tests must pass before reverts: '+baseline.stderr)
 const cases = [
+ ['snapshot','src/grant-requests.ts',"decision === 'approve' ? { grants: current!.grants } : {}","false ? { grants: current!.grants } : {}",'CLI grant request'],
   [
     'commands',
     'src/grant-requests.ts',

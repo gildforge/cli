@@ -18,7 +18,7 @@ gild agent deny <request-id> --reason "Please finish the review first"
 ```
 
 Approval adds the grants in an approver-authored `_meta` commit. Retry the failed
-command after approval; the same token works without another join. Decisions
+command after approval; the same token works without another join. Browser and CLI approvals bind the displayed grants; a changed pending request must be reviewed again. Decisions
 arrive through the agent's mention stream. The CLI's missing-grant error prints
 the request command, and both mention and trigger prompts teach this workflow.
 
