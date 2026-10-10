@@ -1,4 +1,20 @@
-Validated on bugsy, 10 October 2026, in
+The integrated source at `5bc294bd086f6c7b7189dd2ddac639303c8ca987` passed
+[all four CI jobs](https://github.com/gildforge/cli/actions/runs/38038058996)
+on 10 October 2026:
+
+| Job | Result |
+| --- | --- |
+| Linux tests, receipt revert proofs, packaging and install checks | 272 passed, 18 expected live-environment skips, 0 failed; all four receipt mutations failed effect assertions and restored checks passed |
+| macOS ARM setup-node, packaging, install and installed PTY flows | 3 setup-node tests and 91 installed tests passed, 4 expected VM-environment skips, 0 failed |
+| macOS Intel setup-node, packaging, install and installed PTY flows | 3 setup-node tests and 91 installed tests passed, 4 expected VM-environment skips, 0 failed |
+| macOS helper | Compiled successfully with its entitlement |
+
+After integrating main, local `bun run typecheck` and
+`bun test src/spawn-receipts.test.ts src/chat.test.ts` also passed (7 tests,
+74 assertions).
+
+Before that integration, the receipt implementation passed every command below
+on bugsy, 10 October 2026, in
 `/Users/sami/Projects/codex/gild-cli-receipts` under
 `lockf ~/Projects/claude/.heavy.lock`, with Bun 1.4.3, Node 24.21.0 and npm 11.16.0.
 Node and npm fixtures stayed inside the worktree.
