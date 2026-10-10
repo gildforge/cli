@@ -93,7 +93,14 @@ for (const [
     })
     writeFileSync(`.tmp/instructions-revert-${name}.log`, r.stdout + r.stderr)
     assert.notEqual(r.status, 0, name)
-    assert.match(r.stderr, pattern, name)
+    assert.match(
+      r.stderr
+        .split('\n')
+        .filter((line) => line.startsWith('(fail) '))
+        .join('\n'),
+      pattern,
+      name,
+    )
     assert.doesNotMatch(r.stderr, /SyntaxError|Cannot find module/)
     console.log(`PASS ${name}: effect assertion fails with fix removed`)
   } finally {
