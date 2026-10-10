@@ -117,26 +117,30 @@ test('CLI grant request, list, approve and deny use canonical operations and the
     await f.close()
   }
 })
-test('actual missing-scope CLI error suggests the exact grant request command', async () => {
+test('actual missing-scope and missing-grant CLI errors suggest the exact grant request command', async () => {
+  let message = 'Requires pulls:write scope'
   const f = await fixture(() =>
-    Response.json({ message: 'Requires pulls:write scope' }, { status: 403 }),
+    Response.json({ message }, { status: 403 }),
   )
   try {
     await f.agent()
-    const r = await cli(f.root, [
-      'pr',
-      'review',
-      'alice/repo#2',
-      '--approve',
-      '--body',
-      'Reviewed',
-      '--agent',
-      'test',
-    ])
-    expect(r.code).not.toBe(0)
-    expect(r.err).toContain(
-      'gild agent request-grants alice/repo --grants review --reason "<why this is needed>" --agent test',
-    )
+    for (message of ['Requires pulls:write scope', 'Requires the review grant']) {
+      const r = await cli(f.root, [
+        'pr',
+        'review',
+        'alice/repo#2',
+        '--approve',
+        '--body',
+        'Reviewed',
+        '--agent',
+        'test',
+      ])
+      expect(r.code).not.toBe(0)
+      expect(r.err).toContain(message)
+      expect(r.err).toContain(
+        'gild agent request-grants alice/repo --grants review --reason "<why this is needed>" --agent test',
+      )
+    }
   } finally {
     await f.close()
   }
