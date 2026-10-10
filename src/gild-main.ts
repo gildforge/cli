@@ -10,6 +10,9 @@ import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
 import { anonymousClient, chatCommands, repoPair } from './chat'
 import { issueCommands } from './issue'
+import { prCommands } from './pr'
+import { gildInvocation } from './gild-invocation'
+import { shellQuote } from './spawn-adapters/types'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
 import chalk from 'chalk'
@@ -31,7 +34,7 @@ import {
 } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { spawnCommands, localEvents } from './spawn'
@@ -603,10 +606,29 @@ orgCmd
 const cloneAction = async (
   repoArg: string,
   dir: string | undefined,
-  opts: { server: string },
+  opts: { agent?: string; server?: string },
 ) => {
-  const identity = await loadIdentity()
-  const url = `${opts.server}/${repoArg}.git`
+  repoPair(repoArg)
+  const agent = opts.agent ? await loadAgent(opts.agent) : null
+  if (opts.agent && !agent?.token)
+    throw Error('Agent token is not approved here yet')
+  const identity = agent ? null : await loadIdentity()
+  const server = agent
+    ? agentServer(agent, opts.server)
+    : forgeServer(opts.server ?? 'https://gild.gg')
+  if (identity?.apiToken) tokenForServer(identity.apiToken, server)
+  const helper =
+    '!' +
+    [
+      ...gildInvocation(),
+      '--config-dir',
+      resolve(configDir()),
+      'credential',
+      ...(opts.agent ? ['--agent', opts.agent] : []),
+    ]
+      .map(shellQuote)
+      .join(' ')
+  const url = `${server}/${repoArg}.git`
   const run = (args: string[], cwd?: string) => {
     const r = Bun.spawnSync(args, { cwd, stdout: 'inherit', stderr: 'inherit' })
     if (r.exitCode !== 0) {
@@ -614,8 +636,35 @@ const cloneAction = async (
       process.exit(1)
     }
   }
-  run(['git', 'clone', url, ...(dir ? [dir] : [])])
+  // Reset inherited helpers so another identity/cache cannot answer or store
+  // this agent's credential. The helper reads the approved store over a pipe.
+  run([
+    'git',
+    '-c',
+    'credential.helper=',
+    '-c',
+    `credential.${server}.helper=`,
+    '-c',
+    `credential.${server}.helper=${helper}`,
+    'clone',
+    url,
+    ...(dir ? [dir] : []),
+  ])
   const repoDir = dir ?? repoArg.split('/').pop()!
+  run(['git', 'config', 'credential.helper', ''], repoDir)
+  run(['git', 'config', `credential.${server}.helper`, ''], repoDir)
+  run(
+    ['git', 'config', '--add', `credential.${server}.helper`, helper],
+    repoDir,
+  )
+  if (agent) {
+    run(['git', 'config', 'user.name', agent.name], repoDir)
+    const [sponsor, label] = agent.name.split('/')
+    run(
+      ['git', 'config', 'user.email', `${label}+${sponsor}@agents.gild.gg`],
+      repoDir,
+    )
+  }
   // Safety net for repos created before HEAD pointed at main: never leave
   // a clone sitting on the forge-managed _meta branch.
   const head = Bun.spawnSync(['git', 'symbolic-ref', '--short', 'HEAD'], {
@@ -629,21 +678,14 @@ const cloneAction = async (
       chalk.dim("(switched to main — _meta is the forge's metadata branch)"),
     )
   }
-  if (identity?.apiToken) {
-    run(
-      [
-        'git',
-        'config',
-        `http.${opts.server}.extraHeader`,
-        `Authorization: Bearer ${tokenForServer(identity.apiToken, opts.server)}`,
-      ],
-      repoDir,
+  if (agent || identity?.apiToken) {
+    console.log(
+      `push access wired (${agent ? '@' + agent.name : 'your gild identity'}). \`git push\` just works.`,
     )
-    console.log('push access wired (your gild token). `git push` just works.')
   } else {
     console.log(
       chalk.dim(
-        'cloned read-only; run `gild auth token` and re-set the push header to push',
+        'cloned read-only; run `gild auth token` to enable push access',
       ),
     )
   }
@@ -654,7 +696,8 @@ program
   .description('clone a forge repo (push access wired up automatically)')
   .argument('<repo>', 'owner/name')
   .argument('[dir]', 'directory')
-  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .option('--server <url>', 'forge base URL')
+  .option('--agent <label>', 'use an approved agent token and commit identity')
   .action(cloneAction)
 
 repoCmd
@@ -662,7 +705,8 @@ repoCmd
   .description('clone a forge repo (same as gild clone)')
   .argument('<repo>', 'owner/name')
   .argument('[dir]', 'directory')
-  .option('--server <url>', 'forge base URL', 'https://gild.gg')
+  .option('--server <url>', 'forge base URL')
+  .option('--agent <label>', 'use an approved agent token and commit identity')
   .action(cloneAction)
 
 program
@@ -671,8 +715,10 @@ program
     'git credential helper — git runs this; see `gild auth setup-git`',
   )
   .argument('<action>', 'get | store | erase')
-  .action(async (action) => {
+  .option('--agent <label>', 'use an approved agent token')
+  .action(async (action, opts: { agent?: string }) => {
     if (action !== 'get') return // nothing to store or erase: the token lives in identity.json
+    if (process.stdin.isTTY || process.stdout.isTTY) return // credentials only travel over git's pipes
     // The request (protocol/host lines) ends with a blank line — git may
     // hold stdin open, so stop there rather than at EOF.
     const decoder = new TextDecoder()
@@ -681,7 +727,6 @@ program
       request += decoder.decode(chunk)
       if (request.includes('\n\n')) break
     }
-    const identity = await loadIdentity()
     const fields = Object.fromEntries(
       request
         .trim()
@@ -693,14 +738,17 @@ program
     )
     let token: string
     try {
-      token = tokenForServer(
-        identity?.apiToken,
-        `${fields.protocol}://${fields.host}`,
-      )
+      const server = `${fields.protocol}://${fields.host}`
+      if (opts.agent) {
+        const agent = await loadAgent(opts.agent)
+        if (!agent?.token || agentServer(agent) !== server) return
+        token = agent.token
+      } else {
+        token = tokenForServer((await loadIdentity())?.apiToken, server)
+      }
     } catch {
       return
     }
-    if (!identity?.apiToken) process.exit(0) // no answer = git falls back to prompting
     // The proxy checks the password slot; any username works.
     console.log('username=gild')
     console.log(`password=${token}`)
@@ -1256,6 +1304,7 @@ async function chatClient(
 }
 chatCommands(program, chatClient)
 issueCommands(program, chatClient)
+prCommands(program, chatClient)
 runnerCommands(program, loadIdentity)
 spawnCommands(
   program,

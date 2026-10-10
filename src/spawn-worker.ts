@@ -2,6 +2,7 @@ import { InstructionsSync, type InstructionsTarget } from './agent-instructions'
 import type { z } from 'zod'
 import type { runtimeReport } from './api/agent-profile-contract'
 import { runNative, debugFallback, supportsPty } from './spawn-native'
+import { promptGild } from './gild-invocation'
 import { createRequire } from 'node:module'
 import { chmodSync, unlinkSync } from 'node:fs'
 import { chmod } from 'node:fs/promises'
@@ -653,7 +654,7 @@ async function main() {
       client: new GildClient(target.server + '/api/v1', target.token),
       agent: target.agent,
       label: options.profile.name,
-      gild: options.hookCommand.map(shellQuote).join(' '),
+      gild: promptGild(options.hookCommand),
       session: options.id,
       repos: [
         ...new Set([

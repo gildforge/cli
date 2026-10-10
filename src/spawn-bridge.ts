@@ -95,6 +95,7 @@ export function mentionPrompt(
     `Context: ${gild} chat history ${repo} --agent ${label} --before ${Number(cursor) + 1} --limit 30`,
     `Reply:   ${gild} chat send ${repo} --agent ${label} --reply-to ${cursor} "<your reply>"`,
     MENTION_ETIQUETTE,
+    workflowPrompt(repo, label, gild),
   ].join('\n')
 }
 
@@ -122,9 +123,14 @@ export function triggerPrompt(
   const what = label ? `${trigger.action} ${label}` : trigger.action
   return [
     `[gild] ${kind} #${issue.number} "${issue.title}" ${what} in ${repo} by ${actor}`,
-    `Read:  ${gild} issue view ${repo}#${issue.number}`,
+    `Read:  ${gild} ${trigger.event === 'pull_request' ? 'pr' : 'issue'} view ${repo}#${issue.number} --agent ${agent}`,
     `Post:  ${gild} chat send ${repo} --agent ${agent} "@<agent> <message>"`,
+    workflowPrompt(repo, agent, gild),
   ].join('\n')
+}
+
+function workflowPrompt(repo: string, agent: string, gild: string) {
+  return `Work: ${gild} clone ${repo} --agent ${agent}; git switch -c <branch>, commit, push; ${gild} issue create|comment|close|label and ${gild} pr create|list|view|diff|checks|comment|review|merge. Use --agent ${agent} on every forge command; reads support --json.`
 }
 
 type Saved = { cursors: Record<string, string>; delivered: string[] }
@@ -196,6 +202,7 @@ export class MentionBridge {
       // No file yet, or an unreadable one: start from now rather than replay.
     }
     for (const id of this.saved.delivered) this.seen.add(id)
+    void this.backlog().catch(() => {})
     await Promise.all(
       [...this.channels, ...this.watched].map((channel) =>
         this.run(channel, signal),
@@ -336,17 +343,53 @@ export class MentionBridge {
       this.stage('failed', repo, m, (error as Error).message)
     }
   }
+  /** Open issues already carrying a `labeled:<label>` trigger's label are work
+   * the agent missed while offline: deliver each once, like a fresh label. */
+  private async backlog() {
+    const repos = [
+      ...new Set([...this.channels, ...this.watched].map((c) => c.repo)),
+    ]
+    for (const t of this.triggers) {
+      if (t.event !== 'issues' || t.action !== 'labeled' || !t.label) continue
+      for (const repo of repos) {
+        const [owner, name] = repo.split('/')
+        const issues = (await this.opts.client.request(
+          'issues' as never,
+          { owner, repo: name } as never,
+          undefined as never,
+          { state: 'open', labels: t.label, per_page: 50 } as never,
+        )) as unknown as { number: number; title: string; labels: { name: string }[]; user: { login: string } }[]
+        for (const issue of issues.slice().reverse())
+          this.trigger(repo, {
+            event: 'issues',
+            id: `backlog:${repo}#${issue.number}`,
+            payload: {
+              action: 'labeled',
+              label: { name: t.label },
+              issue,
+              sender: { login: issue.user.login },
+            },
+          } as never)
+      }
+    }
+  }
   private matchTrigger(
     event: string,
     p: TriggerPayload,
   ): (Trigger & { labelHit?: string }) | null {
     for (const t of this.triggers) {
-      if (t.event !== event || t.action !== p.action) continue
+      // `labeled:<label>` means "a subject carrying this label exists": it also
+      // fires when one is opened or reopened already carrying the label.
+      const carries =
+        t.action === 'labeled' &&
+        t.label !== undefined &&
+        (p.action === 'opened' || p.action === 'reopened')
+      if (t.event !== event || (t.action !== p.action && !carries)) continue
       // `labeled`/`unlabeled` carry the label on the event itself; other
       // actions match against the subject's current labels.
       if (t.label !== undefined) {
         const names =
-          t.action === 'labeled' || t.action === 'unlabeled'
+          (t.action === 'labeled' || t.action === 'unlabeled') && !carries
             ? [p.label?.name]
             : ((p.issue ?? p.pull_request)?.labels.map((l) => l.name) ?? [])
         if (!names.includes(t.label)) continue
@@ -366,7 +409,7 @@ export class MentionBridge {
     // Events without a subject (push, workflow_run) name no issue to read.
     if (!subject) return
     // Namespaced so a trigger id can never collide with a mention message id.
-    const key = `trigger:${record.id}`
+    const key = `trigger:${repo}#${subject.number}:${match.spec}`
     if (this.seen.has(key)) return
     this.seen.add(key)
     const t = {

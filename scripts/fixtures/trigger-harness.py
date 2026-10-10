@@ -40,6 +40,8 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
             if self.path.split('?',1)[0].endswith('/instructions'):
                 self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'text':'','revision':hashlib.sha256(b'').hexdigest(),'history':[]}).encode());return
             url=urllib.parse.urlparse(self.path);q=urllib.parse.parse_qs(url.query)
+            if url.path=='/api/v1/repos/owner/demo/issues': # start-up backlog: none open yet
+                self.send_response(200);self.send_header('content-type','application/json');self.end_headers();self.wfile.write(b'[]');return
             assert url.path=='/api/v1/events',url.path
             if self.headers.get('Authorization') not in [f'Bearer {t}' for t in AGENTS]:
                 self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers()
@@ -137,7 +139,10 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         assert '[gild] issue #12 "Triage me" labeled triage in owner/demo by sami' in first,first
         context=re.search(r'Read:  (.+) issue view owner/demo#12',first)
         post=re.search(r'Post:  (.+) chat send owner/demo --agent alice',first)
-        assert context and post and context[1]==post[1] and context[1]!='gild' and 'gild' in context[1],first
+        assert context and post and context[1]==post[1],first
+        expected=os.environ.get('TEST_GILD_PROMPT_COMMAND')
+        assert context[1]==expected if expected else context[1]!='gild' and 'gild' in context[1],first
+        assert 'issue view owner/demo#12 --agent alice' in first and 'clone owner/demo --agent alice' in first,first
         # A non-matching label and a duplicate of the delivered event add nothing.
         issue(13,'Not it',label='wontfix')
         issue(12,'Triage me',label='triage',ident='issues:12:labeled:1')
@@ -147,7 +152,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='trigger-') as d:
         assert alice.stages('trigger','issues:13:labeled:2')==[],alice.events.decode()
         assert bob.prompts()==[],bob.prompts()
         saved=json.loads(pathlib.Path(home/'.gild/sessions/alice.mentions.json').read_text())
-        assert saved['delivered']==['trigger:issues:12:labeled:1'] and saved['cursors']['owner/demo']==str(len(forge['events'])),saved
+        assert saved['delivered']==['trigger:owner/demo#12:issues.labeled:triage'] and saved['cursors']['owner/demo']==str(len(forge['events'])),saved
         # Restart: the persisted cursor and delivered ids stop any replay.
         alice.hook('Stop');alice.stop();alice=None
         forge['requests'].clear()
