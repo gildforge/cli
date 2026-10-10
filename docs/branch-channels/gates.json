@@ -113,6 +113,14 @@
       "status": 0,
       "seconds": 3.382,
       "log": "2-cli-scripts-build-vz-helper-sh.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun test src/runner-setup-node.test.ts",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 30.536,
+      "log": "4-cli-bun-test-src-runner-setup-node-test-ts.log"
     }
   ],
   "attempts": [
@@ -315,6 +323,14 @@
       "status": 0,
       "seconds": 3.382,
       "log": "2-cli-scripts-build-vz-helper-sh.log"
+    },
+    {
+      "repo": "cli",
+      "cmd": "bun test src/runner-setup-node.test.ts",
+      "head": "8318181e5b433185b53e7726aac7bdfe1f8aac79",
+      "status": 0,
+      "seconds": 30.536,
+      "log": "4-cli-bun-test-src-runner-setup-node-test-ts.log"
     }
   ],
   "notes": [
