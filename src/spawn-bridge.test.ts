@@ -151,9 +151,9 @@ async function bridge(
       ) => {
         if (_op === 'issues') return backlog
         sinces.push(query.since)
-        const page = pages[Math.min(index++, pages.length - 1)]()
+        const page = pages[Math.min(index++, pages.length - 1)]
         if (index >= pages.length + 1) controller.abort()
-        return page
+        return page()
       }) as never,
     },
     agent: 'owner/bob',
@@ -168,6 +168,7 @@ async function bridge(
     },
     emit: (e) => events.push(e),
     pause: async () => {},
+    backoff: async () => {},
   })
   const done = b.start(controller.signal)
   return { b, done, typed, prompts, events, sinces, file, controller }
@@ -283,6 +284,26 @@ test('lost auth is reported per channel and does not throw', async () => {
   expect(run.events).toMatchObject([
     { type: 'channel', state: 'error', error: 'token revoked' },
   ])
+})
+
+test('a refused read does not silence the agent: it reconnects from its cursor', async () => {
+  // 10 Oct: one 404 while the repo's access settings were pending left Ava
+  // deaf for the rest of the session while Bob kept hearing.
+  const run = await bridge([
+    () => ({ events: [mentionEvent(1)], cursor: '1' }),
+    () => {
+      throw new ApiRequestError(404, 'Event repository is not readable by this caller')
+    },
+    () => ({ events: [mentionEvent(2, 'owner/bob', 'm9')], cursor: '2' }),
+  ])
+  await run.done
+  expect(run.prompts).toHaveLength(2)
+  expect(run.prompts[1]).toContain('(message 2)')
+  expect(run.sinces).toEqual([undefined, '1', '1', '2'])
+  expect(run.b.channels).toEqual([{ repo: 'owner/demo', state: 'listening' }])
+  expect(
+    run.events.flatMap((e) => (e.type === 'channel' ? [e.state] : [])),
+  ).toEqual(['listening', 'error', 'listening'])
 })
 
 test('trigger prompt is short, names the read and hand-off commands', () => {
