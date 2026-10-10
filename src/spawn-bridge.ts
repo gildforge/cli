@@ -71,6 +71,7 @@ const subject = z.object({
   title: z.string(),
   labels: z.array(z.object({ name: z.string() })),
   user: z.object({ login: z.string() }).optional(),
+  head: z.object({ ref: z.string() }).optional(),
 })
 const triggerPayload = z.object({
   action: z.string().optional(),
@@ -294,7 +295,7 @@ export class MentionBridge {
       ...(error ? { error } : {}),
     })
   }
-  private page(
+  private async page(
     channel: ChannelStatus,
     page: { events: StreamRecord[]; cursor: string },
   ) {
@@ -304,7 +305,40 @@ export class MentionBridge {
     if (this.watched.includes(channel)) return this.save(repo, page.cursor)
     for (const event of page.events) {
       if (event.event === 'channel.mention') this.mention(repo, event)
-      else this.trigger(repo, event)
+      else {
+        const payload = triggerPayload.safeParse(event.payload)
+        const branch = payload.success
+          ? payload.data.pull_request?.head?.ref
+          : undefined
+        if (
+          branch &&
+          payload.success &&
+          this.matchTrigger(event.event, payload.data)
+        ) {
+          const [owner, name] = repo.split('/')
+          const list = await this.opts.client.request('channelList', {
+            owner,
+            repo: name,
+          })
+          const member = list.channels
+            .find((c) => c.name === branch)
+            ?.members.some((p) => p.name === this.opts.agent)
+          const coordinator = list.channels
+            .find((c) => c.name === name)
+            ?.members.some(
+              (p) =>
+                p.name === this.opts.agent &&
+                (p.prefix === '%' || p.prefix === '@'),
+            )
+          if (
+            !member &&
+            !coordinator &&
+            payload.data.pull_request?.user?.login !== this.opts.agent
+          )
+            continue
+        }
+        this.trigger(repo, event)
+      }
     }
     this.head.set(repo, page.cursor)
     // A cursor may only pass an enqueued prompt once it has been typed, so a

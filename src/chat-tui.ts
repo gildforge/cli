@@ -152,7 +152,7 @@ export class ChatView {
   private byCursor = new Map<string, ChannelMessage>()
   participants: ChannelParticipant[] = []
   channels: ChannelSummary[] = []
-  selected = this.repo.split('/')[1]
+  selected = ''
   archived = false
   showArchived = false
   resetChannel(name: string) {
@@ -188,7 +188,9 @@ export class ChatView {
     readonly repo: string,
     readonly colour: boolean,
     readonly origin: string,
-  ) {}
+  ) {
+    this.selected = repo.split('/')[1]
+  }
 
   /** Merge messages (dedupe by cursor, sort numerically). A reader scrolled
    *  up keeps their place; what arrived below is counted. */
@@ -235,6 +237,8 @@ export class ChatView {
     }
   }
   private body(m: ChannelMessage, paragraph: string): Line {
+    if (m.kind === 'note')
+      return [{ text: clean(paragraph), style: { dim: true, italic: true } }]
     const spans: Line = []
     // split() with one capture group alternates text, mention, text, …
     for (const [i, part] of clean(paragraph).split(MENTION).entries()) {
@@ -1051,7 +1055,7 @@ export async function runChatTui(options: {
         repo,
         {
           body: body.startsWith('/note ') ? body.slice(6) : body,
-          kind: body.startsWith('/note ') ? 'note' : 'message',
+          ...(body.startsWith('/note ') ? { kind: 'note' as const } : {}),
         },
         { channel: selected },
       )

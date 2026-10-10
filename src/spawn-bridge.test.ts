@@ -131,6 +131,7 @@ async function bridge(
   pages: (() => unknown)[],
   file?: string,
   triggers: string[] = [],
+  branchMembers: string[] = ['owner/bob'],
 ) {
   await mkdir('.tmp', { recursive: true })
   file ??= join(await mkdtemp(resolve('.tmp/br-')), 'bob.mentions.json')
@@ -148,6 +149,16 @@ async function bridge(
         _b: unknown,
         query: { since?: string },
       ) => {
+        if (_op === 'channelList')
+          return {
+            channels: [
+              { name: 'demo', members: [] },
+              {
+                name: 'bob/topic',
+                members: branchMembers.map((name) => ({ name, prefix: '+' })),
+              },
+            ],
+          }
         sinces.push(query.since)
         const page = pages[Math.min(index++, pages.length - 1)]()
         if (index >= pages.length + 1) controller.abort()
@@ -440,4 +451,33 @@ test('the repo event bridge delivers mentions from every branch and prompts sele
   expect(run.prompts[0]).toContain('--channel bob/topic')
   expect(run.prompts[1]).toContain('--channel alice/topic')
   expect(run.prompts.every((p) => p.includes('chat note'))).toBe(true)
+})
+
+test('branch trigger prompts require membership; a direct tag can wake a non-member', async () => {
+  const pr = issueEvent(1, { event: 'pull_request', action: 'opened' })
+  const scoped = {
+    ...pr,
+    payload: {
+      ...pr.payload,
+      pull_request: { ...('pull_request' in pr.payload ? pr.payload.pull_request : {}), head: { ref: 'bob/topic' } },
+    },
+  }
+  const direct = {
+    ...mentionEvent(2),
+    payload: { ...mentionEvent(2).payload, channel: 'bob/topic' },
+  }
+  for (const members of [[], ['owner/bob']]) {
+    const run = await bridge(
+      [
+        () => ({ events: [scoped, direct], cursor: '2' }),
+        () => ({ events: [], cursor: '2' }),
+      ],
+      undefined,
+      ['pull_request:opened'],
+      members,
+    )
+    await run.done
+    expect(run.prompts).toHaveLength(members.length ? 2 : 1)
+    expect(run.prompts.at(-1)).toContain('#bob/topic')
+  }
 })

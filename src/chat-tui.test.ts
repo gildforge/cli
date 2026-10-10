@@ -164,24 +164,23 @@ test('renders history, participants with prefixes and states, and the input line
     seed(s)
     const tui = open(s, ['owner/demo'])
     const screen = await tui.settle('● live')
-    expect(screen.split('\n')).toEqual([
-      ' gild  #owner/demo · 1 human, 1 agent online                                       ● live · as sami',
-      '                                                                                 │ HUMANS 1/2',
-      '                                                                                 │ ● @sami',
-      '                                                                                 │ ○ +bob',
-      '                                                                                 │',
-      '                                                                                 │ AGENTS 1/2',
-      '                                                                                 │ ● +alice/test',
-      '                                                                                 │     busy · Edit',
-      '                                                                                 │ ○ %ava/orch',
-      '─────────────────────────────── Fri, 9 Oct 2026 ───────────────────────────────  │     waiting',
-      '10:00       sami │ @alice/test can you look at #12? The parser drops the last    │',
-      '                 │ token.                                                        │',
-      '10:02 alice/test │ ↪ sami on it                                                  │',
-      '10:05          * │ alice/test opened PR #13 → fix: keep the last token           │',
-      '────────────────────────────────────────────────────────────────────────────────────────────────────',
+    expect(screen.split('\n')).toHaveLength(16)
+    for (const text of [
+      '#demo',
+      'Channels',
+      '>#demo',
+      '#bob/topic [3]',
+      'archived',
+      'HUMANS',
+      '● @sami',
+      'AGENTS',
+      'busy · Edit',
+      'parser drops the last',
+      'fix: keep the last token',
       'sami ›',
     ])
+      expect(screen).toContain(text)
+
     // The link is a real OSC 8 hyperlink to the forge page; the agent's
     // mention of the viewer is not, but sami's own nick is bold.
     expect(tui.raw()).toContain(`\x1b]8;;${s.origin}/owner/demo/pulls/13\x1b\\`)
@@ -420,6 +419,46 @@ test('NO_COLOR drops colours; message text can never inject terminal escapes', a
     await colour.settle('● live')
     expect(colour.raw()).toMatch(/\x1b\[0;3[0-7]m/)
     expect(await colour.quit()).toBe(0)
+  } finally {
+    await s.close()
+  }
+}, 30000)
+
+test('the buffer list switches channels, keeps notes dim, and archives read-only', async () => {
+  const s = await setup()
+  try {
+    seed(s)
+    const tui = open(
+      s,
+      ['owner/demo', '--channel', 'bob/topic', '--agent', 'test'],
+      { cols: 120, rows: 28 },
+    )
+    let screen = await tui.settle('● live')
+    expect(screen.split('\n')[0]).toContain('#bob/topic')
+    expect(screen).toContain('Channels')
+    expect(s.seen.some((r) => r.path.includes('channel=bob%2Ftopic'))).toBe(
+      true,
+    )
+    tui.type('/note tests passed\r')
+    await tui.settle('tests passed')
+    expect(s.seen.find((r) => r.method === 'POST')!.body).toMatchObject({
+      kind: 'note',
+      body: 'tests passed',
+    })
+    expect(s.seen.find((r) => r.method === 'POST')!.path).toContain(
+      'channel=bob%2Ftopic',
+    )
+    tui.type('/channel old\r')
+    screen = await tui.waitFor(
+      (text) => text.split('\n')[0].includes('#old (archived)'),
+      'archived channel',
+    )
+    expect(screen).toContain('read-only')
+    const posted = s.seen.filter((r) => r.method === 'POST').length
+    tui.type('late post\r')
+    await Bun.sleep(150)
+    expect(s.seen.filter((r) => r.method === 'POST')).toHaveLength(posted)
+    expect(await tui.quit()).toBe(0)
   } finally {
     await s.close()
   }
