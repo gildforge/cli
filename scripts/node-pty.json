@@ -1,0 +1,19 @@
+{
+  "version": "1.2.0-beta.15",
+  "tarball": "https://registry.npmjs.org/node-pty/-/node-pty-1.2.0-beta.15.tgz",
+  "integrity": "sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==",
+  "sha256": "114ac80c3fe075eff76217a4122d135576582695f49c03a5da3835cdfc2f89c5",
+  "files": {
+    "LICENSE": "a3d60eaf32d2fb09c9d82ef39f14bd6e2c0f3ca7de30daa827486c0d6f8b6e9f",
+    "lib/index.js": "17e79806518ab350cd7d729dcc94154c5d770ea03e38e53684c5a8618065f99c",
+    "lib/unixTerminal.js": "63b605fb25c4e6d237493cd1799b01a8d880d89c78850108aae1853d04b4cdf0",
+    "lib/terminal.js": "771f5388103c3eb7bc698b589f41c08f06044d96de609eec45c9a79e4ee4fc00",
+    "lib/eventEmitter2.js": "f1c14613aa90c10def4ca7238329270871997eb26f919f7074dc25533e3e75dd",
+    "lib/utils.js": "807bc62c8b702377d591136862309718ba48fb2b9eca54f4b25fbe43838c8fc6",
+    "prebuilds/darwin-arm64/pty.node": "0aae85518beb134a666f8e415f78bf528b2e9d40b47498af97433dc459661366",
+    "prebuilds/darwin-arm64/spawn-helper": "08bc83a084651d095645010d34783f94b9af443614747e953e66d6578027e999",
+    "prebuilds/darwin-x64/pty.node": "811f4a357e260fc0e520c250a3de5990483761d82afd635effbdf4b793b8a0e9",
+    "prebuilds/darwin-x64/spawn-helper": "a3bed36ae3ed83b2ac2fce475bd578c51f5b536041f0b2dfe116987f565e9758",
+    "prebuilds/linux-x64/pty.node": "123792d8f22f36d519b21dfb6f4b716f9b18b9e579085ea2840d0773d88d35fd"
+  }
+}
