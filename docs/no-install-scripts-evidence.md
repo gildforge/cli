@@ -17,8 +17,8 @@ then checked again in the actual `npm pack` output.
 | Bugsy arm64, Bun 1.4.2, Node 26.10.0 | 229 pass, 18 skip, 0 fail | 70 pass, 4 skip, 0 fail | 0 bytes |
 
 The skips are existing opt-in live VM/container/host isolation checks. Linux's
-packed files and dependency metadata passed the audit; native Linux execution
-is covered by the updated Ubuntu CI job, rather than claimed as local evidence.
+packed files and dependency metadata passed the audit; the updated Ubuntu CI job runs the
+native Linux checks.
 
 Bugsy ran the entire sequence under
 `lockf ~/Projects/claude/.heavy.lock sh ~/Projects/codex/gild-cli-noscripts/.tmp/verify-bugsy.sh`.
@@ -84,8 +84,7 @@ Ctrl-C, exit status, terminal restoration and cleanup through the real launcher.
 
 The revert proof repacks a scratch launcher with the original resolved
 `node-pty@1.1.0` dependency. Its packed manifest is rejected, and the same fresh
-global-install warning check exits 1. Source and the passing install are retained.
-The outer revert command succeeds only when this regression is detected.
+global-install warning check exits 1. The outer revert command succeeds only when this regression is detected.
 Full reverted npm install stdout:
 
 ```text
