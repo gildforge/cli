@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { root } from './packed-packages.mjs'
 
@@ -36,6 +36,9 @@ const child = spawn(
     'src/spawn-nudge-pty.test.ts',
     'src/spawn-vm.test.ts',
     'src/chat-tui.test.ts',
+    'src/spawn-bridge.test.ts',
+    'src/agent-workflow.e2e.test.ts',
+
   ],
   {
     cwd: root,
@@ -43,7 +46,12 @@ const child = spawn(
     env: {
       ...process.env,
       HOME: home,
+      PATH:
+        join(root, '.tmp', 'install', 'prefix', 'bin') +
+        delimiter +
+        process.env.PATH,
       TEST_GILD_COMMAND: JSON.stringify(['node', launcher]),
+      TEST_GILD_PROMPT_COMMAND: 'gild',
       TEST_GILD_HOOK_COMMAND: JSON.stringify([
         join(platform, '..', 'bin', 'gild'),
       ]),
