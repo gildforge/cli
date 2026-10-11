@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createServer } from 'node:net'
+import { Readable } from 'node:stream'
 import { mkdir, mkdtemp, rm, readFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { claudeAdapter } from './spawn-adapters/claude'
@@ -8,6 +9,7 @@ import { applyEvent, type AgentEvent, type SessionState } from './spawn-events'
 import { InjectionQueue } from './spawn-queue'
 import { InputLine } from './spawn-input'
 import { StateReporter } from './spawn-report'
+import { forwardHook } from './spawn-hook'
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const command = () =>
   process.env.TEST_GILD_COMMAND
@@ -36,7 +38,32 @@ async function hook(
   ])
   return { code, out, err, ms: performance.now() - start }
 }
-test('hook forwards raw stdin and notify argv; absent sockets and incomplete stdin finish silently within deadline', async () => {
+test('hook bounds unfinished stdin to a 200ms forwarding deadline and releases input', async () => {
+  const input = new Readable({ read() {} })
+  let expire!: () => void
+  let budget = 0
+  const finished = forwardHook(['--session', 'missing'], input, (done, ms) => {
+    budget = ms
+    expire = done
+    // A real handle lets production cleanup cancel it; expiration is controlled.
+    return setTimeout(() => {}, 60000)
+  })
+  try {
+    input.push('{"partial":')
+    expect(budget).toBe(200)
+    expect(input.listenerCount('data')).toBe(1)
+    expire()
+    await finished
+    expect(input.isPaused()).toBe(true)
+    for (const event of ['data', 'end', 'error'])
+      expect(input.listenerCount(event)).toBe(0)
+  } finally {
+    expire()
+    input.destroy()
+  }
+})
+
+test('hook forwards raw stdin and notify argv; absent sockets and incomplete stdin finish silently', async () => {
   await mkdir('.tmp', { recursive: true })
   const home = await mkdtemp(resolve('.tmp/h-'))
   await mkdir(join(home, '.gild/sessions'), { recursive: true })
@@ -76,7 +103,10 @@ test('hook forwards raw stdin and notify argv; absent sockets and incomplete std
     ]) {
       const absent = await hook(home, ['--session', 'missing'], stdin)
       expect(absent).toMatchObject({ code: 0, out: '', err: '' })
-      expect(absent.ms).toBeLessThan(400) // Includes process startup; internal budget is 200ms.
+      // This measures executable startup and OS scheduling too. The exact 200ms
+      // forwarding budget and cleanup are independently checked above; keep a
+      // one-second limit here to catch installed-process hangs on loaded CI.
+      expect(absent.ms).toBeLessThan(1000)
     }
   } finally {
     server.close()

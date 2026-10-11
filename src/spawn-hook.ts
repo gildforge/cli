@@ -1,22 +1,30 @@
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
+import type { Readable } from 'node:stream'
 import { socketPath, MAX_MESSAGE_BYTES } from './spawn-sessions'
 /** Deliberately independent of Commander, identity loading, API clients and PTYs. */
-export async function runHook(args: string[]) {
+export async function forwardHook(
+  args: string[],
+  input: Readable = process.stdin,
+  schedule: (
+    done: () => void,
+    ms: number,
+  ) => ReturnType<typeof setTimeout> = setTimeout,
+) {
   await new Promise<void>((resolve) => {
     let socket: ReturnType<typeof createConnection> | undefined
     let bytes = 0
     const chunks: Buffer[] = []
     const done = () => {
       clearTimeout(timer)
-      process.stdin.pause()
-      process.stdin.off('data', data)
-      process.stdin.off('end', forward)
-      process.stdin.off('error', done)
+      input.pause()
+      input.off('data', data)
+      input.off('end', forward)
+      input.off('error', done)
       socket?.destroy()
       resolve()
     }
-    const timer = setTimeout(done, 200)
+    const timer = schedule(done, 200)
     const data = (chunk: Buffer) => {
       bytes += chunk.length
       if (bytes > MAX_MESSAGE_BYTES - 1024) done()
@@ -46,12 +54,16 @@ export async function runHook(args: string[]) {
     // Codex appends notification JSON as argv, Claude sends stdin JSON.
     if (args.at(-1)?.startsWith('{')) forward()
     else {
-      process.stdin.on('data', data)
-      process.stdin.once('end', forward)
-      process.stdin.once('error', done)
-      process.stdin.resume()
+      input.on('data', data)
+      input.once('end', forward)
+      input.once('error', done)
+      input.resume()
     }
   })
+}
+
+export async function runHook(args: string[]) {
+  await forwardHook(args)
   // The forwarding deadline bounds gild only; the caller's notifier retains its
   // own runtime and receives exactly the payload argument Codex appended.
   const index = args.indexOf('--notify-command')
