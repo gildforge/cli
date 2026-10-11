@@ -7,3 +7,5 @@ src/import/source.ts
 src/public-address.ts
 src/actions/support.ts
 src/channel/state.ts
+# Unmodified upstream fixture: formatting would change its verified pinned bytes.
+scripts/fixtures/skills/ecc-verification-loop/SKILL.md

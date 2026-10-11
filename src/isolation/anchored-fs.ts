@@ -9,6 +9,7 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  fsyncSync,
   openSync,
   readSync,
   writeFileSync,
@@ -34,6 +35,7 @@ function native() {
       mkdirat: { args: ['i32', 'ptr', 'u32'], returns: 'i32' },
       unlinkat: { args: ['i32', 'ptr', 'i32'], returns: 'i32' },
       renameat: { args: ['i32', 'ptr', 'i32', 'ptr'], returns: 'i32' },
+      linkat: { args: ['i32', 'ptr', 'i32', 'ptr', 'i32'], returns: 'i32' },
       symlinkat: { args: ['ptr', 'i32', 'ptr'], returns: 'i32' },
       readlinkat: { args: ['i32', 'ptr', 'ptr', 'u64'], returns: 'i64' },
       [statSymbol]: { args: ['i32', 'ptr', 'ptr', 'i32'], returns: 'i32' },
@@ -107,9 +109,8 @@ export class AnchoredDirectory {
       throw e
     }
   }
-  entry(name: string, rel: string, skipUnsupported = false): Entry | undefined {
-    const p = cstr(name),
-      link = Buffer.alloc(4096)
+  private entryMode(name: string): number | undefined {
+    const p = cstr(name)
     // Inspect without opening a FIFO/device/socket. The stat ABI is fixed for
     // the supported 64-bit platforms; only mode is read from an oversized buffer.
     if (!['x64', 'arm64'].includes(process.arch))
@@ -125,10 +126,93 @@ export class AnchoredDirectory {
     )
     if (status < 0 && sys().errno() === 2) return undefined
     check(status, 'fstatat entry')
-    const mode =
-      process.platform === 'darwin'
-        ? info.readUInt16LE(4)
-        : info.readUInt32LE(process.arch === 'x64' ? 24 : 16)
+    return process.platform === 'darwin'
+      ? info.readUInt16LE(4)
+      : info.readUInt32LE(process.arch === 'x64' ? 24 : 16)
+  }
+  /** Bounded bytes from a regular, unlinked-to-other-paths file, never a symlink. */
+  readRegular(name: string, maxBytes: number): Buffer {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
+      throw new Error('invalid anchored file read bound')
+    const mode = this.entryMode(name)
+    if (mode === undefined)
+      throw Object.assign(new Error('anchored file is missing'), {
+        code: 'ENOENT',
+      })
+    if ((mode & constants.S_IFMT) !== constants.S_IFREG)
+      throw new Error('anchored entry is not a regular file')
+    const p = cstr(name)
+    const fd = check(
+      sys().openat(
+        this.fd,
+        ptr(p),
+        constants.O_RDONLY |
+          constants.O_NOFOLLOW |
+          constants.O_NONBLOCK |
+          CLOEXEC,
+        0,
+      ),
+      'openat read',
+    )
+    try {
+      const st = fstatSync(fd)
+      if (!st.isFile() || st.nlink !== 1)
+        throw new Error('anchored file type or link count is unsafe')
+      if (st.size > maxBytes)
+        throw new Error('anchored file exceeds read bound')
+      const data = Buffer.alloc(maxBytes + 1)
+      let length = 0,
+        n: number
+      while (
+        length <= maxBytes &&
+        (n = readSync(fd, data, length, data.length - length, null)) > 0
+      )
+        length += n
+      if (length > maxBytes)
+        throw new Error('anchored file grew beyond read bound')
+      return Buffer.from(data.subarray(0, length))
+    } finally {
+      closeSync(fd)
+    }
+  }
+  /** Publish complete private bytes without replacing any existing destination. */
+  putRegularIfAbsent(name: string, data: Buffer): boolean {
+    const temp = cstr(`.gild-bytes-${randomBytes(12).toString('hex')}`),
+      dest = cstr(name)
+    const fd = check(
+      sys().openat(
+        this.fd,
+        ptr(temp),
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_NOFOLLOW |
+          CLOEXEC,
+        0o600,
+      ),
+      'openat bytes',
+    )
+    try {
+      try {
+        writeFileSync(fd, data)
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      const status = sys().linkat(this.fd, ptr(temp), this.fd, ptr(dest), 0)
+      if (status < 0 && sys().errno() === 17) return false
+      check(status, 'linkat bytes')
+      fsyncSync(this.fd)
+      return true
+    } finally {
+      check(sys().unlinkat(this.fd, ptr(temp), 0), 'unlinkat bytes')
+    }
+  }
+  entry(name: string, rel: string, skipUnsupported = false): Entry | undefined {
+    const p = cstr(name),
+      link = Buffer.alloc(4096)
+    const mode = this.entryMode(name)
+    if (mode === undefined) return undefined
     if (
       ![constants.S_IFREG, constants.S_IFDIR, constants.S_IFLNK].includes(
         mode & constants.S_IFMT,
