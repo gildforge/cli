@@ -15,6 +15,13 @@ class Session:
         termios.tcsetattr(self.slave, termios.TCSANOW, attrs)
         self.original = termios.tcgetattr(self.slave)
         self.env = {**os.environ, 'HOME': self.home.name, 'CLAUDE_CODE_SESSION_ID': 'fixture-session', 'CLAUDE_CODE_MESSAGING_TOKEN': 'fixture-session-marker', 'CLAUDECODE': 'outer', 'CLAUDE_PID': '123', 'CLAUDE_EFFORT': 'high', 'CLAUDE_CODE_CHILD_SESSION': 'outer', 'CLAUDE_CODE_OAUTH_TOKEN': 'fixture-config', 'CLAUDE_CODE_USE_BEDROCK': '1', 'CODEX_SESSION_ID': 'outer', 'CODEX_THREAD_ID': 'outer', 'KEEP_TEST': 'kept', 'CLAUDE_OTHER': 'kept', 'CODEX_OTHER': 'kept'}
+        if CASE == 'terminal':
+            # Hold only the real Node worker after its actual socket unlink. Runtime
+            # exit must not reset termios before we inspect Gild's explicit cleanup.
+            self.barrier = pathlib.Path(self.home.name) / 'terminal-cleanup-barrier'
+            preload = ROOT / 'scripts/fixtures/terminal-cleanup-barrier.cjs'
+            self.env['TEST_GILD_TERMINAL_BARRIER'] = str(self.barrier)
+            self.env['NODE_OPTIONS'] = self.env.get('NODE_OPTIONS', '') + ' --require=' + json.dumps(str(preload))
         command = CLI + ['spawn', '--name', name, '--idle-ms', str(idle), str(ROOT / 'scripts/fixtures/spawn-agent.py'), mode]
         if stale:
             path = pathlib.Path(self.home.name)/'.gild/sessions'/ (name+'.sock')
@@ -187,10 +194,21 @@ try:
         s = Session()
         s.proc.send_signal(signal.SIGTERM)
         deadline = time.monotonic() + 3
-        while s.path.exists() and time.monotonic() < deadline: time.sleep(0.002)
+        while not s.barrier.exists() and time.monotonic() < deadline:
+            assert s.proc.poll() is None, 'worker exited before the cleanup barrier'
+            time.sleep(0.002)
+        assert s.barrier.exists(), 'worker did not reach the cleanup barrier'
+        barrier = json.loads(s.barrier.read_text())
+        assert barrier['socket'] == str(s.path) and barrier['pid'] > 0, barrier
         assert not s.path.exists()
+        # A delayed observer must still inspect explicit cleanup before runtime exit.
+        time.sleep(0.05)
+        os.kill(barrier['pid'], 0)
         assert s.proc.poll() is None, 'check must precede the runtime exit reset'
-        assert termios.tcgetattr(s.slave) == s.original, 'terminal not restored during cleanup'
+        try:
+            assert termios.tcgetattr(s.slave) == s.original, 'terminal not restored during cleanup'
+        finally:
+            pathlib.Path(str(s.barrier) + '.release').touch()
         assert s.wait_exit() == 143
     elif CASE == 'ctrl-c':
         s = Session('ctrl-c')
