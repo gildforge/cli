@@ -1,0 +1,34 @@
+{
+  "assets": [],
+  "files": [
+    {
+      "bytes": 1071,
+      "path": "LICENSE",
+      "sha256": "326146379f01bb137c0a5d3c54770c1aa31076705c8b88a7f6b26a460f6221b2"
+    },
+    {
+      "bytes": 3064,
+      "path": "SKILL.md",
+      "sha256": "5b06be54d4852f60e6cf1b04c6e9a4748554334eb3e41af6c0959b544e6464ae"
+    }
+  ],
+  "license": {
+    "materializedPath": "LICENSE",
+    "originalPath": "pi/core/LICENSE",
+    "sha256": "326146379f01bb137c0a5d3c54770c1aa31076705c8b88a7f6b26a460f6221b2",
+    "spdx": "MIT"
+  },
+  "metadata": {
+    "description": "Run a six-phase verification of a Claude Code session's work — build, type check, lint, tests with coverage, security grep, and diff review — then produce a PASS/FAIL verification report. Use when verifying work after completing a feature or refactor, before creating a PR, or when quality gates must pass.",
+    "name": "verification-loop"
+  },
+  "requiredCapabilities": ["skills.instructions", "skills.metadata"],
+  "schemaVersion": 1,
+  "skillId": "ecc.verification-loop",
+  "source": {
+    "bundlePath": "pi/core/skills/verification-loop",
+    "commit": "d4a44ded8c150aac89b37c1f665b5a749fe52b02",
+    "entrypoint": "SKILL.md",
+    "repository": "https://github.com/affaan-m/ECC"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "canonical_commit": "1f9f9609e333d1de252adc048db398bcd7fa74d1",
+  "agreed_proposal": "41c15cea3763a79987bc18f8655db7030b7dc554",
+  "generator": "scripts/generate-api-client.mjs",
+  "generator_sha256": "b77e0ae7042cf92ecbf034ec7d2621362d2311dd57404199b0b9631709075d4a",
+  "files": [
+    {
+      "source": "lib/api/agent-profile-canonical.ts",
+      "source_sha256": "943ff36387ea5f39edc091a8815e2f94188a5c76ef4b813b396b1bda5d20d9c4",
+      "output": "src/api/agent-profile-canonical.ts",
+      "output_sha256": "cd5bbd408d34ae60de4ec4e9b370fe1d84e24905f13b951b91415701a871cc04",
+      "disposition": "consumed byte-for-byte"
+    },
+    {
+      "source": "lib/api/agent-profile-contract.ts",
+      "source_sha256": "768742f5c240a209d49f7b7dea7675a1f6b65ef9f088b78dfdb960b3e17fd774",
+      "output": "src/api/agent-profile-contract.ts",
+      "output_sha256": "6d9f141148ce5176372b3f65806d697b1f38aa33a79d0f2a5b33a14b1ea6ca17",
+      "disposition": "consumed byte-for-byte"
+    },
+    {
+      "source": "lib/api/scopes.ts",
+      "source_sha256": "331e31bfa51a9daaa287f106088d472766e39a32f10cae50eded54384860465a",
+      "output": "src/api/scopes.ts",
+      "output_sha256": "7b443901c11a62b8c45112c308b5dae74f0700cc73a1e245525890cd24f0d070",
+      "disposition": "held: unrelated grantScopes channel:write drift"
+    },
+    {
+      "source": "lib/api/client.ts",
+      "source_sha256": "7871c6c70e0a6ecd55fd22b5c49f0cea40c9575a46ff7d0eadad7315059db13e",
+      "output": "src/api/client.ts",
+      "output_sha256": "690680b648d9652473eebcdccc8412575e3d4abdfbc69f32723b873e836bff8b",
+      "disposition": "consumed byte-for-byte"
+    }
+  ],
+  "registration": "No live agent-profile routes; lib/api/contract.ts unchanged; AGENT_PROFILE_SCOPES separate from issuance SCOPES",
+  "tests": {
+    "focused": 32,
+    "removal_proofs": 8,
+    "api_compatibility": "pass",
+    "types": "four-source focused check pass"
+  },
+  "limits": "Three exact outputs consumed. Scope output held pending canonical compatibility resolution; no live route, issuance or execution authority."
+}

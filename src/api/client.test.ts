@@ -1,5 +1,52 @@
 import { test, expect } from 'bun:test'
 import { GildClient, ApiRequestError, requestPath } from './client'
+test('stable error codes retain old client status/message behavior', async () => {
+  const codes = ['SNAPSHOT_UNAVAILABLE']
+  const legacy = new ApiRequestError(409, 'old constructor')
+  expect(legacy.status).toBe(409)
+  expect(legacy.message).toBe('old constructor')
+  expect(legacy.codes).toEqual([])
+  const explicit = new ApiRequestError(412, 'stale', codes)
+  codes[0] = 'modified'
+  expect(explicit.code).toBe('SNAPSHOT_UNAVAILABLE')
+  expect(Object.isFrozen(explicit.codes)).toBe(true)
+  const client = new GildClient(
+    'https://forge.test/api/v1',
+    'fixture',
+    async () =>
+      Response.json(
+        {
+          message: 'stale selection',
+          errors: [
+            { code: 'REVISION_STALE' },
+            null,
+            { code: 123 },
+            { code: 'SNAPSHOT_UNAVAILABLE' },
+          ],
+        },
+        { status: 412 },
+      ),
+  )
+  let failure: unknown
+  try {
+    await client.request('repos')
+  } catch (error) {
+    failure = error
+  }
+  expect(failure).toBeInstanceOf(ApiRequestError)
+  const error = failure as ApiRequestError
+  expect({
+    status: error.status,
+    message: error.message,
+    code: error.code,
+    codes: error.codes,
+  }).toEqual({
+    status: 412,
+    message: 'stale selection',
+    code: 'REVISION_STALE',
+    codes: ['REVISION_STALE', 'SNAPSHOT_UNAVAILABLE'],
+  })
+})
 test('client validates input before a mutation and encodes GitHub contents paths', async () => {
   let calls = 0
   const client = new GildClient(

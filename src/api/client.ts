@@ -8,20 +8,31 @@ import {
 } from './contract.ts'
 export class ApiRequestError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  readonly codes: readonly string[]
+  readonly code: string | undefined
+  constructor(status: number, message: string, codes: readonly string[] = []) {
     super(message)
     this.status = status
+    this.codes = Object.freeze([...codes])
+    this.code = this.codes[0]
   }
 }
 export class GildClient {
+  readonly baseURL: string
+  readonly token: string
+  readonly fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   constructor(
-    readonly baseURL: string,
-    readonly token: string,
-    readonly fetcher: (
+    baseURL: string,
+    token: string,
+    fetcher: (
       input: RequestInfo | URL,
       init?: RequestInit,
     ) => Promise<Response> = fetch,
-  ) {}
+  ) {
+    this.baseURL = baseURL
+    this.token = token
+    this.fetcher = fetcher
+  }
   async request<I extends Operation>(
     operation: I,
     params: Record<string, string | number> = {},
@@ -64,6 +75,10 @@ export class GildClient {
       throw new ApiRequestError(
         res.status,
         data.message ?? `HTTP ${res.status}`,
+        Array.isArray(data.errors)
+          ? data.errors.flatMap((error: unknown) =>
+            error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? [error.code] : [])
+          : [],
       )
     return route.output.parse(data) as Output<I>
   }
