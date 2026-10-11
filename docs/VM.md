@@ -75,6 +75,10 @@ guest agent from this checkout, so the handshake below applies to both.
 
 ## Version handshake
 
+Automatic sync protects host Git metadata and retains incomplete work instead
+of deleting it at exit. See [the support and recovery matrix](ISOLATION-SUPPORT.md)
+for the current interactive-mode gaps and real-agent rehearsal requirements.
+
 The CLI and the guest agent share one protocol number,
 `src/isolation/guest-protocol.json` (the agent compiles it in). On boot the
 host (Firecracker or vz) pings the agent; the reply carries the agent's protocol and version, and

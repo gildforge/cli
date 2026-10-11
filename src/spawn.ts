@@ -213,9 +213,17 @@ export function spawnCommands(
           : new URL('../node_modules/node-pty/lib/index.js', import.meta.url)
               .pathname
         const worker = spawn(
-          'node',
+          opts.vm ? process.execPath : 'node',
           [
-            await workerFile(),
+            ...(opts.vm
+              ? import.meta.url.includes('$bunfs')
+                ? ['__vm-worker']
+                : [
+                    'run',
+                    new URL('./gild.ts', import.meta.url).pathname,
+                    '__vm-worker',
+                  ]
+              : [await workerFile()]),
             JSON.stringify({
               agent,
               args,

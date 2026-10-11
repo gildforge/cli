@@ -227,4 +227,10 @@ bun run vm:image        # in a gildforge/cli checkout; writes ~/.config/gild/vm/
 A guest image built for another gild version is refused at boot with that same
 command as the fix. Details: [docs/VM.md](docs/VM.md).
 
+Automatic sync protects host Git metadata and retains incomplete work for
+recovery. Published images currently cover Linux x64 and Apple Silicon; they
+do not include model CLIs or Gild. Dedicated-user and container interactive
+spawn are not exposed yet. See [current support and rehearsal requirements](docs/ISOLATION-SUPPORT.md)
+before choosing a demo backend.
+
 -codex

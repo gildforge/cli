@@ -1,8 +1,76 @@
 import { expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { guestEnvironment } from './spawn-vm'
+import { finishVmSync, guestEnvironment } from './spawn-vm'
 import { loadHostConfig } from './isolation'
+
+test('failed final sync retains the VM workspace and reports failure', async () => {
+  await mkdir('.tmp', { recursive: true })
+  const dir = await mkdtemp(resolve('.tmp/vm-recovery-'))
+  const closes: unknown[] = [],
+    logs: string[] = []
+  try {
+    await writeFile(join(dir, 'workspace-fixture'), 'recoverable source\n')
+    await expect(
+      finishVmSync(
+        async () => {
+          throw new Error('guest unavailable')
+        },
+        {
+          close: async (options) => {
+            closes.push(options)
+            if (!options?.preserveWorkspace) await rm(dir, { recursive: true })
+          },
+        },
+        dir,
+        (line) => logs.push(line),
+      ),
+    ).rejects.toThrow('guest unavailable')
+    expect(closes).toEqual([{ preserveWorkspace: true }])
+    expect(await Bun.file(join(dir, 'workspace-fixture')).text()).toBe(
+      'recoverable source\n',
+    )
+    expect(await Bun.file(join(dir, 'recovery.json')).json()).toMatchObject({
+      state: 'sync-incomplete',
+      error: 'guest unavailable',
+    })
+    expect(logs[0]).toContain(dir)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('partial final sync retains work; complete final sync cleans up', async () => {
+  await mkdir('.tmp', { recursive: true })
+  for (const partial of [true, false]) {
+    const dir = await mkdtemp(resolve('.tmp/vm-final-'))
+    const result = {
+      written: ['src/a.ts'],
+      deleted: [],
+      conflicts: [],
+      rejected: partial ? [{ path: '.git/HEAD', reason: 'protected' }] : [],
+    }
+    let preserve: boolean | undefined
+    try {
+      expect(
+        await finishVmSync(
+          async () => result,
+          {
+            close: async (options) => {
+              preserve = options?.preserveWorkspace
+              if (!preserve) await rm(dir, { recursive: true })
+            },
+          },
+          dir,
+        ),
+      ).toEqual(result)
+      expect(preserve).toBe(partial)
+      expect(await Bun.file(join(dir, 'recovery.json')).exists()).toBe(partial)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+})
 
 test('guest env: a fixed baseline, plus only adapter additions and allowlisted names; never the host env', () => {
   const baseline = {

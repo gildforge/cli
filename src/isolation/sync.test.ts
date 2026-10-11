@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  rename,
   stat,
   symlink,
   writeFile,
@@ -171,4 +172,73 @@ test('path validation', () => {
     expect(validPath(ok)).toBe(true)
   for (const bad of ['', '/a', 'a//b', '../a', 'a/..', './a', 'a\0b', 7])
     expect(validPath(bad)).toBe(false)
+})
+
+test('automatic sync preserves host Git metadata and applies ordinary source edits', async () => {
+  const t = await setup()
+  try {
+    await mkdir(join(t.host, '.git/hooks'), { recursive: true })
+    await writeFile(join(t.host, '.git/config'), 'host configuration fixture\n')
+    await writeFile(join(t.host, '.git/hooks/fixture'), 'host hook fixture\n')
+    const baseline = await hostManifest(t.host)
+    await cp(join(t.host, '.git'), join(t.guest, '.git'), { recursive: true })
+    await writeFile(
+      join(t.guest, '.git/config'),
+      'guest configuration fixture\n',
+    )
+    await rm(join(t.guest, '.git/hooks/fixture'))
+    await writeFile(join(t.guest, '.git/HEAD'), 'guest reference fixture\n')
+    await writeFile(join(t.guest, 'src/a.ts'), 'source edit\n')
+    const r = await t.sync(baseline)
+    expect(r.written).toEqual(['src/a.ts'])
+    expect(r.deleted).toEqual([])
+    expect(r.rejected.map((e) => e.path).sort()).toEqual([
+      '.git/HEAD',
+      '.git/config',
+      '.git/hooks/fixture',
+    ])
+    expect(await readFile(join(t.host, '.git/config'), 'utf8')).toBe(
+      'host configuration fixture\n',
+    )
+    expect(await readFile(join(t.host, '.git/hooks/fixture'), 'utf8')).toBe(
+      'host hook fixture\n',
+    )
+    expect(existsSync(join(t.host, '.git/HEAD'))).toBe(false)
+    expect(await readFile(join(t.host, 'src/a.ts'), 'utf8')).toBe(
+      'source edit\n',
+    )
+  } finally {
+    await rm(t.base, { recursive: true })
+  }
+})
+
+test('host changes during asynchronous guest retrieval are checked after retrieval', async () => {
+  const t = await setup()
+  try {
+    await writeFile(join(t.guest, 'src/a.ts'), 'guest edit\n')
+    const files = dirGuest(t.guest)
+    const r = await t.sync(t.baseline, {
+      list: files.list,
+      read: async (path) => {
+        const data = await files.read(path)
+        await rename(join(t.host, 'src'), join(t.host, 'previous-src'))
+        await mkdir(join(t.host, 'src'))
+        await writeFile(
+          join(t.host, 'src/a.ts'),
+          'new host directory fixture\n',
+        )
+        return data
+      },
+    })
+    expect(r.written).toEqual([])
+    expect(await readFile(join(t.host, 'src/a.ts'), 'utf8')).toBe(
+      'new host directory fixture\n',
+    )
+    expect(await readFile(join(t.host, 'previous-src/a.ts'), 'utf8')).toBe(
+      'a\n',
+    )
+    expect(await readFile(r.conflicts[0].saved!, 'utf8')).toBe('guest edit\n')
+  } finally {
+    await rm(t.base, { recursive: true })
+  }
 })

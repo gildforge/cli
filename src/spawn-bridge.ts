@@ -240,7 +240,8 @@ export class MentionBridge {
           this.opts.client,
           {
             repo: channel.repo,
-            since: this.head.get(channel.repo) ?? this.saved.cursors[channel.repo],
+            since:
+              this.head.get(channel.repo) ?? this.saved.cursors[channel.repo],
             onPage: (page) => {
               attempt = 0
               this.page(channel, page)
@@ -373,7 +374,12 @@ export class MentionBridge {
           { owner, repo: name } as never,
           undefined as never,
           { state: 'open', labels: t.label, per_page: 50 } as never,
-        )) as unknown as { number: number; title: string; labels: { name: string }[]; user: { login: string } }[]
+        )) as unknown as {
+          number: number
+          title: string
+          labels: { name: string }[]
+          user: { login: string }
+        }[]
         for (const issue of issues.slice().reverse())
           this.trigger(repo, {
             event: 'issues',
@@ -424,7 +430,12 @@ export class MentionBridge {
     // Events without a subject (push, workflow_run) name no issue to read.
     if (!subject) return
     // Namespaced so a trigger id can never collide with a mention message id.
-    const key = `trigger:${repo}#${subject.number}:${match.spec}`
+    // Label backlog subscriptions intentionally represent one assignment per
+    // subject. Other subscriptions represent individual durable stream events.
+    const key =
+      match.action === 'labeled'
+        ? `trigger:${repo}#${subject.number}:${match.spec}`
+        : `trigger:${repo}:${record.event}:${record.id}:${match.spec}`
     if (this.seen.has(key)) return
     this.seen.add(key)
     const t = {

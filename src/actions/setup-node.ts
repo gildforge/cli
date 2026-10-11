@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
+import { unsupportedRuntimeAction } from './runtime-support'
 
 // Immutable upstream bundles: execute setup-node itself, including its semver,
 // manifest fallback and platform-specific @actions/tool-cache implementation.
@@ -36,6 +37,8 @@ export async function setupNode(
   run: ActionCommand,
   output: (line: string) => Promise<void>,
 ): Promise<string | null> {
+  const unsupported = unsupportedRuntimeAction(uses, inputs)
+  if (unsupported) throw Error(unsupported)
   const ref = uses.split('@')[1],
     release =
       releases[ref] ?? Object.values(releases).find((r) => r.sha === ref)
@@ -83,8 +86,6 @@ export async function setupNode(
     INPUT_TOKEN: '',
     'INPUT_PACKAGE-MANAGER-CACHE': 'false',
   }
-  if (inputs.cache)
-    await output('[gild: dependency cache options are a no-op on this machine]')
   const exit = await run(
     ['node', join(action, 'dist', 'setup', 'index.js')],
     actionEnv,

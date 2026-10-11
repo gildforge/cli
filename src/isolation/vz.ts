@@ -182,7 +182,7 @@ export async function startVz(
   const t0 = Date.now()
   let helper: ReturnType<typeof spawn> | undefined
   const listeners: Server[] = []
-  const stop = async () => {
+  const stop = async (options?: { preserveWorkspace?: boolean }) => {
     for (const l of listeners) l.close()
     if (helper && helper.exitCode === null && helper.signalCode === null) {
       const exited = new Promise((r) => helper!.once('exit', r))
@@ -192,7 +192,8 @@ export async function startVz(
         helper.kill('SIGKILL')
     }
     await rm(sockDir, { recursive: true, force: true })
-    await rm(vmDir, { recursive: true, force: true })
+    if (!options?.preserveWorkspace)
+      await rm(vmDir, { recursive: true, force: true })
   }
   try {
     cloneTree(cfg.helper, cfg.rootfs, root)

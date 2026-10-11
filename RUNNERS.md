@@ -1,5 +1,9 @@
 # gild runners
 
+Artifact upload and dependency caching are unsupported and fail explicitly.
+See [isolation support and recovery](docs/ISOLATION-SUPPORT.md) for the distinction
+between workflow backends, interactive spawn modes and verified real-agent use.
+
 Register a Linux or macOS machine with a repository you own or administer:
 
 ```sh

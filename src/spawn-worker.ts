@@ -57,7 +57,9 @@ type Options = {
   /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
   vm?: { configDir: string }
 }
-const options: Options = JSON.parse(process.argv[2])
+const options: Options = JSON.parse(
+  process.argv[process.argv[2] === '__vm-worker' ? 3 : 2],
+)
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
 function credential<T>(type: string, key: string, wanted?: boolean) {
   if (!wanted) return undefined
@@ -243,16 +245,24 @@ function finish(code: number, terminate = true) {
       // --vm: the guest's last changes come back before the VM is stopped.
       const vm =
         child && 'dispose' in child
-          ? child.dispose().then((r) => {
-              if (!r) return
-              console.error(
-                `gild: working directory synced from the VM: ${describeSync(r)}`,
-              )
-              for (const c of r.conflicts)
+          ? child
+              .dispose()
+              .then((r) => {
+                if (!r) return
                 console.error(
-                  `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+                  `gild: working directory synced from the VM: ${describeSync(r)}`,
                 )
-            })
+                for (const c of r.conflicts)
+                  console.error(
+                    `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+                  )
+              })
+              .catch((error) => {
+                console.error(
+                  `gild: final VM sync failed: ${(error as Error).message}; recovery workspace retained`,
+                )
+                code ||= 1
+              })
           : undefined
       void Promise.all([reporter?.close(), vm]).finally(() => {
         // A signal exit cannot wait forever for a terminal reader that stopped.
@@ -326,31 +336,33 @@ async function main() {
     (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
   )
     return fallback('PTY unavailable')
-  let pty: typeof import('node-pty')
+  let pty: typeof import('node-pty') | undefined
   try {
-    const nodePty = options.ptyModule
-    if (!nodePty)
-      throw new Error(
-        'spawn needs the PTY module shipped in the gildforge platform package.',
-      )
-    const require = createRequire(nodePty)
-    // Keep the macOS helper executable, including installs with restrictive modes.
-    const ptyRoot = dirname(nodePty)
-    if (process.platform === 'darwin') {
-      const helper = join(
-        ptyRoot,
-        '..',
-        'prebuilds',
-        `${process.platform}-${process.arch}`,
-        'spawn-helper',
-      )
-      try {
-        chmodSync(helper, 0o755)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (!options.vm) {
+      const nodePty = options.ptyModule
+      if (!nodePty)
+        throw new Error(
+          'spawn needs the PTY module shipped in the gildforge platform package.',
+        )
+      const require = createRequire(nodePty)
+      // Keep the macOS helper executable, including installs with restrictive modes.
+      const ptyRoot = dirname(nodePty)
+      if (process.platform === 'darwin') {
+        const helper = join(
+          ptyRoot,
+          '..',
+          'prebuilds',
+          `${process.platform}-${process.arch}`,
+          'spawn-helper',
+        )
+        try {
+          chmodSync(helper, 0o755)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
       }
+      pty = require(nodePty)
     }
-    pty = require(nodePty)
   } catch (error) {
     return fallback(error)
   }
@@ -564,7 +576,7 @@ async function main() {
           cols: options.detach?.cols ?? (process.stdout.columns || 80),
           rows: options.detach?.rows ?? (process.stdout.rows || 24),
         })
-      : pty.spawn(binary, prepared?.args ?? options.args, {
+      : pty!.spawn(binary, prepared?.args ?? options.args, {
           name: 'xterm-256color',
           cols: options.detach?.cols ?? process.stdout.columns,
           rows: options.detach?.rows ?? process.stdout.rows,

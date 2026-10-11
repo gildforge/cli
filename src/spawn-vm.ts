@@ -3,8 +3,7 @@
 // and everything else (spawn-worker.ts). This file only builds the guest
 // child and the hook relay.
 import { createConnection } from 'node:net'
-import { mkdtemp, readFile, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
@@ -39,8 +38,59 @@ export interface VmChild {
   kill(): void
   /** Copy the guest's changes to the working directory back to the host now. */
   sync(): Promise<SyncResult>
-  /** Sync one last time, then stop the VM. Safe to call more than once. */
+  /** Sync once, then stop; incomplete sync retains the workspace for recovery. */
   dispose(): Promise<SyncResult | undefined>
+}
+
+/** Shut down the VM without deleting work that could not safely reach the host. */
+export async function finishVmSync(
+  sync: () => Promise<SyncResult>,
+  isolation: Pick<Isolation, 'close'>,
+  vmDir: string,
+  log: (line: string) => void = () => {},
+) {
+  let result: SyncResult | undefined, failure: unknown
+  try {
+    result = await sync()
+  } catch (e) {
+    failure = e
+  }
+  const preserve =
+    failure !== undefined ||
+    !result ||
+    result.conflicts.length > 0 ||
+    result.rejected.length > 0
+  try {
+    await isolation.close({ preserveWorkspace: preserve })
+  } catch (e) {
+    log(`VM shutdown failed; recovery workspace: ${vmDir}`)
+    throw e
+  }
+  if (preserve) {
+    log(`VM workspace retained for recovery: ${vmDir}`)
+    // No tokens or process environment are persisted in this host-owned note.
+    await writeFile(
+      join(vmDir, 'recovery.json'),
+      JSON.stringify(
+        {
+          state: 'sync-incomplete',
+          createdAt: new Date().toISOString(),
+          error:
+            failure instanceof Error
+              ? failure.message
+              : failure
+                ? String(failure)
+                : undefined,
+          result,
+        },
+        null,
+        2,
+      ) + '\n',
+      { mode: 0o600 },
+    )
+  }
+  if (failure !== undefined) throw failure
+  return result!
 }
 
 /** Env for the guest: a fixed baseline plus only what the adapter or profile added; never the host env. */
@@ -95,7 +145,9 @@ export async function startVmChild(opts: {
     )
   // What the guest starts from: the baseline every later sync is compared to.
   const baseline = await hostManifest(opts.cwd)
-  const vmDir = await mkdtemp(join(tmpdir(), 'gild-spawn-vm-'))
+  const vmDir = await mkdtemp(
+    join(await privateSessionsDirectory(), `${opts.sessionId}.vm-`),
+  )
   const iso: Isolation = await startVm(host.vm, opts.cwd, vmDir, opts.log)
   const fail = async (e: unknown) => {
     await iso.close()
@@ -195,16 +247,7 @@ export async function startVmChild(opts: {
       resume() {},
       kill: () => pty.close(),
       sync,
-      dispose: () =>
-        (disposed ??= sync()
-          .then(
-            (r) => r,
-            (e) => {
-              opts.log?.(`final sync failed: ${(e as Error).message}`)
-              return undefined
-            },
-          )
-          .finally(() => iso.close())),
+      dispose: () => (disposed ??= finishVmSync(sync, iso, vmDir, opts.log)),
     }
   } catch (e) {
     return fail(e)

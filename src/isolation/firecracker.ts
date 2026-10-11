@@ -181,6 +181,17 @@ export function vsockMembers(
   }
 }
 
+/** Checked bytes, not a signed 32-bit shift: large work images stay positive. */
+export function workImageBytes(usedKiB: number) {
+  if (!Number.isSafeInteger(usedKiB) || usedKiB < 0)
+    throw new Error('invalid workspace disk usage')
+  const sizeMiB = Math.max(256, Math.ceil((usedKiB * 2) / 1024) + 128)
+  const bytes = sizeMiB * 1024 ** 2
+  if (!Number.isSafeInteger(bytes) || bytes > 8 * 1024 ** 3)
+    throw new Error('workspace VM image exceeds the 8 GiB limit')
+  return bytes
+}
+
 export interface BootTimings {
   imageMs: number
   bootToAgentMs: number
@@ -203,9 +214,9 @@ export async function startFirecracker(
   const used = Number(
     execFileSync('du', ['-sk', work], { encoding: 'utf8' }).split(/\s+/)[0],
   )
-  const sizeMiB = Math.max(256, Math.ceil((used * 2) / 1024) + 128)
+  const sizeBytes = workImageBytes(used)
   await (await openFile(image, 'w', 0o600)).close()
-  await truncate(image, sizeMiB << 20)
+  await truncate(image, sizeBytes)
   execFileSync('mke2fs', ['-q', '-t', 'ext4', '-d', work, '-F', image], {
     stdio: 'ignore',
   })
@@ -297,12 +308,13 @@ export async function startFirecracker(
       timings,
       pid: fc.pid!,
       ...vsockMembers(open, uds, work, listeners),
-      close: async () => {
+      close: async (options) => {
         for (const l of listeners) l.close()
         kill()
         await serial.close()
         await rm(sockDir, { recursive: true, force: true })
-        await rm(vmDir, { recursive: true, force: true })
+        if (!options?.preserveWorkspace)
+          await rm(vmDir, { recursive: true, force: true })
       },
     }
   } catch (e) {
