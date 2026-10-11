@@ -386,3 +386,37 @@ for (const scenario of [
     }
   }, 25000)
 }
+
+// Keep a blocked installed CLI command from becoming an opaque outer timeout.
+test('profile PTY: blocked send fails at its own deadline with command diagnostics', async () => {
+  const proc = Bun.spawn(
+    ['python3', resolve('scripts/fixtures/events-harness.py'), '--profile'],
+    {
+      env: {
+        ...process.env,
+        TEST_GILD_COMMAND: JSON.stringify([
+          'python3',
+          resolve('scripts/fixtures/events-slow-cli.py'),
+          JSON.stringify(command()),
+        ]),
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const timer = setTimeout(() => proc.kill('SIGTERM'), 20000)
+  try {
+    const [code, out, err] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    expect(code).toBe(1)
+    expect(out).toBe('')
+    expect(err).toContain('subprocess.TimeoutExpired')
+    expect(err).toContain("'send', 'fixture', 'first'")
+    expect(err).toContain('timed out after 8 seconds')
+  } finally {
+    clearTimeout(timer)
+  }
+}, 25000)
