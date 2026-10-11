@@ -2,17 +2,21 @@
 
 The CLI consumes the website owner's minimal manifest/selection contract and
 canonical helper from signed website PR97 commit
-`1f9f9609e333d1de252adc048db398bcd7fa74d1`, based on agreed proposal `41c15ce`.
-Only the required generated canonical helper, contract and client are copied.
+`665af2a3e6eb95c67788ca06df5ec5890d93dae0`, based on agreed proposal `41c15ce`.
+Only the required generated canonical helper, contract, additive scopes and client
+are copied. The helper/contract/client outputs are unchanged from `1f9f960`.
 Their exact-commit sources, generator and output hashes were independently
 verified against Ava's transfer ledger; receipt is recorded in
-`agent-profile-transfer-1f9f960.json`. Generated files are preserved byte-for-byte.
+`agent-profile-transfer-665af2a.json` (the earlier receipt remains historical). Generated files are preserved byte-for-byte.
 
-The proposed full scopes output is held: it contains historical website/CLI
-drift that adds `channel:write` to `grantScopes`, unrelated to this feature.
-Ava confirmed the difference and requested a minimal owner-generated additive
-module. Existing CLI scope issuance/helper behavior is unchanged. No generated
-module is hand-edited to bypass the hold. The copied client retains its existing
+The original full scopes output was held because it carried unrelated historical
+website/CLI `grantScopes` drift. The website owner resolved it with a separate
+`agent-profile-scopes.ts`, preserved byte-for-byte. Existing `src/api/scopes.ts`
+is byte-exact CLI base `ca5d606`; grant behavior is unchanged. Consumer tests deny
+null/wildcard/unrelated scopes and anonymous principals, allow only the explicitly
+named feature scope, and preserve legacy grant/check semantics. These constants
+remain separate from issuance SCOPES; no token issuance or live route is added.
+The copied client retains its existing
 request/response behavior and adds stable error codes with compatible old
 constructor calls; tests cover existing calls and malformed error code entries.
 
@@ -33,8 +37,8 @@ Returning byte buffers grants no execution/delivery authority. There are no
 catalog/network calls, live policy routes, token upgrades, profile/task/claim
 schemas, launch wiring, harness delivery or runtime enforcement in this slice.
 
-Lightweight Intel macOS checks: 71 tests pass, zero fail, 266 assertions across
-seven consumer/native/client/event/import files (4.07 seconds). Typecheck,
+Lightweight Intel macOS checks: 73 tests pass, zero fail, 307 assertions across
+eight consumer/native/client/event/import files (3.97 seconds). Typecheck,
 format and diff checks pass. The generated helper produces the exact 16-byte
 ASCII, 13-byte UTF8 and 1069-byte ECC vectors, including bundle digest
 `8642aec70aefee472151de8b27fc97a08ff9bb85bf927fb69afc53a4ae499d6c`.
