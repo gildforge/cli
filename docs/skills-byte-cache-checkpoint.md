@@ -43,7 +43,9 @@ Focused Intel macOS checks: 49 pass, 0 fail, 148 assertions across the new byte
 suite and existing native anchor/sync suites, about 1.5 seconds. Typecheck and
 formatting pass. Seven removal proofs fail by assertion for missing byte digest,
 traversal, directory no-follow, collision, offline recheck, license, and
-non-replacing publication. Sources are restored after each proof. The existing
+non-replacing publication. Sources are restored after each proof. Reproduce with
+`node scripts/skill-bytes-revert.mjs`; the assertion-failure ledger is written to
+`.tmp/skill-bytes-revert-evidence.json`. The existing
 hosted macOS native gate now also runs this byte suite; no workflow permission,
 job, release trigger or package version is changed. Full local heavy gates are
 not run while website audit/timing slots are reserved; hosted CI remains separate
