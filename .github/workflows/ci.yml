@@ -21,6 +21,8 @@ jobs:
           node-version: '24'
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test src/runner-setup-node.test.ts
+      - name: Verify native descriptor sync and special-file compatibility
+        run: bun test src/isolation/anchored-fs.test.ts src/isolation/sync.test.ts --timeout 30000
       - run: npm install -g npm@11.16.0
       - run: bun run pack
       - run: bun run test:install

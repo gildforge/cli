@@ -33,10 +33,25 @@ Incomplete final sync stops the VM while keeping its private session directory:
 `~/.gild/sessions/<session>.vm-<suffix>/`. The CLI prints that exact path and
 writes a private `recovery.json`. On macOS the directory contains `work/`; on
 Firecracker it contains `work.ext4`. A transport failure returns an error;
-conflicts and protected metadata also retain the workspace. A complete sync
+unresolved conflicts and protected metadata also retain the workspace. Conflicts
+stay pending across repeated syncs until the copies are explicitly resolved.
+Regular-file bytes are saved privately under `<session>.conflicts`; non-file
+entries and deletions are described in private JSON under the adjacent
+`<session>.conflicts.metadata` directory. A complete sync
 without either condition removes the workspace normally. Recovery directories
 remain until the owner has recovered/reviewed the work and removes them; this
 change does not silently prune recoverable work or mount disk images.
+
+The worker finalizes sync/recovery before publishing `exited`. An incomplete
+final sync produces a nonzero session code and includes only the private
+`recovery.directory` and `recovery.note` paths in that local event. `gild stop`
+prints it for attached and detached sessions; event subscribers also receive it.
+Attached callers receive the exact location on stderr, and detached viewers
+receive a recovery notice before the output stream closes.
+
+Existing host FIFO/socket/device entries are inspected without opening their
+contents and omitted from the initial manifest. Guest changes aimed at these
+entries remain refused; unrelated inspection errors are propagated.
 
 The descriptor operations use a small, lazy Bun FFI binding to system libc.
 VM workers run in the CLI's compiled Bun runtime; ordinary PTY workers retain
@@ -51,11 +66,12 @@ inputs on setup-node/setup-go now fail clearly instead of reporting a successful
 no-op. Remove a cache input to run without caching. A workflow's explicit
 `continue-on-error` policy still applies to the failed step.
 
-`src/actions/support.ts` is generated from the website and still describes the
-older import warnings. The CLI has a local runtime rejection boundary so older
-accepted jobs cannot succeed silently. The website owner must update the
-canonical support table and regenerate the CLI contract; do not edit another
-agent's website checkout to do this.
+`src/actions/support.ts` incorporates the website owner's generated contract from
+site commit `476c0887c666b4697db5b0af40239f77cb609252`, with SHA256
+`8fce26cee312b885ea1b394ba865ac577207c5627073948ab1b8d971ce707873`.
+It reports the same explicit unsupported-backend errors. The CLI also retains a
+runtime rejection boundary so older accepted jobs cannot succeed silently.
+Missing, empty, boolean false and string `"false"` cache inputs remain allowed.
 
 ## Incremental work and exact-version rehearsal
 

@@ -19,6 +19,7 @@ import {
   hostManifest,
   syncBack,
   type SyncResult,
+  type RecoveryLocation,
 } from './isolation/sync'
 
 export const GUEST_AGENT = '/usr/local/bin/gild-guest-agent'
@@ -40,6 +41,18 @@ export interface VmChild {
   sync(): Promise<SyncResult>
   /** Sync once, then stop; incomplete sync retains the workspace for recovery. */
   dispose(): Promise<SyncResult | undefined>
+  /** Available even when final sync throws; contains only private local paths. */
+  readonly recovery?: RecoveryLocation
+}
+
+export class VmSyncError extends Error {
+  constructor(
+    message: string,
+    readonly recovery: RecoveryLocation,
+    cause: unknown,
+  ) {
+    super(message, { cause })
+  }
 }
 
 /** Shut down the VM without deleting work that could not safely reach the host. */
@@ -47,7 +60,7 @@ export async function finishVmSync(
   sync: () => Promise<SyncResult>,
   isolation: Pick<Isolation, 'close'>,
   vmDir: string,
-  log: (line: string) => void = () => {},
+  log: (line: string) => void = (line) => console.error(`gild: ${line}`),
 ) {
   let result: SyncResult | undefined, failure: unknown
   try {
@@ -60,36 +73,58 @@ export async function finishVmSync(
     !result ||
     result.conflicts.length > 0 ||
     result.rejected.length > 0
+  const recovery: RecoveryLocation = {
+    directory: vmDir,
+    note: join(vmDir, 'recovery.json'),
+  }
   try {
     await isolation.close({ preserveWorkspace: preserve })
   } catch (e) {
     log(`VM shutdown failed; recovery workspace: ${vmDir}`)
-    throw e
+    throw new VmSyncError(
+      `VM shutdown failed: ${(e as Error).message}`,
+      recovery,
+      e,
+    )
   }
   if (preserve) {
     log(`VM workspace retained for recovery: ${vmDir}`)
     // No tokens or process environment are persisted in this host-owned note.
-    await writeFile(
-      join(vmDir, 'recovery.json'),
-      JSON.stringify(
-        {
-          state: 'sync-incomplete',
-          createdAt: new Date().toISOString(),
-          error:
-            failure instanceof Error
-              ? failure.message
-              : failure
-                ? String(failure)
-                : undefined,
-          result,
-        },
-        null,
-        2,
-      ) + '\n',
-      { mode: 0o600 },
-    )
+    try {
+      await writeFile(
+        join(vmDir, 'recovery.json'),
+        JSON.stringify(
+          {
+            state: 'sync-incomplete',
+            createdAt: new Date().toISOString(),
+            error:
+              failure instanceof Error
+                ? failure.message
+                : failure
+                  ? String(failure)
+                  : undefined,
+            result,
+          },
+          null,
+          2,
+        ) + '\n',
+        { mode: 0o600 },
+      )
+    } catch (e) {
+      throw new VmSyncError(
+        `Writing recovery note failed: ${(e as Error).message}`,
+        recovery,
+        e,
+      )
+    }
+    if (result) result = { ...result, recovery }
   }
-  if (failure !== undefined) throw failure
+  if (failure !== undefined)
+    throw new VmSyncError(
+      failure instanceof Error ? failure.message : String(failure),
+      recovery,
+      failure,
+    )
   return result!
 }
 
@@ -237,6 +272,17 @@ export async function startVmChild(opts: {
       return next
     }
     let disposed: Promise<SyncResult | undefined> | undefined
+    let recovery: RecoveryLocation | undefined
+    const dispose = async () => {
+      try {
+        const result = await finishVmSync(sync, iso, vmDir, opts.log)
+        recovery = result.recovery
+        return result
+      } catch (e) {
+        if (e instanceof VmSyncError) recovery = e.recovery
+        throw e
+      }
+    }
     return {
       pid: -1,
       write: (d) => pty.write(d),
@@ -247,7 +293,10 @@ export async function startVmChild(opts: {
       resume() {},
       kill: () => pty.close(),
       sync,
-      dispose: () => (disposed ??= finishVmSync(sync, iso, vmDir, opts.log)),
+      dispose: () => (disposed ??= dispose()),
+      get recovery() {
+        return recovery
+      },
     }
   } catch (e) {
     return fail(e)

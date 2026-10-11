@@ -11,6 +11,21 @@ import { resolve, join } from 'node:path'
 import { AnchoredDirectory } from './anchored-fs'
 import { createHash } from 'node:crypto'
 
+test('manifest metadata inspection propagates errors other than missing or special entries', async () => {
+  await mkdir('.tmp', { recursive: true })
+  const base = await mkdtemp(resolve('.tmp/stat-error-'))
+  const directory = AnchoredDirectory.open(base)
+  try {
+    expect(directory.entry('missing', 'missing', true)).toBeUndefined()
+    directory.close()
+    expect(() => directory.entry('fixture', 'fixture', true)).toThrow(
+      'fstatat entry failed',
+    )
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
 test('descriptor sync executes inside a compiled Bun binary', async () => {
   await mkdir('.tmp', { recursive: true })
   const base = await mkdtemp(resolve('.tmp/compiled-sync-'))

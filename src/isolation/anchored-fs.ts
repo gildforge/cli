@@ -23,6 +23,10 @@ function native() {
     throw new Error('anchored VM sync is supported only on macOS and Linux')
   const errnoSymbol =
     process.platform === 'darwin' ? '__error' : '__errno_location'
+  const statSymbol =
+    process.platform === 'darwin' && process.arch === 'x64'
+      ? 'fstatat$INODE64'
+      : 'fstatat'
   const lib = ffi().dlopen(
     process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
     {
@@ -32,11 +36,13 @@ function native() {
       renameat: { args: ['i32', 'ptr', 'i32', 'ptr'], returns: 'i32' },
       symlinkat: { args: ['ptr', 'i32', 'ptr'], returns: 'i32' },
       readlinkat: { args: ['i32', 'ptr', 'ptr', 'u64'], returns: 'i64' },
+      [statSymbol]: { args: ['i32', 'ptr', 'ptr', 'i32'], returns: 'i32' },
       [errnoSymbol]: { args: [], returns: 'ptr' },
     } as const,
   )
   return {
     ...lib.symbols,
+    metadata: lib.symbols[statSymbol],
     errno: () =>
       new Int32Array(
         ffi().toArrayBuffer(lib.symbols[errnoSymbol]()! as number, 0, 4),
@@ -101,9 +107,36 @@ export class AnchoredDirectory {
       throw e
     }
   }
-  entry(name: string, rel: string): Entry | undefined {
+  entry(name: string, rel: string, skipUnsupported = false): Entry | undefined {
     const p = cstr(name),
       link = Buffer.alloc(4096)
+    // Inspect without opening a FIFO/device/socket. The stat ABI is fixed for
+    // the supported 64-bit platforms; only mode is read from an oversized buffer.
+    if (!['x64', 'arm64'].includes(process.arch))
+      throw new Error('anchored sync metadata requires x64 or arm64')
+    const info = Buffer.alloc(256)
+    const status = Number(
+      sys().metadata(
+        this.fd,
+        ptr(p),
+        ptr(info),
+        process.platform === 'darwin' ? 0x20 : 0x100, // AT_SYMLINK_NOFOLLOW
+      ),
+    )
+    if (status < 0 && sys().errno() === 2) return undefined
+    check(status, 'fstatat entry')
+    const mode =
+      process.platform === 'darwin'
+        ? info.readUInt16LE(4)
+        : info.readUInt32LE(process.arch === 'x64' ? 24 : 16)
+    if (
+      ![constants.S_IFREG, constants.S_IFDIR, constants.S_IFLNK].includes(
+        mode & constants.S_IFMT,
+      )
+    ) {
+      if (skipUnsupported) return undefined
+      throw new Error('unsupported host file type')
+    }
     const n = Number(sys().readlinkat(this.fd, ptr(p), ptr(link), link.length))
     if (n >= 0) {
       if (n === link.length) throw new Error('link target exceeds sync limit')

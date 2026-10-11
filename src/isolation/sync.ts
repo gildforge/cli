@@ -18,12 +18,15 @@ import { mkdirSync } from 'node:fs'
 import type { Entry, GuestFiles } from './session'
 
 export type Manifest = Map<string, Entry>
+export type RecoveryLocation = { directory: string; note: string }
 
 export interface SyncResult {
   written: string[]
   deleted: string[]
   conflicts: { path: string; reason: string; saved?: string }[]
   rejected: { path: string; reason: string }[]
+  /** Final VM sync only: private retained workspace and recovery note. */
+  recovery?: RecoveryLocation
 }
 
 /** The host side of the guest agent's `list` op: same walk, same fields. */
@@ -37,7 +40,7 @@ export async function hostManifest(root: string): Promise<Manifest> {
   ) => {
     for (const name of (await readdir(path)).sort()) {
       const rel = prefix ? `${prefix}/${name}` : name
-      const e = directory.entry(name, rel)
+      const e = directory.entry(name, rel, true)
       if (!e) continue
       out.set(rel, e)
       if (e.k === 'd') {
@@ -104,9 +107,9 @@ export interface SyncOptions {
   /** Where the guest sees it. */
   guestRoot: string
   files: GuestFiles
-  /** Updated in place, so the next sync only carries newer changes. */
+  /** Updated only for applied/resolved changes; conflicts stay pending. */
   baseline: Manifest
-  /** Guest versions of conflicting files are saved here (outside the root). */
+  /** Conflicting bytes and adjacent metadata are saved outside the root. */
   conflictDir: string
   /** Refuse a sync that would copy more than this many bytes. */
   maxBytes?: number
@@ -195,6 +198,24 @@ export async function syncBack(o: SyncOptions): Promise<SyncResult> {
         recovery.close()
       }
     }
+    // Never materialize a conflicting link/directory/deletion in recovery.
+    // Store its exact entry as private JSON, with a host-chosen hashed name.
+    const metadataDir = o.conflictDir + '.metadata'
+    mkdirSync(metadataDir, { recursive: true, mode: 0o700 })
+    const metadata = AnchoredDirectory.open(metadataDir)
+    const name = createHash('sha256').update(rel).digest('hex') + '.json'
+    try {
+      metadata.put(
+        name,
+        { p: name, k: 'f', m: 0o600 },
+        Buffer.from(
+          JSON.stringify({ path: rel, reason, entry: after ?? null }) + '\n',
+        ),
+      )
+      saved ??= join(metadataDir, name)
+    } finally {
+      metadata.close()
+    }
     result.conflicts.push({ path: rel, reason, ...(saved ? { saved } : {}) })
   }
   try {
@@ -211,7 +232,6 @@ export async function syncBack(o: SyncOptions): Promise<SyncResult> {
           parent = root.parent(rel)
         } catch {
           conflict(rel, 'a parent is not a directory on the host', after, data)
-          setBaseline(o.baseline, rel, after)
           continue
         }
         const name = rel.split('/').at(-1)!
@@ -222,7 +242,6 @@ export async function syncBack(o: SyncOptions): Promise<SyncResult> {
         }
         if (!sameEntry(current, before)) {
           conflict(rel, 'changed on the host and in the guest', after, data)
-          setBaseline(o.baseline, rel, after)
           continue
         }
         if (!after) {
