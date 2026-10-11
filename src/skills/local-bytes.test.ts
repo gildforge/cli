@@ -15,11 +15,7 @@ import {
   readdirSync,
 } from 'node:fs'
 import { resolve, join } from 'node:path'
-import {
-  ECC_CANDIDATE,
-  ECC_CANDIDATE_BYTES,
-  readEccCandidate,
-} from './ecc-candidate'
+import { ECC_CANDIDATE, readEccCandidate } from './ecc-candidate'
 import {
   SkillByteCache,
   readPinnedSkillFiles,
@@ -53,11 +49,11 @@ function pin(
 function source(root: string) {
   const dir = join(root, 'source')
   mkdirSync(dir)
-  for (const spec of ECC_CANDIDATE_BYTES)
+  for (const name of ['SKILL.md', 'LICENSE'])
     writeFileSync(
-      join(dir, spec.path),
+      join(dir, name),
       readFileSync(
-        resolve('scripts/fixtures/skills/ecc-verification-loop', spec.path),
+        resolve('scripts/fixtures/skills/ecc-verification-loop', name),
       ),
     )
   return dir
@@ -372,5 +368,112 @@ test('atomic complete-byte publication never replaces an existing destination', 
     expect(readdirSync(root)).toEqual(['object'])
   } finally {
     directory.close()
+  }
+})
+
+test('byte publication establishes private permissions despite restrictive creation mask', () => {
+  const root = fixture(),
+    directory = AnchoredDirectory.open(root),
+    bytes = Buffer.from('private published bytes')
+  const before = process.umask(0o777)
+  let failure: unknown, published: boolean | undefined
+  try {
+    published = directory.putRegularIfAbsent('object', bytes)
+  } catch (error) {
+    failure = error
+  } finally {
+    process.umask(before)
+    directory.close()
+  }
+  expect(failure).toBeUndefined()
+  expect(published).toBe(true)
+  expect(statSync(join(root, 'object')).mode & 0o777).toBe(0o600)
+  expect(readFileSync(join(root, 'object'))).toEqual(bytes)
+})
+
+test('interruption immediately after publication leaves a readable single-link object', async () => {
+  const root = fixture(),
+    bytes = Buffer.from('interruption fixture bytes'),
+    expected = pin('SKILL.md', bytes)
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      'run',
+      resolve('scripts/fixtures/skill-cache-interruption.ts'),
+      root,
+      expected.sha256,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const timer = setTimeout(() => child.kill('SIGKILL'), 5000)
+  try {
+    const [exit, err] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+    ])
+    expect({ exit, err }).toEqual({ exit: 137, err: '' })
+    expect(statSync(join(root, expected.sha256)).nlink).toBe(1)
+    expect(readdirSync(root)).toEqual([expected.sha256])
+    const cache = new SkillByteCache(root)
+    try {
+      expect(cache.read(expected)).toEqual(bytes)
+      expect(cache.store(expected, bytes)).toEqual(bytes)
+    } finally {
+      cache.close()
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}, 10000)
+
+test('removal evidence rejects a setup exception whose source excerpt mentions expect', async () => {
+  const root = fixture(),
+    source = join(root, 'false-proof.test.ts'),
+    runner = join(root, 'runner.mjs')
+  writeFileSync(
+    source,
+    "import {test,expect} from 'bun:test';\nconst changeMe=1;\ntest('setup exception',()=>{\n const misleading='expect(';\n throw new Error('ENOENT fixture setup failed');\n expect(changeMe).toBe(2);\n});\n",
+  )
+  writeFileSync(
+    runner,
+    `import { prove } from ${JSON.stringify(resolve('scripts/review-revert.mjs'))};\ntry { prove('false-proof-guard',${JSON.stringify(source)},s=>s.replace('changeMe=1','changeMe=2'),${JSON.stringify(source)},'setup exception'); process.exitCode=2 } catch(e) { if(!e.message.includes('Expected assertion failure')) throw e; console.log('setup-error-rejected') }\n`,
+  )
+  const child = Bun.spawn(['node', runner], { stdout: 'pipe', stderr: 'pipe' })
+  const [exit, out, err] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  expect({ exit, out, err }).toEqual({
+    exit: 0,
+    out: 'setup-error-rejected\n',
+    err: '',
+  })
+  expect(readFileSync(source, 'utf8')).toContain('changeMe=1')
+})
+
+test('foreign and internal-looking hard-link remnants stay rejected without automatic repair', () => {
+  const root = fixture(),
+    dir = join(root, 'cache'),
+    outside = join(root, 'outside')
+  mkdirSync(dir, { mode: 0o700 })
+  const bytes = Buffer.from('verified foreign bytes'),
+    spec = pin('SKILL.md', bytes)
+  writeFileSync(outside, bytes)
+  linkSync(outside, join(dir, spec.sha256))
+  const cache = new SkillByteCache(dir)
+  try {
+    expect(() => cache.read(spec)).toThrow('link count')
+    expect(() => cache.store(spec, bytes)).toThrow('link count')
+    expect(readFileSync(outside)).toEqual(bytes)
+    rmSync(join(dir, spec.sha256))
+    const remnant = join(dir, '.gild-bytes-' + 'a'.repeat(24))
+    writeFileSync(remnant, bytes)
+    linkSync(remnant, join(dir, spec.sha256))
+    expect(() => cache.read(spec)).toThrow('link count')
+    expect(() => cache.store(spec, bytes)).toThrow('link count')
+    expect(statSync(remnant).nlink).toBe(2)
+  } finally {
+    cache.close()
   }
 })

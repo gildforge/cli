@@ -17,7 +17,13 @@ export function prove(name, file, mutate, tests, pattern) {
     )
     mkdirSync('.tmp', { recursive: true })
     writeFileSync('.tmp/revert-' + name + '.log', result.stdout + result.stderr)
-    if (result.status !== 1 || !result.stderr.includes('expect('))
+    // Source excerpts can contain expect( even when setup failed. Require Bun's
+    // actual assertion diagnostic, not an excerpt or generic runtime exception.
+    const stderr = result.stderr.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    if (
+      result.status !== 1 ||
+      !/^error: expect\((received|function)\)/m.test(stderr)
+    )
       throw Error(
         'Expected assertion failure for ' + name + ': ' + result.stderr,
       )

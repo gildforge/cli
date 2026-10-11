@@ -81,19 +81,38 @@ const cases = [
   [
     'no-replace',
     native,
-    (s) =>
-      s
-        .replace(
-          'sys().linkat(this.fd, ptr(temp), this.fd, ptr(dest), 0)',
-          'sys().renameat(this.fd, ptr(temp), this.fd, ptr(dest))',
-        )
-        .replace(
-          "check(sys().unlinkat(this.fd, ptr(temp), 0), 'unlinkat bytes')",
-          'sys().unlinkat(this.fd, ptr(temp), 0)',
-        ),
+    (s) => s.replace("process.platform === 'darwin' ? 4 : 1", '0'),
     'atomic complete-byte publication',
   ],
 ]
+cases.push([
+  'private-mode',
+  native,
+  (s) => s.replace('fchmodSync(fd, 0o600)', 'void fd'),
+  'byte publication establishes private permissions',
+])
+cases.push([
+  'interrupted-publication',
+  native,
+  (s) =>
+    s
+      .replace(
+        "process.platform === 'darwin' ? 'renameatx_np' : 'renameat2'",
+        "'linkat'",
+      )
+      .replace("process.platform === 'darwin' ? 4 : 1", '0'),
+  'interruption immediately after publication',
+])
+cases.push([
+  'assertion-diagnostic',
+  'scripts/review-revert.mjs',
+  (s) =>
+    s.replace(
+      '!/^error: expect\\((received|function)\\)/m.test(stderr)',
+      "!stderr.includes('expect(')",
+    ),
+  'removal evidence rejects',
+])
 const evidence = cases.map(([name, file, mutate, pattern]) =>
   prove('skill-bytes-' + name, file, mutate, suite, pattern),
 )

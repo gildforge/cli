@@ -28,6 +28,8 @@ function native() {
     process.platform === 'darwin' && process.arch === 'x64'
       ? 'fstatat$INODE64'
       : 'fstatat'
+  const publishSymbol =
+    process.platform === 'darwin' ? 'renameatx_np' : 'renameat2'
   const lib = ffi().dlopen(
     process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
     {
@@ -35,7 +37,10 @@ function native() {
       mkdirat: { args: ['i32', 'ptr', 'u32'], returns: 'i32' },
       unlinkat: { args: ['i32', 'ptr', 'i32'], returns: 'i32' },
       renameat: { args: ['i32', 'ptr', 'i32', 'ptr'], returns: 'i32' },
-      linkat: { args: ['i32', 'ptr', 'i32', 'ptr', 'i32'], returns: 'i32' },
+      [publishSymbol]: {
+        args: ['i32', 'ptr', 'i32', 'ptr', 'u32'],
+        returns: 'i32',
+      },
       symlinkat: { args: ['ptr', 'i32', 'ptr'], returns: 'i32' },
       readlinkat: { args: ['i32', 'ptr', 'ptr', 'u64'], returns: 'i64' },
       [statSymbol]: { args: ['i32', 'ptr', 'ptr', 'i32'], returns: 'i32' },
@@ -45,6 +50,7 @@ function native() {
   return {
     ...lib.symbols,
     metadata: lib.symbols[statSymbol],
+    publishNoReplace: lib.symbols[publishSymbol],
     errno: () =>
       new Int32Array(
         ffi().toArrayBuffer(lib.symbols[errnoSymbol]()! as number, 0, 4),
@@ -192,20 +198,35 @@ export class AnchoredDirectory {
       ),
       'openat bytes',
     )
+    let made = true
     try {
       try {
+        // Establish permissions on the descriptor before any bytes are written;
+        // do not depend on openat's variadic creation mode across native ABIs.
+        fchmodSync(fd, 0o600)
+        if ((fstatSync(fd).mode & 0o777) !== 0o600)
+          throw new Error('private byte file permissions were not established')
         writeFileSync(fd, data)
         fsyncSync(fd)
       } finally {
         closeSync(fd)
       }
-      const status = sys().linkat(this.fd, ptr(temp), this.fd, ptr(dest), 0)
+      const status = Number(
+        sys().publishNoReplace(
+          this.fd,
+          ptr(temp),
+          this.fd,
+          ptr(dest),
+          process.platform === 'darwin' ? 4 : 1,
+        ),
+      )
       if (status < 0 && sys().errno() === 17) return false
-      check(status, 'linkat bytes')
+      check(status, 'exclusive rename bytes')
+      made = false
       fsyncSync(this.fd)
       return true
     } finally {
-      check(sys().unlinkat(this.fd, ptr(temp), 0), 'unlinkat bytes')
+      if (made) check(sys().unlinkat(this.fd, ptr(temp), 0), 'unlinkat bytes')
     }
   }
   entry(name: string, rel: string, skipUnsupported = false): Entry | undefined {
