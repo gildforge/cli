@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { Socket } from 'node:net'
+import type { RecoveryLocation } from './isolation/sync'
 
 /** Worker side of `gild spawn --detach`: output kept while nobody watches,
  * and the viewers of `gild attach`. The terminal-facing client is spawn-attach.ts. */
@@ -214,12 +215,17 @@ export class DetachedHost {
 }
 
 /** The last line on the events stream of a session that has ended. */
-export function exitLine(session: string, code: number) {
+export function exitLine(
+  session: string,
+  code: number,
+  recovery?: RecoveryLocation,
+) {
   return (
     JSON.stringify({
       session,
       type: 'exited',
       code,
+      ...(recovery ? { recovery } : {}),
       ts: new Date().toISOString(),
     }) + '\n'
   )

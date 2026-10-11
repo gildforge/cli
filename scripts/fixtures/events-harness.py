@@ -1,4 +1,6 @@
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,hashlib,http.server,threading,socketserver
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,hashlib,http.server,threading,socketserver,faulthandler
+# Preserve the failing phase if the unchanged outer 20-second watchdog fires.
+faulthandler.register(signal.SIGTERM,all_threads=True,chain=True)
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 class Server(http.server.ThreadingHTTPServer):
@@ -30,12 +32,12 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
                 self.wfile.write(json.dumps({**body,'repository':'owner/demo','target':'commit:'+sha,'created_at':body['started_at'],'updated_at':body['started_at'],'version':len(reports),'closed':body['ended_at'] is not None,'reported_by':'agent'}).encode())
         api=Server(('127.0.0.1',0),API);threading.Thread(target=api.serve_forever,daemon=True).start()
         cwd=home/'repo';cwd.mkdir()
-        subprocess.run(['git','init','-q',str(cwd)],check=True)
-        subprocess.run(['git','-C',str(cwd),'fetch','-q',str(ROOT),'HEAD','--depth=1'],check=True)
-        subprocess.run(['git','-C',str(cwd),'checkout','-q','FETCH_HEAD'],check=True)
-        sha=subprocess.check_output(['git','-C',str(cwd),'rev-parse','HEAD'],text=True).strip()
+        subprocess.run(['git','init','-q',str(cwd)],check=True,timeout=8)
+        subprocess.run(['git','-C',str(cwd),'fetch','-q',str(ROOT),'HEAD','--depth=1'],check=True,timeout=8)
+        subprocess.run(['git','-C',str(cwd),'checkout','-q','FETCH_HEAD'],check=True,timeout=8)
+        sha=subprocess.check_output(['git','-C',str(cwd),'rev-parse','HEAD'],text=True,timeout=8).strip()
         origin=f'http://127.0.0.1:{api.server_port}'
-        subprocess.run(['git','-C',str(cwd),'remote','add','origin',origin+'/owner/demo.git'],check=True)
+        subprocess.run(['git','-C',str(cwd),'remote','add','origin',origin+'/owner/demo.git'],check=True,timeout=8)
         agent_file=home/'.config/gild/agents/fixture.json';agent_file.parent.mkdir(parents=True)
         agent_file.write_text(json.dumps({'schema':1,'name':'owner/fixture','server':origin,'token':'fixture-scoped-token','publicKey':'test-public','secretKey':'test-private','requestId':'test-request','createdAt':'2026-10-08T00:00:00Z'}));agent_file.chmod(0o600)
         extra=['--as','fixture']
@@ -62,7 +64,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             else:break
     def request(body):
         with socket.socket(socket.AF_UNIX) as c:
-            c.connect(str(path));c.sendall(json.dumps(body).encode()+b'\n');return c.recv(65536)
+            c.settimeout(2);c.connect(str(path));c.sendall(json.dumps(body).encode()+b'\n');return c.recv(65536)
     def status():return json.loads(request({'type':'info'}))
     def wait(check):
         until=time.monotonic()+8
@@ -74,7 +76,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         p=subprocess.run(CLI+['hook','--session',session],input=json.dumps({'hook_event_name':name,**extra}).encode(),env=env,capture_output=True,timeout=2)
         assert p.returncode==0 and p.stdout==b'' and p.stderr==b''
     def send(text):
-        p=subprocess.run(CLI+['send',session,text],env=env,capture_output=True);assert p.returncode==0,p.stderr
+        p=subprocess.run(CLI+['send',session,text],env=env,capture_output=True,timeout=8);assert p.returncode==0,p.stderr
     def lines():
         return [json.loads(l)['line'] for l in buf.splitlines() if l.startswith(b'{') and 'line' in json.loads(l)]
     stream=None;second=None;second_m=None;second_s=None
@@ -106,7 +108,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert {x['id'] for x in sessions}=={'fixture','fixture-2'},sessions
             assert all(x['profile']=='fixture' and x['cwd']==str(cwd) for x in sessions),sessions
             with socket.socket(socket.AF_UNIX) as c:
-                c.connect(str(home/'.gild/sessions/fixture-2.sock'));c.sendall(b'{"type":"info"}\n')
+                c.settimeout(2);c.connect(str(home/'.gild/sessions/fixture-2.sock'));c.sendall(b'{"type":"info"}\n')
                 assert json.loads(c.recv(65536))['state']=='idle'
             # Delivered straight after start: no turn has to finish first.
             sent=subprocess.run(CLI+['send','fixture-2','second session'],env=env,capture_output=True,timeout=8)
@@ -120,7 +122,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
             assert not (home/'.gild/sessions/fixture-2/settings.json').exists()
             reports.clear() # Subsequent assertions concern the original live receipt.
         if reporting:
-            argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True)
+            argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True,timeout=8)
             assert 'fixture-scoped-token' not in argv
         stream=socket.socket(socket.AF_UNIX);stream.connect(str(path));stream.sendall(b'{"type":"subscribe"}\n')
         hook('UserPromptSubmit',prompt='human turn')
@@ -129,7 +131,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
         os.write(m,b'\x15');wait(lambda:lines()==['first'])
         assert status()['state']=='busy'
         if reporting:
-            argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True)
+            argv=subprocess.check_output(['ps','-p',str(status()['pid']),'-o','command='],text=True,timeout=8)
             assert 'fixture-scoped-token' not in argv;read(.2);assert lines()==['first']
         hook('PreToolUse',tool_name='Edit',tool_input={'secret':'local only'});assert status()['state']=='tool_start' and status()['tool']=='Edit'
         hook('PostToolUse',tool_name='Edit');assert status()['state']=='busy'

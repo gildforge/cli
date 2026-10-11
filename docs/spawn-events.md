@@ -165,8 +165,12 @@ unchanged settings and a linked session uploading to a local API.
 silence, each adapter, busy/draft gating, FIFO, fallback timing, settings
 permissions/cleanup, additive hooks, status and privacy/reporting; each selected
 test must fail by assertion. The installed npm launcher runs the same PTY,
-alias and event tests. Hook deadline checks invoke the compiled binary directly,
-as the generated native hook commands do. On this Mac the npm launcher added
+alias and event tests. A controlled clock verifies the exact 200 ms forwarding
+deadline and input cleanup. Separate process checks invoke the compiled binary
+directly, as the generated native hook commands do, with a one-second end-to-end
+limit that also includes executable startup and OS scheduling. The earlier
+400 ms combined limit failed at 508 ms on shared Intel macOS CI; this did not
+measure forwarding time separately. On this Mac the npm launcher added
 about 140 ms: open-stdin expiry was 451 ms through Node versus 289 ms directly
 (including process startup; the internal deadline is 200 ms). No release or
 deployment is part of these checks.

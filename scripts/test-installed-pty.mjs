@@ -37,6 +37,7 @@ const child = spawn(
     'src/spawn-vm.test.ts',
     'src/spawn-bridge.test.ts',
     'src/agent-workflow.e2e.test.ts',
+    'src/api/import-progress.test.ts',
   ],
   {
     cwd: root,

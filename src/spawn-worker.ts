@@ -23,7 +23,11 @@ import { InjectionQueue } from './spawn-queue'
 import { startWatchdog } from './spawn-nudge-worker'
 import type { NudgeEvent } from './spawn-nudge'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
-import { describeSync, type SyncResult } from './isolation/sync'
+import {
+  describeSync,
+  type SyncResult,
+  type RecoveryLocation,
+} from './isolation/sync'
 import {
   DetachedHost,
   endSocket,
@@ -57,7 +61,9 @@ type Options = {
   /** `gild spawn --vm`: run the agent in a microVM; configDir holds isolation.json. */
   vm?: { configDir: string }
 }
-const options: Options = JSON.parse(process.argv[2])
+const options: Options = JSON.parse(
+  process.argv[process.argv[2] === '__vm-worker' ? 3 : 2],
+)
 // Scoped credentials travel over IPC, never argv, env, settings or event payloads.
 function credential<T>(type: string, key: string, wanted?: boolean) {
   if (!wanted) return undefined
@@ -189,7 +195,7 @@ function killGroup(signal: NodeJS.Signals) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
   }
 }
-function restore() {
+function quiesce() {
   process.stdin.pause()
   if (rawOwned) {
     process.stdin.setRawMode(wasRaw)
@@ -200,6 +206,9 @@ function restore() {
   queue?.close()
   adapterCleanup?.()
   adapterCleanup = undefined
+}
+function restore() {
+  quiesce()
   for (const socket of sockets) socket.destroy()
   host?.cleanup()
   server.close()
@@ -212,11 +221,11 @@ function restore() {
 /** The final event: subscribers (and a `gild stop` caller) learn the exit
  * code, and are closed in order before the socket goes. */
 let exitFlushed: Promise<unknown> = Promise.resolve()
-function announceExit(code: number) {
+function announceExit(code: number, recovery?: RecoveryLocation) {
   const events = [...subscribers]
   const viewers = host?.endViewers() ?? []
   subscribers.clear()
-  const line = exitLine(options.id, code)
+  const line = exitLine(options.id, code, recovery)
   exitFlushed = Promise.race([
     Promise.all([
       ...events.map((socket) => endSocket(socket, line)),
@@ -229,8 +238,7 @@ function announceExit(code: number) {
 function finish(code: number, terminate = true) {
   if (closing) return
   closing = true
-  announceExit(code)
-  restore()
+  quiesce()
   // Also terminate descendants on a normal agent exit; they may hold the PTY.
   try {
     killGroup('SIGHUP')
@@ -241,20 +249,41 @@ function finish(code: number, terminate = true) {
         killGroup('SIGKILL')
       } catch {}
       // --vm: the guest's last changes come back before the VM is stopped.
+      let recovery: RecoveryLocation | undefined
       const vm =
         child && 'dispose' in child
-          ? child.dispose().then((r) => {
-              if (!r) return
-              console.error(
-                `gild: working directory synced from the VM: ${describeSync(r)}`,
-              )
-              for (const c of r.conflicts)
+          ? child
+              .dispose()
+              .then((r) => {
+                if (!r) return
+                recovery = r.recovery
+                if (recovery) code ||= 1
                 console.error(
-                  `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; guest copy: ${c.saved}` : ''}`,
+                  `gild: working directory synced from the VM: ${describeSync(r)}`,
                 )
-            })
+                for (const c of r.conflicts)
+                  console.error(
+                    `gild: kept the host copy of ${c.path} (${c.reason})${c.saved ? `; recovery entry: ${c.saved}` : ''}`,
+                  )
+              })
+              .catch((error) => {
+                console.error(
+                  `gild: final VM sync failed: ${(error as Error).message}; recovery workspace retained`,
+                )
+                code ||= 1
+                if (child && 'dispose' in child) recovery = child.recovery
+              })
           : undefined
-      void Promise.all([reporter?.close(), vm]).finally(() => {
+      void Promise.allSettled([reporter?.close(), vm]).then(async () => {
+        if (recovery) {
+          const notice = `gild: VM workspace retained for recovery: ${recovery.directory}\r\n`
+          host?.push(Buffer.from(notice))
+        }
+        // Subscribers and stop callers stay connected until final sync/recovery
+        // has determined the actual session result.
+        announceExit(code, recovery)
+        await exitFlushed
+        restore()
         // A signal exit cannot wait forever for a terminal reader that stopped.
         if (terminate) setTimeout(() => process.exit(code), 250)
         void Promise.all([output.flush(), exitFlushed]).then(() =>
@@ -326,31 +355,33 @@ async function main() {
     (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
   )
     return fallback('PTY unavailable')
-  let pty: typeof import('node-pty')
+  let pty: typeof import('node-pty') | undefined
   try {
-    const nodePty = options.ptyModule
-    if (!nodePty)
-      throw new Error(
-        'spawn needs the PTY module shipped in the gildforge platform package.',
-      )
-    const require = createRequire(nodePty)
-    // Keep the macOS helper executable, including installs with restrictive modes.
-    const ptyRoot = dirname(nodePty)
-    if (process.platform === 'darwin') {
-      const helper = join(
-        ptyRoot,
-        '..',
-        'prebuilds',
-        `${process.platform}-${process.arch}`,
-        'spawn-helper',
-      )
-      try {
-        chmodSync(helper, 0o755)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (!options.vm) {
+      const nodePty = options.ptyModule
+      if (!nodePty)
+        throw new Error(
+          'spawn needs the PTY module shipped in the gildforge platform package.',
+        )
+      const require = createRequire(nodePty)
+      // Keep the macOS helper executable, including installs with restrictive modes.
+      const ptyRoot = dirname(nodePty)
+      if (process.platform === 'darwin') {
+        const helper = join(
+          ptyRoot,
+          '..',
+          'prebuilds',
+          `${process.platform}-${process.arch}`,
+          'spawn-helper',
+        )
+        try {
+          chmodSync(helper, 0o755)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
       }
+      pty = require(nodePty)
     }
-    pty = require(nodePty)
   } catch (error) {
     return fallback(error)
   }
@@ -368,7 +399,10 @@ async function main() {
     let data = ''
     let replied = false
     socket.on('data', (chunk: string) => {
-      if (replied) return host?.feed(socket, chunk)
+      if (replied) {
+        if (!closing) host?.feed(socket, chunk)
+        return
+      }
       data += chunk
       if (Buffer.byteLength(data) > MAX_MESSAGE_BYTES) {
         replied = true
@@ -379,6 +413,12 @@ async function main() {
       replied = true
       try {
         const request = JSON.parse(data.slice(0, data.indexOf('\n')))
+        if (
+          closing &&
+          (['hook', 'send', 'sync'].includes(request.type) ||
+            (request.type === 'attach' && request.mode !== 'watch'))
+        )
+          throw new Error('Session is finishing')
         if (request.type === 'hook') {
           if (adapter && request.agent === adapter.name) {
             const event = adapter.translate(options.id, request.raw)
@@ -443,7 +483,7 @@ async function main() {
                 : 'Only detached sessions can be attached',
             )
           host.attach(socket, request)
-          host.feed(socket, data.slice(data.indexOf('\n') + 1))
+          if (!closing) host.feed(socket, data.slice(data.indexOf('\n') + 1))
         } else if (request.type === 'stop') {
           if (!child) throw new Error('Session is starting')
           subscribers.add(socket)
@@ -563,8 +603,9 @@ async function main() {
           env: guestEnvironment(env, baseEnv, options.envAllowlist),
           cols: options.detach?.cols ?? (process.stdout.columns || 80),
           rows: options.detach?.rows ?? (process.stdout.rows || 24),
+          log: (line) => console.error(`gild: ${line}`),
         })
-      : pty.spawn(binary, prepared?.args ?? options.args, {
+      : pty!.spawn(binary, prepared?.args ?? options.args, {
           name: 'xterm-256color',
           cols: options.detach?.cols ?? process.stdout.columns,
           rows: options.detach?.rows ?? process.stdout.rows,
@@ -668,7 +709,7 @@ function summary(r: SyncResult): SyncSummary {
  * then SIGKILL after the grace period; its exit then ends the session. */
 let stopping: ReturnType<typeof setTimeout> | undefined
 function stop(graceMs: unknown) {
-  if (stopping) return
+  if (stopping || closing) return
   const grace =
     Number.isSafeInteger(graceMs) && (graceMs as number) >= 0
       ? Math.min(graceMs as number, 60000)

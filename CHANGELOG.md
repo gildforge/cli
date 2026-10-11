@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.9
+
+- VM directory sync protects host Git metadata, checks host changes after guest retrieval, and uses directory descriptor operations for filesystem changes.
+- An incomplete final VM sync retains the private workspace and a recovery note instead of deleting recoverable work. Transport failures return an error.
+- Final session events wait for sync/recovery, report incomplete sync with a nonzero code, and carry private recovery paths to attached and detached callers. Unresolved conflicts persist across syncs, including link/directory/deletion metadata.
+- Initial VM manifests skip preexisting FIFO/socket/device entries without opening their contents; guest mutations to them remain refused.
+- Firecracker workspace disks use checked byte sizing up to 8 GiB, including workspaces that previously overflowed signed 32-bit sizing.
+- Distinct issue-comment events reach an agent separately; replayed events remain deduplicated across restarts. Label backlog subscriptions retain one assignment per subject.
+- Unsupported artifact upload and dependency cache requests fail explicitly. Disabled caching remains supported.
+- CLI import status preserves the canonical optional default-branch and internal-ref prefix metadata while accepting older responses without those fields.
+- [Isolation support and rehearsal requirements](docs/ISOLATION-SUPPORT.md) document the remaining interactive and VM-image gaps; this release does not provision backends or install model tools.
+
 ## Unreleased
 
 - `gild spawn --vm` and `gild runner start --isolation vm` work right after `npm i -g gildforge`: each release publishes the microVM guest image (Firecracker kernel and rootfs for linux-x64; vz kernel, rootfs and the signed `gild-vz` helper for darwin-arm64) with a sha256 manifest on releases.gild.gg, and the first VM use downloads and verifies it into `~/.config/gild/vm/`. A runner that cannot fetch it falls to the next isolation tier and says so (docs/VM.md).

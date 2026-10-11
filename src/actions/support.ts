@@ -13,13 +13,16 @@ export function actionSupport(uses:string,values:Record<string,unknown>) {
   const action=uses.split('@')[0].toLowerCase(),allowed=inputs[action],warnings:string[]=[]
   let error:string|undefined
   if(allowed===undefined)error=`gild doesn't run ${uses} yet`
-  else if(allowed===null)warnings.push(`${action} is a no-op; artifact uploads and cache restoration are unsupported`)
+  else if(allowed===null)error=action==='actions/upload-artifact'
+    ? 'actions/upload-artifact is unsupported: this runner has no artifact upload backend'
+    : 'actions/cache is unsupported: this runner has no dependency cache backend'
   else {
     const unsupported=Object.keys(values).filter(key=>!allowed.includes(key))
     if(unsupported.length)error=`gild ${action==='actions/checkout'?'checkout':action} does not support: ${unsupported.join(', ')}`
     if((action==='dtolnay/rust-toolchain'||action==='actions-rs/toolchain') && (values.components||values.targets))error='gild toolchain checks do not support components or targets yet'
     if(action!=='actions/checkout' && action!=='actions/setup-node')warnings.push(`${action} checks tools already installed on the runner; tool downloads are unsupported`)
-    if(values.cache)warnings.push('dependency cache options are a no-op on this machine')
+    if(values.cache && values.cache!=='false' && ['actions/setup-node','actions/setup-go'].includes(action))
+      error=`${action} dependency caching is unsupported: remove the cache input to run without caching`
   }
   return {error,warnings}
 }

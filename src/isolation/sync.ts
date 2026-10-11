@@ -10,75 +10,54 @@
 // - only the host changed it: untouched.
 // The guest is untrusted: its paths are validated, nothing is written through a
 // symlink or outside the root, and file bytes must match the hash it listed.
-import { createHash, randomBytes } from 'node:crypto'
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  readlink,
-  rename,
-  rmdir,
-  symlink,
-  unlink,
-  writeFile,
-} from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { AnchoredDirectory } from './anchored-fs'
+import { readdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
 import type { Entry, GuestFiles } from './session'
 
 export type Manifest = Map<string, Entry>
+export type RecoveryLocation = { directory: string; note: string }
 
 export interface SyncResult {
   written: string[]
   deleted: string[]
   conflicts: { path: string; reason: string; saved?: string }[]
   rejected: { path: string; reason: string }[]
-}
-
-async function sha256(path: string) {
-  const h = createHash('sha256')
-  const f = await open(path, 'r')
-  try {
-    for await (const chunk of f.createReadStream()) h.update(chunk)
-  } finally {
-    await f.close().catch(() => {})
-  }
-  return h.digest('hex')
-}
-
-/** The entry at `path`, or undefined; never follows a symlink. */
-async function entryAt(path: string, rel: string): Promise<Entry | undefined> {
-  const st = await lstat(path).catch(() => null)
-  if (!st) return undefined
-  if (st.isSymbolicLink())
-    return { p: rel, k: 'l', m: 0, t: await readlink(path) }
-  if (st.isDirectory()) return { p: rel, k: 'd', m: st.mode & 0o7777 }
-  if (st.isFile())
-    return {
-      p: rel,
-      k: 'f',
-      m: st.mode & 0o7777,
-      s: st.size,
-      h: await sha256(path),
-    }
-  return undefined // sockets, fifos and devices are not synced
+  /** Final VM sync only: private retained workspace and recovery note. */
+  recovery?: RecoveryLocation
 }
 
 /** The host side of the guest agent's `list` op: same walk, same fields. */
 export async function hostManifest(root: string): Promise<Manifest> {
-  const out: Manifest = new Map()
-  const walk = async (dir: string, prefix: string) => {
-    const names = (await readdir(dir)).sort()
-    for (const name of names) {
+  const out: Manifest = new Map(),
+    anchored = AnchoredDirectory.open(root)
+  const walk = async (
+    directory: AnchoredDirectory,
+    path: string,
+    prefix: string,
+  ) => {
+    for (const name of (await readdir(path)).sort()) {
       const rel = prefix ? `${prefix}/${name}` : name
-      const e = await entryAt(join(dir, name), rel)
+      const e = directory.entry(name, rel, true)
       if (!e) continue
       out.set(rel, e)
-      if (e.k === 'd') await walk(join(dir, name), rel)
+      if (e.k === 'd') {
+        const child = directory.directory(name)
+        try {
+          await walk(child, join(path, name), rel)
+        } finally {
+          child.close()
+        }
+      }
     }
   }
-  await walk(root, '')
+  try {
+    await walk(anchored, root, '')
+  } finally {
+    anchored.close()
+  }
   return out
 }
 
@@ -103,27 +82,24 @@ export function validPath(p: unknown): p is string {
 }
 
 function validEntry(e: Entry) {
-  if (!validPath(e.p) || typeof e.m !== 'number') return false
-  if (e.k === 'f') return typeof e.h === 'string' && /^[0-9a-f]{64}$/.test(e.h)
+  if (!validPath(e.p) || !Number.isInteger(e.m) || e.m < 0 || e.m > 0o7777)
+    return false
+  if (e.k === 'f')
+    return (
+      Number.isSafeInteger(e.s) &&
+      e.s! >= 0 &&
+      typeof e.h === 'string' &&
+      /^[0-9a-f]{64}$/.test(e.h)
+    )
   if (e.k === 'l')
     return typeof e.t === 'string' && e.t.length > 0 && !e.t.includes('\0')
   return e.k === 'd'
 }
 
-/** Every ancestor of `rel` under root is a real directory (not a symlink). */
-async function ancestorsAreDirectories(root: string, rel: string) {
-  const parts = rel.split('/').slice(0, -1)
-  let at = root
-  for (const part of parts) {
-    at = join(at, part)
-    const st = await lstat(at).catch(() => null)
-    if (!st || st.isSymbolicLink() || !st.isDirectory()) return false
-  }
-  return true
+/** Guest Git state is never adopted as trusted host repository metadata. */
+export function protectedMetadata(path: string) {
+  return path.split('/').some((part) => part.toLowerCase() === '.git')
 }
-
-const temp = (target: string) =>
-  join(dirname(target), `.gild-sync-${randomBytes(6).toString('hex')}`)
 
 export interface SyncOptions {
   /** Host directory the guest's copy came from. */
@@ -131,9 +107,9 @@ export interface SyncOptions {
   /** Where the guest sees it. */
   guestRoot: string
   files: GuestFiles
-  /** Updated in place, so the next sync only carries newer changes. */
+  /** Updated only for applied/resolved changes; conflicts stay pending. */
   baseline: Manifest
-  /** Guest versions of conflicting files are saved here (outside the root). */
+  /** Conflicting bytes and adjacent metadata are saved outside the root. */
   conflictDir: string
   /** Refuse a sync that would copy more than this many bytes. */
   maxBytes?: number
@@ -164,13 +140,24 @@ export async function syncBack(o: SyncOptions): Promise<SyncResult> {
     guest.set(e.p, e)
   }
   const changed = [...new Set([...o.baseline.keys(), ...guest.keys()])].filter(
-    (p) => !sameEntry(o.baseline.get(p), guest.get(p)),
+    (p) => {
+      if (sameEntry(o.baseline.get(p), guest.get(p))) return false
+      if (!validPath(p) || protectedMetadata(p)) {
+        result.rejected.push({
+          path: p,
+          reason:
+            'host Git metadata is protected; retained in the guest workspace',
+        })
+        return false
+      }
+      return true
+    },
   )
   const bytes = changed.reduce((n, p) => {
     const e = guest.get(p)
     return n + (e?.k === 'f' ? (e.s ?? 0) : 0)
   }, 0)
-  if (bytes > (o.maxBytes ?? 2 * 1024 ** 3))
+  if (!Number.isSafeInteger(bytes) || bytes > (o.maxBytes ?? 2 * 1024 ** 3))
     throw new Error(`sync would copy ${bytes} bytes; refusing`)
   // Deletions deepest first, then creations and updates parents first.
   const deletions = changed
@@ -179,84 +166,116 @@ export async function syncBack(o: SyncOptions): Promise<SyncResult> {
     .reverse()
   const updates = changed.filter((p) => guest.has(p)).sort()
 
-  const conflict = async (rel: string, reason: string, after?: Entry) => {
-    let saved: string | undefined
-    if (after?.k === 'f') {
-      saved = join(o.conflictDir, rel)
-      await mkdir(dirname(saved), { recursive: true, mode: 0o700 })
-      await writeFile(saved, await fetch(rel, after), { mode: 0o600 })
-    }
-    result.conflicts.push({ path: rel, reason, ...(saved ? { saved } : {}) })
-  }
+  const root = AnchoredDirectory.open(o.root)
   const fetch = async (rel: string, after: Entry) => {
     const data = await o.files.read(`${o.guestRoot}/${rel}`)
-    if (createHash('sha256').update(data).digest('hex') !== after.h)
+    if (
+      data.length !== after.s ||
+      createHash('sha256').update(data).digest('hex') !== after.h
+    )
       throw new Error('guest file changed while syncing')
     return data
   }
-  const remove = async (path: string, e: Entry) =>
-    e.k === 'd' ? rmdir(path) : unlink(path)
-
-  for (const rel of [...deletions, ...updates]) {
-    const before = o.baseline.get(rel),
-      after = guest.get(rel),
-      target = join(o.root, rel)
-    try {
-      if (!(await ancestorsAreDirectories(o.root, rel))) {
-        await conflict(rel, 'a parent is not a directory on the host', after)
-        setBaseline(o.baseline, rel, after)
-        continue
+  const conflict = (
+    rel: string,
+    reason: string,
+    after?: Entry,
+    data?: Buffer,
+  ) => {
+    let saved: string | undefined
+    if (after?.k === 'f' && data) {
+      // The private recovery root is host-owned. Child paths use the same
+      // anchored primitives as normal sync, never a guest-provided pathname.
+      mkdirSync(o.conflictDir, { recursive: true, mode: 0o700 })
+      const recovery = AnchoredDirectory.open(o.conflictDir)
+      let parent: AnchoredDirectory | undefined
+      try {
+        parent = recovery.parent(rel, true)
+        parent.put(rel.split('/').at(-1)!, { ...after, m: 0o600 }, data)
+        saved = join(o.conflictDir, rel)
+      } finally {
+        if (parent && parent !== recovery) parent.close()
+        recovery.close()
       }
-      const current = await entryAt(target, rel)
-      if (sameEntry(current, after)) {
-        setBaseline(o.baseline, rel, after)
-        continue
-      }
-      if (!sameEntry(current, before)) {
-        await conflict(rel, 'changed on the host and in the guest', after)
-        setBaseline(o.baseline, rel, after)
-        continue
-      }
-      if (!after) {
-        await remove(target, current!)
-        result.deleted.push(rel)
-      } else if (after.k === 'd') {
-        if (current?.k === 'd') await chmod(target, after.m & 0o777)
-        else {
-          if (current) await remove(target, current)
-          await mkdir(target, { mode: after.m & 0o777 })
-          await chmod(target, after.m & 0o777)
-        }
-        result.written.push(rel)
-      } else if (
-        after.k === 'f' &&
-        current?.k === 'f' &&
-        current.h === after.h
-      ) {
-        await chmod(target, after.m & 0o777) // mode-only change
-        result.written.push(rel)
-      } else {
-        // Write a fresh name next to the target, then rename over it: rename
-        // replaces a symlink itself, never what it points to.
-        const t = temp(target)
-        if (after.k === 'f') {
-          await writeFile(t, await fetch(rel, after), {
-            flag: 'wx',
-            mode: 0o600,
-          })
-          await chmod(t, after.m & 0o777)
-        } else await symlink(after.t!, t)
-        if (current?.k === 'd') await rmdir(target)
-        await rename(t, target)
-        result.written.push(rel)
-      }
-      setBaseline(o.baseline, rel, after)
-    } catch (e) {
-      result.conflicts.push({
-        path: rel,
-        reason: `not applied: ${(e as Error).message}`,
-      })
     }
+    // Never materialize a conflicting link/directory/deletion in recovery.
+    // Store its exact entry as private JSON, with a host-chosen hashed name.
+    const metadataDir = o.conflictDir + '.metadata'
+    mkdirSync(metadataDir, { recursive: true, mode: 0o700 })
+    const metadata = AnchoredDirectory.open(metadataDir)
+    const name = createHash('sha256').update(rel).digest('hex') + '.json'
+    try {
+      metadata.put(
+        name,
+        { p: name, k: 'f', m: 0o600 },
+        Buffer.from(
+          JSON.stringify({ path: rel, reason, entry: after ?? null }) + '\n',
+        ),
+      )
+      saved ??= join(metadataDir, name)
+    } finally {
+      metadata.close()
+    }
+    result.conflicts.push({ path: rel, reason, ...(saved ? { saved } : {}) })
+  }
+  try {
+    for (const rel of [...deletions, ...updates]) {
+      const before = o.baseline.get(rel),
+        after = guest.get(rel)
+      let parent: AnchoredDirectory | undefined
+      try {
+        // Finish asynchronous guest retrieval before opening/checking the host
+        // destination. All host validation and mutation below are synchronous
+        // and relative to directory descriptors, including temp and rename.
+        const data = after?.k === 'f' ? await fetch(rel, after) : undefined
+        try {
+          parent = root.parent(rel)
+        } catch {
+          conflict(rel, 'a parent is not a directory on the host', after, data)
+          continue
+        }
+        const name = rel.split('/').at(-1)!
+        const current = parent.entry(name, rel)
+        if (sameEntry(current, after)) {
+          setBaseline(o.baseline, rel, after)
+          continue
+        }
+        if (!sameEntry(current, before)) {
+          conflict(rel, 'changed on the host and in the guest', after, data)
+          continue
+        }
+        if (!after) {
+          parent.remove(name, current!.k === 'd')
+          result.deleted.push(rel)
+        } else if (after.k === 'd') {
+          if (current && current.k !== 'd') parent.remove(name, false)
+          const directory = parent.directory(name, true)
+          directory.close()
+          parent.mode(name, after.m & 0o777, true)
+          result.written.push(rel)
+        } else if (
+          after.k === 'f' &&
+          current?.k === 'f' &&
+          current.h === after.h
+        ) {
+          parent.mode(name, after.m & 0o777, false)
+          result.written.push(rel)
+        } else {
+          parent.put(name, after, data, current?.k === 'd')
+          result.written.push(rel)
+        }
+        setBaseline(o.baseline, rel, after)
+      } catch (e) {
+        result.conflicts.push({
+          path: rel,
+          reason: `not applied: ${(e as Error).message}`,
+        })
+      } finally {
+        if (parent && parent !== root) parent.close()
+      }
+    }
+  } finally {
+    root.close()
   }
   return result
 }

@@ -7,13 +7,15 @@ import {
   mkdtemp,
   readFile,
   rm,
+  rename,
   stat,
   symlink,
   writeFile,
 } from 'node:fs/promises'
 import { existsSync, lstatSync, readlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { createServer } from 'node:net'
+import { finishVmSync } from '../spawn-vm'
 import { hostManifest, syncBack, validPath, type Manifest } from './sync'
 import type { Entry, GuestFiles } from './session'
 
@@ -26,7 +28,8 @@ function dirGuest(dir: string): GuestFiles {
 }
 
 async function setup() {
-  const base = await mkdtemp(join(tmpdir(), 'sync-'))
+  await mkdir('.tmp', { recursive: true })
+  const base = await mkdtemp(resolve('.tmp/sync-'))
   const host = join(base, 'host'),
     guest = join(base, 'guest'),
     conflicts = join(base, 'conflicts')
@@ -52,6 +55,117 @@ async function setup() {
 }
 
 const strip = (m: Manifest) => [...m.values()].map(({ s: _s, ...rest }) => rest)
+
+test('unresolved file, directory, link and deletion conflicts survive repeated sync and retain final recovery', async () => {
+  const t = await setup()
+  try {
+    await symlink('README.md', join(t.host, 'link'))
+    await symlink('README.md', join(t.guest, 'link'))
+    const baseline = await hostManifest(t.host)
+    await rm(join(t.host, 'link'))
+    await symlink('run.sh', join(t.host, 'link'))
+    await rm(join(t.guest, 'link'))
+    await symlink('src/a.ts', join(t.guest, 'link'))
+    await writeFile(join(t.host, 'gone.txt'), 'host edit\n')
+    await rm(join(t.guest, 'gone.txt'))
+    await writeFile(join(t.host, 'src/a.ts'), 'host version\n')
+    await writeFile(join(t.guest, 'src/a.ts'), 'guest version\n')
+    await chmod(join(t.host, 'src/deep'), 0o700)
+    await chmod(join(t.guest, 'src/deep'), 0o750)
+    const first = await t.sync(baseline)
+    const second = await t.sync(baseline)
+    for (const r of [first, second]) {
+      expect(r.conflicts.map((c) => c.path).sort()).toEqual([
+        'gone.txt',
+        'link',
+        'src/a.ts',
+        'src/deep',
+      ])
+      const link = r.conflicts.find((c) => c.path === 'link')!
+      expect(await Bun.file(link.saved!).json()).toMatchObject({
+        path: 'link',
+        entry: { k: 'l', t: 'src/a.ts' },
+      })
+      const removed = r.conflicts.find((c) => c.path === 'gone.txt')!
+      expect(await Bun.file(removed.saved!).json()).toMatchObject({
+        path: 'gone.txt',
+        entry: null,
+      })
+      expect((await stat(link.saved!)).mode & 0o777).toBe(0o600)
+      const directory = r.conflicts.find((c) => c.path === 'src/deep')!
+      expect(await Bun.file(directory.saved!).json()).toMatchObject({
+        path: 'src/deep',
+        entry: { k: 'd', m: 0o750 },
+      })
+      expect(
+        await Bun.file(
+          r.conflicts.find((c) => c.path === 'src/a.ts')!.saved!,
+        ).text(),
+      ).toBe('guest version\n')
+    }
+    expect(baseline.get('link')!.t).toBe('README.md')
+    let retained = false
+    const vmDir = join(t.base, 'vm')
+    await mkdir(vmDir, { mode: 0o700 })
+    const final = await finishVmSync(
+      () => t.sync(baseline),
+      {
+        close: async (options) => {
+          retained = !!options?.preserveWorkspace
+          if (!retained) await rm(t.guest, { recursive: true })
+        },
+      },
+      vmDir,
+      () => {},
+    )
+    expect(retained).toBe(true)
+    expect(final.conflicts).toHaveLength(4)
+    expect(
+      (await Bun.file(join(vmDir, 'recovery.json')).json()).result.conflicts,
+    ).toHaveLength(4)
+    expect(readlinkSync(join(t.host, 'link'))).toBe('run.sh')
+    // Resolving the copies explicitly advances the baseline and clears conflicts.
+    await rm(join(t.guest, 'link'))
+    await symlink('run.sh', join(t.guest, 'link'))
+    await writeFile(join(t.guest, 'gone.txt'), 'host edit\n')
+    await writeFile(join(t.guest, 'src/a.ts'), 'host version\n')
+    await chmod(join(t.guest, 'src/deep'), 0o700)
+    expect((await t.sync(baseline)).conflicts).toEqual([])
+  } finally {
+    await rm(t.base, { recursive: true, force: true })
+  }
+})
+
+test('host manifest skips existing FIFO/socket entries but guest mutations to them fail', async () => {
+  const t = await setup()
+  const server = createServer()
+  try {
+    const fifo = Bun.spawnSync(['mkfifo', join(t.host, 'pipe')])
+    expect(fifo.exitCode).toBe(0)
+    await new Promise<void>((done, reject) => {
+      server.once('error', reject)
+      server.listen(join(t.host, 'local.sock'), done)
+    })
+    const manifest = hostManifest(t.host)
+    await expect(manifest).resolves.toBeInstanceOf(Map)
+    const baseline = await manifest
+    expect(baseline.has('pipe')).toBe(false)
+    expect(baseline.has('local.sock')).toBe(false)
+    await writeFile(join(t.guest, 'pipe'), 'ordinary guest fixture\n')
+    await writeFile(join(t.guest, 'local.sock'), 'ordinary guest fixture\n')
+    const result = await t.sync(baseline)
+    expect(result.conflicts.map((c) => c.path).sort()).toEqual([
+      'local.sock',
+      'pipe',
+    ])
+    expect(lstatSync(join(t.host, 'pipe')).isFIFO()).toBe(true)
+    expect(lstatSync(join(t.host, 'local.sock')).isSocket()).toBe(true)
+    expect(result.written).toEqual([])
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()))
+    await rm(t.base, { recursive: true, force: true })
+  }
+})
 
 test('an unchanged guest syncs nothing', async () => {
   const t = await setup()
@@ -171,4 +285,73 @@ test('path validation', () => {
     expect(validPath(ok)).toBe(true)
   for (const bad of ['', '/a', 'a//b', '../a', 'a/..', './a', 'a\0b', 7])
     expect(validPath(bad)).toBe(false)
+})
+
+test('automatic sync preserves host Git metadata and applies ordinary source edits', async () => {
+  const t = await setup()
+  try {
+    await mkdir(join(t.host, '.git/hooks'), { recursive: true })
+    await writeFile(join(t.host, '.git/config'), 'host configuration fixture\n')
+    await writeFile(join(t.host, '.git/hooks/fixture'), 'host hook fixture\n')
+    const baseline = await hostManifest(t.host)
+    await cp(join(t.host, '.git'), join(t.guest, '.git'), { recursive: true })
+    await writeFile(
+      join(t.guest, '.git/config'),
+      'guest configuration fixture\n',
+    )
+    await rm(join(t.guest, '.git/hooks/fixture'))
+    await writeFile(join(t.guest, '.git/HEAD'), 'guest reference fixture\n')
+    await writeFile(join(t.guest, 'src/a.ts'), 'source edit\n')
+    const r = await t.sync(baseline)
+    expect(r.written).toEqual(['src/a.ts'])
+    expect(r.deleted).toEqual([])
+    expect(r.rejected.map((e) => e.path).sort()).toEqual([
+      '.git/HEAD',
+      '.git/config',
+      '.git/hooks/fixture',
+    ])
+    expect(await readFile(join(t.host, '.git/config'), 'utf8')).toBe(
+      'host configuration fixture\n',
+    )
+    expect(await readFile(join(t.host, '.git/hooks/fixture'), 'utf8')).toBe(
+      'host hook fixture\n',
+    )
+    expect(existsSync(join(t.host, '.git/HEAD'))).toBe(false)
+    expect(await readFile(join(t.host, 'src/a.ts'), 'utf8')).toBe(
+      'source edit\n',
+    )
+  } finally {
+    await rm(t.base, { recursive: true })
+  }
+})
+
+test('host changes during asynchronous guest retrieval are checked after retrieval', async () => {
+  const t = await setup()
+  try {
+    await writeFile(join(t.guest, 'src/a.ts'), 'guest edit\n')
+    const files = dirGuest(t.guest)
+    const r = await t.sync(t.baseline, {
+      list: files.list,
+      read: async (path) => {
+        const data = await files.read(path)
+        await rename(join(t.host, 'src'), join(t.host, 'previous-src'))
+        await mkdir(join(t.host, 'src'))
+        await writeFile(
+          join(t.host, 'src/a.ts'),
+          'new host directory fixture\n',
+        )
+        return data
+      },
+    })
+    expect(r.written).toEqual([])
+    expect(await readFile(join(t.host, 'src/a.ts'), 'utf8')).toBe(
+      'new host directory fixture\n',
+    )
+    expect(await readFile(join(t.host, 'previous-src/a.ts'), 'utf8')).toBe(
+      'a\n',
+    )
+    expect(await readFile(r.conflicts[0].saved!, 'utf8')).toBe('guest edit\n')
+  } finally {
+    await rm(t.base, { recursive: true })
+  }
 })

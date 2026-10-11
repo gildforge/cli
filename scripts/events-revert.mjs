@@ -12,9 +12,9 @@ const cases = [
   [
     'hook-timeout',
     'src/spawn-hook.ts',
-    'setTimeout(done, 200)',
-    'setTimeout(done, 800)',
-    'hook forwards',
+    'schedule(done, 200)',
+    'schedule(done, 800)',
+    'hook bounds unfinished stdin',
   ],
   [
     'hook-stdout',

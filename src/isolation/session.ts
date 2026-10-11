@@ -44,7 +44,8 @@ export interface Isolation {
   files?: GuestFiles
   /** Messages the guest initiates toward the host on a vsock port (hooks). */
   onGuestMessage?(port: number, handler: (message: any) => void): void
-  close(): Promise<void>
+  /** Stop the backend; preserve its workspace for recovery after incomplete sync. */
+  close(options?: { preserveWorkspace?: boolean }): Promise<void>
 }
 
 /** One entry under a sync root, the same shape the guest agent's `list` op returns. */

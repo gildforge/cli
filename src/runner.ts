@@ -1,4 +1,5 @@
 import { actionSupport } from './actions/support'
+import { unsupportedRuntimeAction } from './actions/runtime-support'
 import { setupNode } from './actions/setup-node'
 import { executeImport } from './import/execute'
 import { runnerService } from './runner-service'
@@ -734,6 +735,8 @@ export async function executeJob(
             Math.min(s.timeout, job.timeout),
           )
         } else {
+          const unsupported = unsupportedRuntimeAction(s.uses!, s.with)
+          if (unsupported) throw Error(unsupported)
           const support = actionSupport(s.uses!, s.with)
           if (support.error) throw Error(support.error)
           const action = s.uses!.split('@')[0].toLowerCase(),
@@ -741,13 +744,6 @@ export async function executeJob(
           if (action === 'actions/checkout') {
             await log.line(
               `[gild: already checked out ${job.sha} through gild; credentials are not persisted]`,
-            )
-            exit = 0
-          } else if (
-            ['actions/upload-artifact', 'actions/cache'].includes(action)
-          ) {
-            await log.line(
-              `[gild: ${s.uses} is a no-op; artifacts and dependency caches are not uploaded]`,
             )
             exit = 0
           } else if (action === 'actions/setup-node' && !session) {
@@ -775,10 +771,6 @@ export async function executeJob(
             exit = path === null ? 1 : 0
             if (path !== null) jobPath = path
           } else if (tool) {
-            if (s.with.cache)
-              await log.line(
-                '[gild: dependency cache options are a no-op on this machine]',
-              )
             const output: string[] = []
             exit = await run(
               tool.command,

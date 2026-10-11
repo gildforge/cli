@@ -292,7 +292,10 @@ test('a refused read does not silence the agent: it reconnects from its cursor',
   const run = await bridge([
     () => ({ events: [mentionEvent(1)], cursor: '1' }),
     () => {
-      throw new ApiRequestError(404, 'Event repository is not readable by this caller')
+      throw new ApiRequestError(
+        404,
+        'Event repository is not readable by this caller',
+      )
     },
     () => ({ events: [mentionEvent(2, 'owner/bob', 'm9')], cursor: '2' }),
   ])
@@ -418,6 +421,45 @@ test('non-labeled actions match the issue labels; pull_request matches its subje
   await run.b.flush()
 })
 
+test('distinct comments on one issue deliver separately and repeated events stay deduplicated after restart', async () => {
+  const first = issueEvent(1, { event: 'issue_comment', action: 'created' })
+  const second = issueEvent(2, { event: 'issue_comment', action: 'created' })
+  const run = await bridge(
+    [() => ({ events: [first, second, first], cursor: '2' })],
+    undefined,
+    ['issue_comment.created'],
+  )
+  await run.done
+  expect(run.prompts).toHaveLength(2)
+  expect(stages(run.events)).toEqual([
+    'evt1:received',
+    'evt1:queued',
+    'evt2:received',
+    'evt2:queued',
+  ])
+  run.typed.forEach((done) => done())
+  await run.b.flush()
+  const restarted = await bridge(
+    [
+      () => ({
+        events: [
+          first,
+          second,
+          issueEvent(3, { event: 'issue_comment', action: 'created' }),
+        ],
+        cursor: '3',
+      }),
+    ],
+    run.file,
+    ['issue_comment.created'],
+  )
+  await restarted.done
+  expect(restarted.prompts).toHaveLength(1)
+  expect(stages(restarted.events)).toEqual(['evt3:received', 'evt3:queued'])
+  restarted.typed[0]()
+  await restarted.b.flush()
+})
+
 test('a restart skips delivered trigger ids and resumes from the cursor', async () => {
   await mkdir('.tmp', { recursive: true })
   const file = join(await mkdtemp(resolve('.tmp/br-')), 'bob.mentions.json')
@@ -449,7 +491,10 @@ test('a restart skips delivered trigger ids and resumes from the cursor', async 
   await run.b.flush()
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
     cursors: { 'owner/demo': '8' },
-    delivered: ['trigger:owner/demo#12:issues.labeled:triage', 'trigger:owner/demo#13:issues.labeled:triage'],
+    delivered: [
+      'trigger:owner/demo#12:issues.labeled:triage',
+      'trigger:owner/demo#13:issues.labeled:triage',
+    ],
   })
 })
 
@@ -458,7 +503,11 @@ test('a labeled trigger also fires for an issue opened with the label, once', as
     [
       () => ({
         events: [
-          issueEvent(1, { action: 'opened', labels: ['triage'], label: undefined }),
+          issueEvent(1, {
+            action: 'opened',
+            labels: ['triage'],
+            label: undefined,
+          }),
           issueEvent(2, { label: 'triage' }), // the same issue labeled too
           issueEvent(3, { action: 'opened', number: 13, labels: ['other'] }),
         ],
@@ -479,7 +528,14 @@ test('open issues already carrying the label are picked up on start', async () =
     [() => ({ events: [], cursor: '1' })],
     undefined,
     ['issues.labeled:triage'],
-    [{ number: 7, title: 'Backlog task', labels: [{ name: 'triage' }], user: { login: 'sami' } }],
+    [
+      {
+        number: 7,
+        title: 'Backlog task',
+        labels: [{ name: 'triage' }],
+        user: { login: 'sami' },
+      },
+    ],
   )
   await run.done
   expect(run.prompts).toHaveLength(1)
