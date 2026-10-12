@@ -12,6 +12,7 @@ for (const [mode, outcome] of [
   ['detached', 'failure'],
   ['detached', 'partial'],
   ['detached', 'success'],
+  ['detached', 'retirement-failure'],
 ] as const) {
   test(`VM worker final result: ${mode} ${outcome} sync precedes exit and recovery delivery`, async () => {
     await mkdir('.tmp', { recursive: true })
@@ -35,6 +36,18 @@ for (const [mode, outcome] of [
         {
           name: 'safe-vm-lifecycle-fixture',
           setup(build) {
+            if (outcome === 'retirement-failure')
+              build.onResolve({ filter: /^\.\/spawn-output$/ }, (args) =>
+                args.importer.endsWith('spawn-worker.ts')
+                  ? { path: resolve('scripts/fixtures/retirement-output.ts') }
+                  : undefined,
+              )
+            if (outcome === 'retirement-failure')
+              build.onResolve({ filter: /^\.\/spawn-detach$/ }, (args) =>
+                args.importer.endsWith('spawn-worker.ts')
+                  ? { path: resolve('scripts/fixtures/retirement-detach.ts') }
+                  : undefined,
+              )
             build.onResolve({ filter: /^\.\/spawn-vm$/ }, (args) =>
               args.importer.endsWith('spawn-worker.ts')
                 ? { path: resolve('scripts/fixtures/vm-recovery-child.ts') }
@@ -163,6 +176,49 @@ for (const [mode, outcome] of [
         'Session is finishing',
       )
       await writeFile(join(recovery.directory, 'release-sync'), '')
+      if (outcome === 'retirement-failure') {
+        const deadline = Symbol('worker shutdown deadline')
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const bounded = await Promise.race([
+          Promise.all([
+            new Response(stop.stdout).text(),
+            stop.exited,
+            new Response(stop.stderr).text(),
+            finalEvent,
+            proc.exited,
+          ]),
+          new Promise<typeof deadline>((done) => {
+            timer = setTimeout(() => done(deadline), 4000)
+          }),
+        ])
+        clearTimeout(timer)
+        expect(bounded).not.toBe(deadline)
+        if (bounded === deadline) throw Error('worker shutdown deadline')
+        const [text, stopCode, stopError, observed, workerCode] = bounded
+        expect(stopCode).toBe(0)
+        expect(stopError).toBe('')
+        expect(JSON.parse(text)).toMatchObject({
+          session: id,
+          type: 'exited',
+          code: 1,
+        })
+        expect(observed.event.code).toBe(1)
+        expect(workerCode).toBe(1)
+        expect(existsSync(path)).toBe(false)
+        expect(existsSync(join(home, '.gild/sessions', id))).toBe(true)
+        expect(await Bun.file(join(home, 'retirement-failed')).text()).toBe('1')
+        await expect(localRequest(path, { type: 'info' })).rejects.toThrow()
+        expect(await stderr).toContain(
+          'session cleanup failed: retirement failure fixture',
+        )
+        await stdout
+        if (viewer) {
+          expect(await viewer.exited).toBe(0)
+          await viewerOutput!
+          expect(await new Response(viewer.stderr).text()).toBe('')
+        }
+        return
+      }
       const reply = JSON.parse(await new Response(stop.stdout).text())
       expect(await stop.exited).toBe(0)
       expect(await new Response(stop.stderr).text()).toBe('')
@@ -190,7 +246,8 @@ for (const [mode, outcome] of [
       if (existsSync(recovery.directory))
         await writeFile(join(recovery.directory, 'release-sync'), '')
       if (proc.exitCode === null) {
-        proc.kill()
+        // Failure injection can strand a closing worker; only this owned PID.
+        proc.kill('SIGKILL')
         await proc.exited
       }
       if (viewer?.exitCode === null) {

@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { createServer, createConnection, type Socket } from 'node:net'
 import { resolve, join } from 'node:path'
-import { finalizeSessionStreams } from './spawn-detach'
+import { finalizeSessionStreams, retireSessionResources } from './spawn-detach'
 
 test('final exit and EOF cannot precede real session file cleanup', async () => {
   mkdirSync('.tmp', { recursive: true })
@@ -45,7 +45,7 @@ test('final exit and EOF cannot precede real session file cleanup', async () => 
     client.on('end', resolve)
   })
   const socket = await peer
-  let finishing: Promise<void> | undefined
+  let finishing: Promise<number> | undefined
   try {
     finishing = finalizeSessionStreams({
       session: 'fixture',
@@ -78,6 +78,89 @@ test('final exit and EOF cannot precede real session file cleanup', async () => 
     await finishing
     client.destroy()
     socket.destroy()
+    if (server.listening) server.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('retirement rejection still completes stop and subscriber peers after remaining cleanup', async () => {
+  mkdirSync('.tmp', { recursive: true })
+  const root = mkdtempSync(resolve('.tmp/exit-reject-')),
+    path = join(root, 'fixture.sock'),
+    directory = join(root, 'fixture')
+  mkdirSync(directory)
+  writeFileSync(join(directory, 'output.log'), 'retained fixture log')
+  const server = createServer(),
+    peers: Socket[] = []
+  const connected = new Promise<void>((resolve) =>
+    server.on('connection', (socket) => {
+      peers.push(socket)
+      if (peers.length === 2) resolve()
+    }),
+  )
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(path, resolve)
+  })
+  const clients = [createConnection(path), createConnection(path)]
+  const results = clients.map(
+    (client) =>
+      new Promise<string>((resolve, reject) => {
+        let data = ''
+        client.on('data', (chunk) => {
+          data += chunk.toString()
+        })
+        client.on('end', () => resolve(data))
+        client.on('error', reject)
+      }),
+  )
+  void Promise.all(results).catch(() => {})
+  const failure = new Error('directory removal denied fixture'),
+    calls: string[] = [],
+    errors: unknown[] = []
+  try {
+    await connected
+    const completion = await finalizeSessionStreams({
+      session: 'fixture',
+      code: 129,
+      events: peers,
+      viewers: [],
+      cleanup: async () =>
+        retireSessionResources({
+          files: () => {
+            calls.push('files')
+            throw failure
+          },
+          listener: () => {
+            calls.push('listener')
+            server.close()
+            throw new Error('listener failure fixture')
+          },
+          endpoint: () => {
+            calls.push('endpoint')
+            if (existsSync(path)) unlinkSync(path)
+          },
+        }),
+      cleanupFailed: (error) => errors.push(error),
+    }).then(
+      (code) => ({ code, error: null }),
+      (error) => ({ code: null, error }),
+    )
+    expect(completion.error).toBeNull()
+    expect(completion.code).toBe(1)
+    expect(
+      (await Promise.all(results)).map((text) => JSON.parse(text)),
+    ).toEqual([
+      expect.objectContaining({ session: 'fixture', type: 'exited', code: 1 }),
+      expect.objectContaining({ session: 'fixture', type: 'exited', code: 1 }),
+    ])
+    expect(calls).toEqual(['files', 'listener', 'endpoint'])
+    expect(errors).toEqual([failure])
+    expect(existsSync(path)).toBe(false)
+    expect(existsSync(directory)).toBe(true)
+  } finally {
+    clients.forEach((client) => client.destroy())
+    peers.forEach((peer) => peer.destroy())
     if (server.listening) server.close()
     rmSync(root, { recursive: true, force: true })
   }

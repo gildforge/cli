@@ -243,9 +243,34 @@ export function endSocket(socket: Socket, last?: string) {
     }
   })
 }
-/** The final exit/EOF promises retirement: cleanup must finish before any
- * subscriber or stop caller can observe completion. Existing peers stay open
- * during cleanup so the final event is still delivered rather than reset. */
+/** Attempt every owned retirement action even if file removal fails. */
+export function retireSessionResources(o: {
+  files: () => void
+  listener: () => void
+  endpoint: () => void
+}) {
+  const errors: unknown[] = []
+  try {
+    o.files()
+  } catch (error) {
+    errors.push(error)
+  } finally {
+    try {
+      o.listener()
+    } catch (error) {
+      errors.push(error)
+    } finally {
+      try {
+        o.endpoint()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+  }
+  if (errors.length) throw errors[0]
+}
+/** Retirement attempts finish before final delivery; rejection changes the
+ * result to code1. Existing peers stay open for ordered final exit/EOF. */
 export async function finalizeSessionStreams(o: {
   session: string
   code: number
@@ -253,9 +278,18 @@ export async function finalizeSessionStreams(o: {
   events: readonly Socket[]
   viewers: readonly Socket[]
   cleanup: () => void | Promise<void>
+  cleanupFailed?: (error: unknown) => void
 }) {
-  await o.cleanup()
-  const line = exitLine(o.session, o.code, o.recovery)
+  let code = o.code
+  try {
+    await o.cleanup()
+  } catch (error) {
+    code = 1
+    try {
+      o.cleanupFailed?.(error)
+    } catch {}
+  }
+  const line = exitLine(o.session, code, o.recovery)
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
@@ -270,6 +304,7 @@ export async function finalizeSessionStreams(o: {
   } finally {
     clearTimeout(timer)
   }
+  return code
 }
 export type StartMessage =
   { type: 'ready'; id: string } | { type: 'failed'; error: string }

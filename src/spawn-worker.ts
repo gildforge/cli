@@ -31,6 +31,7 @@ import {
 import {
   DetachedHost,
   finalizeSessionStreams,
+  retireSessionResources,
   reportDetached,
 } from './spawn-detach'
 import {
@@ -204,31 +205,49 @@ function quiesce() {
   bridgeAbort.abort()
   watchdog?.close()
   queue?.close()
-  adapterCleanup?.()
+  const cleanup = adapterCleanup
   adapterCleanup = undefined
+  cleanup?.()
 }
 function restore() {
-  quiesce()
-  for (const socket of sockets) socket.destroy()
-  retireSession()
+  try {
+    quiesce()
+  } finally {
+    try {
+      for (const socket of sockets) socket.destroy()
+    } finally {
+      retireSession()
+    }
+  }
 }
 /** Retire owned files/listener once, leaving connected peers for the final exit. */
 function retireSession() {
   if (retired) return
   retired = true
-  host?.cleanup()
-  server.close()
-  if (ownsSocket && path) {
-    try {
-      unlinkSync(path)
-    } catch {}
-  }
-  ownsSocket = false
+  retireSessionResources({
+    files: () => host?.cleanup(),
+    listener: () => {
+      server.close()
+    },
+    endpoint: () => {
+      try {
+        if (ownsSocket && path) unlinkSync(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      } finally {
+        ownsSocket = false
+      }
+    },
+  })
 }
 /** The final event: subscribers (and a `gild stop` caller) learn the exit
  * code only after owned session files/listener are retired. */
-let exitFlushed: Promise<unknown> = Promise.resolve()
-function announceExit(code: number, recovery?: RecoveryLocation) {
+let exitFlushed: Promise<number> = Promise.resolve(0)
+function announceExit(
+  code: number,
+  recovery?: RecoveryLocation,
+  cleanupFailed?: (error: unknown) => void,
+) {
   const events = [...subscribers]
   const viewers = host?.endViewers() ?? []
   subscribers.clear()
@@ -239,13 +258,24 @@ function announceExit(code: number, recovery?: RecoveryLocation) {
     events,
     viewers,
     cleanup: retireSession,
+    cleanupFailed,
   })
   for (const socket of [...events, ...viewers]) sockets.delete(socket)
 }
 function finish(code: number, terminate = true) {
   if (closing) return
   closing = true
-  quiesce()
+  const shutdownFailed = (error: unknown) => {
+    code = 1
+    console.error(
+      `gild: session cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  try {
+    quiesce()
+  } catch (error) {
+    shutdownFailed(error)
+  }
   // Also terminate descendants on a normal agent exit; they may hold the PTY.
   try {
     killGroup('SIGHUP')
@@ -282,20 +312,33 @@ function finish(code: number, terminate = true) {
               })
           : undefined
       void Promise.allSettled([reporter?.close(), vm]).then(async () => {
-        if (recovery) {
-          const notice = `gild: VM workspace retained for recovery: ${recovery.directory}\r\n`
-          host?.push(Buffer.from(notice))
+        // Arm the existing 500ms drain +250ms exit allowance before retirement:
+        // a cleanup rejection or blocked terminal flush cannot bypass exit.
+        const forceExit = setTimeout(() => process.exit(code), 750)
+        try {
+          if (recovery) {
+            const notice = `gild: VM workspace retained for recovery: ${recovery.directory}\r\n`
+            host?.push(Buffer.from(notice))
+          }
+          // Final sync/recovery determines the result before owned retirement.
+          announceExit(code, recovery, shutdownFailed)
+          code = await exitFlushed
+        } catch (error) {
+          shutdownFailed(error)
+        } finally {
+          try {
+            restore()
+          } catch (error) {
+            shutdownFailed(error)
+          }
+          void Promise.resolve()
+            .then(() => output.flush())
+            .catch(shutdownFailed)
+            .finally(() => {
+              clearTimeout(forceExit)
+              process.exit(code)
+            })
         }
-        // Subscribers and stop callers stay connected until final sync/recovery
-        // has determined the actual session result.
-        announceExit(code, recovery)
-        await exitFlushed
-        restore()
-        // A signal exit cannot wait forever for a terminal reader that stopped.
-        if (terminate) setTimeout(() => process.exit(code), 250)
-        void Promise.all([output.flush(), exitFlushed]).then(() =>
-          process.exit(code),
-        )
       })
     },
     terminate ? 150 : 10,
@@ -321,10 +364,14 @@ if (!options.detach) process.on('disconnect', () => finish(1))
 process.on('uncaughtException', failed)
 process.on('unhandledRejection', failed)
 process.on('exit', () => {
-  restore()
   try {
-    killGroup('SIGKILL')
-  } catch {}
+    restore()
+  } catch {
+  } finally {
+    try {
+      killGroup('SIGKILL')
+    } catch {}
+  }
 })
 
 async function fallback(error: unknown) {
