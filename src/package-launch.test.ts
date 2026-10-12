@@ -13,6 +13,9 @@ import { installPackage } from './agent-packages'
 import { resolvePackageLaunch, preparePackageLaunch } from './package-launch'
 import { PACKAGE_OBJECTS } from './package-git-proof'
 import { deflateSync } from 'node:zlib'
+import { randomUUID } from 'node:crypto'
+import { createConnection } from 'node:net'
+import { symlink } from 'node:fs/promises'
 
 const git = (cwd: string, args: string[]) =>
   execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
@@ -277,3 +280,224 @@ test('package registration cleanup preserves a changed file and never deletes an
     await rm(f.root, { recursive: true, force: true })
   }
 }, 20000)
+
+test('actual persistent MAIN package HOST task owns byte lifetime, durable identity, cancel and restart without replay', async () => {
+  const f = await fixture(),
+    sourceDirectory = join(f.root, 'src')
+  await mkdir(sourceDirectory)
+  const built = await Bun.build({
+    entrypoints: [resolve('scripts/fixtures/package-main.ts')],
+    target: 'bun',
+    outdir: sourceDirectory,
+    naming: 'main.mjs',
+  })
+  expect(built.success, JSON.stringify(built.logs)).toBe(true)
+  await writeFile(
+    join(sourceDirectory, 'gild.ts'),
+    "await import('./main.mjs')\n",
+  )
+  await symlink(resolve('node_modules'), join(f.root, 'node_modules'))
+  await writeFile(
+    join(f.bin, 'codex'),
+    `#!/usr/bin/env python3
+import pathlib,sys,json,time
+args=sys.argv[1:]
+expected='developer_instructions='+json.dumps(${JSON.stringify('Exact package instructions\r\n')},separators=(',',':'))
+assert expected in args and 'fixture-model' in args and 'model_reasoning_effort="low"' in args and '--version' in args
+assert not any('write:requested-only' in a for a in args)
+skills=list(pathlib.Path('.agents/skills').glob('*/SKILL.md'));assert len(skills)==1
+assert skills[0].read_bytes()==bytes.fromhex('${f.skillBytes.toString('hex')}')
+assert skills[0].with_name('LICENSE').read_bytes()==bytes.fromhex('${f.license.toString('hex')}')
+with pathlib.Path('main-package-effects.txt').open('a') as out:out.write('one exact package effect\\n')
+if '--modify' in args:skills[0].write_text('owned runtime changed bytes')
+print('MAIN_PACKAGE_BYTES_READY',flush=True)
+if '--slow' in args:time.sleep(60)
+`,
+    { mode: 0o700 },
+  )
+  const env = {
+    HOME: f.root,
+    PATH: f.bin + ':' + process.env.PATH,
+    LANG: 'C',
+    TERM: 'xterm-256color',
+    TMPDIR: f.root,
+  }
+  const run = async (...args: string[]) => {
+    const child = Bun.spawn(
+      [process.execPath, 'run', join(sourceDirectory, 'gild.ts'), ...args],
+      { cwd: f.work, env, stdout: 'pipe', stderr: 'pipe' },
+    )
+    const [code, out, error] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    return { code, out, error }
+  }
+  const command = async (...args: string[]) => {
+    const r = await run(...args)
+    if (r.code) throw Error(r.error || r.out)
+    return JSON.parse(r.out)
+  }
+  const until = async (id: string, done: (t: any) => boolean) => {
+    const deadline = Date.now() + 15000
+    let last: unknown
+    while (Date.now() < deadline) {
+      const t = await command('task', 'status', id)
+      last = t
+      if (done(t)) return t
+      await Bun.sleep(60)
+    }
+    throw Error(
+      'Package task did not reach expected state: ' + JSON.stringify(last),
+    )
+  }
+  const submit = (...args: string[]) => [
+    'task',
+    'submit',
+    '--config-dir',
+    f.config,
+    '--as',
+    'fixture-approved',
+    ...args,
+    'package',
+    'demo',
+    'selected',
+  ]
+  let running = false
+  let passed = false
+  try {
+    const first = await command('main', 'start')
+    running = true
+    const id = randomUUID(),
+      input = {
+        agent: 'package',
+        args: [],
+        cwd: f.work,
+        mode: 'HOST',
+        package: { folder: 'demo', member: 'selected', configDir: f.config },
+        identity: 'fixture-approved',
+      }
+    // Send once and deliberately discard the reply; retry must reuse the durable task.
+    await new Promise<void>((done, reject) => {
+      const socket = createConnection(join(f.root, '.gild/main/main.sock'))
+      socket.on('error', reject)
+      socket.on('connect', () =>
+        socket.end(JSON.stringify({ type: 'submit', id, input }) + '\n', done),
+      )
+    })
+    const retried = await command(...submit('--id', id))
+    expect(retried.id).toBe(id)
+    const result = await until(id, (t) =>
+      ['SUCCEEDED', 'FAILED'].includes(t.status),
+    )
+    expect(result.status).toBe('SUCCEEDED')
+    expect(result.code).toBe(0)
+    expect(result.output).toContain('MAIN_PACKAGE_BYTES_READY')
+    expect(result.package).toEqual(input.package)
+    expect(result.identity).toBe('fixture-approved')
+    expect(
+      await readFile(join(f.work, 'main-package-effects.txt'), 'utf8'),
+    ).toBe('one exact package effect\n')
+    expect(await readdir(join(f.work, '.agents/skills'))).toEqual([])
+    for (const changed of [
+      { ...input, package: { ...input.package, member: 'other' } },
+      { ...input, package: { ...input.package, folder: 'other' } },
+      { ...input, identity: 'other-approved' },
+    ]) {
+      const response = await new Promise<string>((done, reject) => {
+        const socket = createConnection(join(f.root, '.gild/main/main.sock'))
+        let out = ''
+        socket.setEncoding('utf8')
+        socket.on('error', reject)
+        socket.on('connect', () =>
+          socket.write(
+            JSON.stringify({ type: 'submit', id, input: changed }) + '\n',
+          ),
+        )
+        socket.on('data', (chunk) => (out += chunk))
+        socket.on('end', () => done(out))
+      })
+      expect(response).toContain('different request')
+    }
+    const slow = await command(...submit(), '--slow')
+    const active = await until(
+      slow.id,
+      (t) =>
+        t.status === 'RUNNING' && t.output.includes('MAIN_PACKAGE_BYTES_READY'),
+    )
+    expect((await readdir(join(f.work, '.agents/skills'))).length).toBe(1)
+    const foreign = await new Promise<string>((done, reject) => {
+      const socket = createConnection(
+        join(f.root, '.gild/sessions', active.session + '.sock'),
+      )
+      let out = ''
+      socket.setEncoding('utf8')
+      socket.on('error', reject)
+      socket.on('connect', () =>
+        socket.write(
+          JSON.stringify({
+            type: 'stop',
+            graceMs: 100,
+            expected: result.worker,
+          }) + '\n',
+        ),
+      )
+      socket.on('data', (chunk) => (out += chunk))
+      socket.on('end', () => done(out))
+    })
+    expect(foreign).toContain('foreign worker was not stopped')
+    expect((await command('task', 'cancel', slow.id)).status).toBe('CANCELLED')
+    const cancelled = await until(slow.id, (t) => typeof t.code === 'number')
+    expect(cancelled.code).not.toBe(0)
+    expect(await readdir(join(f.work, '.agents/skills'))).toEqual([])
+    const modify = await command(...submit(), '--modify')
+    const changed = await until(modify.id, (t) => t.status === 'FAILED')
+    expect(changed.error).toContain('retained')
+    const retained = (await readdir(join(f.work, '.agents/skills')))[0]
+    expect(
+      await readFile(
+        join(f.work, '.agents/skills', retained, 'SKILL.md'),
+        'utf8',
+      ),
+    ).toBe('owned runtime changed bytes')
+    // Remove only this test's known retained fixture before the next selected skill launch.
+    await rm(join(f.work, '.agents/skills', retained), { recursive: true })
+    const crash = await command(...submit(), '--slow')
+    await until(
+      crash.id,
+      (t) =>
+        t.status === 'RUNNING' && t.output.includes('MAIN_PACKAGE_BYTES_READY'),
+    )
+    const before = await readFile(
+      join(f.work, 'main-package-effects.txt'),
+      'utf8',
+    )
+    process.kill(first.pid, 'SIGKILL')
+    running = false
+    const deadline = Date.now() + 8000
+    while (
+      (await readdir(join(f.work, '.agents/skills'))).length &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(50)
+    expect(await readdir(join(f.work, '.agents/skills'))).toEqual([])
+    const recovered = await command('main', 'start')
+    running = true
+    expect(recovered.machineId).toBe(first.machineId)
+    expect((await command(...submit('--id', crash.id), '--slow')).status).toBe(
+      'INTERRUPTED',
+    )
+    expect(
+      await readFile(join(f.work, 'main-package-effects.txt'), 'utf8'),
+    ).toBe(before)
+    expect((await command(...submit('--id', id))).submitted).toBe(
+      result.submitted,
+    )
+    passed = true
+  } finally {
+    if (running) await run('main', 'stop')
+    if (passed) await rm(f.root, { recursive: true, force: true })
+    else console.log('Owned failing MAIN package fixture retained:', f.root)
+  }
+}, 60000)

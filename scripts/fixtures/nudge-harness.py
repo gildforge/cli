@@ -1,5 +1,7 @@
 """Watchdog nudges end to end: fake forge + `gild spawn --nudge … agent` + the PTY fixture agent."""
-import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios
+import os,sys,pty,subprocess,pathlib,tempfile,json,socket,select,time,signal,fcntl,struct,http.server,threading,urllib.parse,termios,errno
+sys.dont_write_bytecode=True
+from nudge_cleanup import stop_owned
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 TOKEN='fixture-scoped-token'
@@ -100,11 +102,13 @@ with tempfile.TemporaryDirectory(dir=TEMP_ROOT,prefix='nudge-') as d:
         def subscribe(self):
             self.stream=socket.socket(socket.AF_UNIX);self.stream.connect(str(path));self.stream.sendall(b'{"type":"subscribe"}\n')
         def stop(self):
-            if self.proc.poll() is None:
-                self.proc.send_signal(signal.SIGTERM);assert self.proc.wait(timeout=8)==143
-            if self.stream:self.stream.close()
-            os.close(self.m);os.close(self.s)
+            def drain(t):
+                try:self.read(t)
+                except OSError as error:
+                    if error.errno!=errno.EIO:raise
+            stop_owned(self.proc,drain,primary)
     run=None
+    primary=None
     try:
         # The per-session rule adds to the profile's; ci reads a repo outside the channels.
         run=Run(['--nudge','ci:owner/ci'])
@@ -182,9 +186,14 @@ with tempfile.TemporaryDirectory(dir=TEMP_ROOT,prefix='nudge-') as d:
         # The mentions were turns of the agent's own, so the idle limit started over.
         assert cli['nudges'][0]['fired']>2,cli['nudges']
         print(json.dumps({'passed':True}))
+    except BaseException as error:
+        primary=error
+        raise
     finally:
-        if run is not None:
-            if run.proc.poll() is None:run.proc.terminate();run.proc.wait(timeout=8)
-            try:os.close(run.m);os.close(run.s)
-            except OSError:pass
-        api.shutdown()
+        try:
+            if run is not None:run.stop()
+        finally:
+            if run is not None:
+                if run.stream:run.stream.close()
+                os.close(run.m);os.close(run.s)
+            api.shutdown()

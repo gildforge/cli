@@ -15,7 +15,7 @@ import {
 } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
 import { hostname, homedir, platform, release } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { gildInvocation } from './gild-invocation'
 import { privateSessionsDirectory, removeDeadSocket } from './spawn-sessions'
 import { stopSession } from './spawn-attach'
@@ -27,6 +27,20 @@ const taskInput = z
     args: z.array(z.string().max(8192)).max(128),
     cwd: z.string().max(4096).refine(isAbsolute),
     mode: z.enum(['HOST', 'VM']),
+    package: z
+      .object({
+        folder: z.string().min(1).max(64),
+        member: z.string().min(1).max(64),
+        configDir: z.string().max(4096).refine(isAbsolute),
+      })
+      .strict()
+      .optional(),
+    identity: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .optional(),
   })
   .strict()
 const task = taskInput.extend({
@@ -224,8 +238,12 @@ export async function runLocalMain() {
       '--detach',
       '--supervised',
       ...(t.mode === 'VM' ? ['--vm'] : []),
+      ...(t.package
+        ? ['--as', t.identity!, '--config-dir', t.package.configDir]
+        : []),
       ...(t.agent === 'agent' ? [] : ['--name', session]),
       t.agent,
+      ...(t.package ? [t.package.folder, t.package.member] : []),
       ...t.args,
     ]
     const child = spawn(argv[0], argv.slice(1), {
@@ -349,6 +367,14 @@ export async function runLocalMain() {
         if (stopping) throw Error('Main is stopping')
         let result: unknown
         if (r.type === 'submit') {
+          if (
+            r.input.agent === 'package'
+              ? !r.input.package || !r.input.identity
+              : r.input.package || r.input.identity
+          )
+            throw Error(
+              'Package tasks require explicit package/member and separately approved identity; native tasks cannot borrow those fields',
+            )
           const existingReceipt = () => {
             const existing = state.tasks.find((t) => t.id === r.id)
             if (!existing) return undefined
@@ -357,6 +383,8 @@ export async function runLocalMain() {
               args: existing.args,
               cwd: existing.cwd,
               mode: existing.mode,
+              package: existing.package,
+              identity: existing.identity,
             }
             if (JSON.stringify(original) !== JSON.stringify(r.input))
               throw Error(
@@ -516,12 +544,33 @@ export function mainCommands(program: Command) {
     .passThroughOptions()
     .option('--vm', 'Linux Firecracker task')
     .option('--id <uuid>', 'stable task reference for retrying a lost reply')
+    .option(
+      '--as <identity>',
+      'separately approved identity for an explicit package task',
+    )
+    .option(
+      '--config-dir <path>',
+      'package and VM configuration root',
+      join(homedir(), '.config', 'gild'),
+    )
     .action(
       async (
         agent: string,
         args: string[],
-        opts: { vm?: boolean; id?: string },
-      ) =>
+        opts: { vm?: boolean; id?: string; as?: string; configDir: string },
+      ) => {
+        if ((agent === 'package') !== !!opts.as)
+          throw Error(
+            'Use task submit --as <approved-identity> package <folder> <member>',
+          )
+        const selected =
+          agent === 'package'
+            ? {
+                folder: args.shift() ?? '',
+                member: args.shift() ?? '',
+                configDir: resolve(opts.configDir),
+              }
+            : undefined
         console.log(
           JSON.stringify(
             await mainRequest({
@@ -532,10 +581,12 @@ export function mainCommands(program: Command) {
                 args,
                 cwd: process.cwd(),
                 mode: opts.vm ? 'VM' : 'HOST',
+                ...(selected ? { package: selected, identity: opts.as } : {}),
               },
             }),
           ),
-        ),
+        )
+      },
     )
   for (const type of ['status', 'cancel'] as const)
     tasks

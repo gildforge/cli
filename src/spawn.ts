@@ -1,6 +1,6 @@
 import { prepareManualProfileSkill } from './skills/manual-profile'
 import { adapterFor } from './spawn-adapters'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
@@ -135,18 +135,25 @@ export function spawnCommands(
             ? await resolveProfile(args.shift() ?? '', args)
             : undefined
         const profile = resolved?.profile
+        const packageSelection =
+          agent === 'package'
+            ? {
+                directory: packageDirectory(args.shift() ?? '', opts.configDir),
+                member: args.shift() ?? '',
+              }
+            : undefined
         const selectedPackage =
           agent === 'package'
             ? await resolvePackageLaunch(
-                packageDirectory(args.shift() ?? '', opts.configDir),
-                args.shift() ?? '',
+                packageSelection!.directory,
+                packageSelection!.member,
               )
             : undefined
         if (selectedPackage && (!opts.as || !resolveIdentity))
           throw Error(
             'Package launch needs --as with a separately approved Gild identity',
           )
-        if (selectedPackage && opts.detach)
+        if (selectedPackage && opts.detach && !opts.supervised)
           throw Error(
             'Package byte delivery currently requires an attached session; no unskilled detached fallback',
           )
@@ -261,15 +268,35 @@ export function spawnCommands(
               cwd,
             )
           : undefined
-        const packageMaterial = selectedPackage
-          ? preparePackageLaunch(selectedPackage, cwd, args)
-          : undefined
-        args = packageMaterial?.args ?? args
+        // MAIN's supervised task process owns delivery, never the submitting CLI.
+        // Keep native PTY work in Node; Bun holds the descriptor-bound lease until
+        // that worker exits (including VM final sync), then reports its own result.
+        let supervisedWorker: ChildProcess | undefined
+        let supervisorStopping = false
+        const supervisorStop = () => {
+          supervisorStopping = true
+          supervisedWorker?.kill('SIGHUP')
+        }
+        const supervisionSignals = ['disconnect', 'SIGTERM', 'SIGHUP'] as const
+        if (opts.supervised)
+          for (const signal of supervisionSignals)
+            process.on(signal, supervisorStop)
+        let packageMaterial: ReturnType<typeof preparePackageLaunch> | undefined
         try {
+          if (supervisorStopping)
+            throw Error('Task supervisor stopped before package delivery')
+          packageMaterial = selectedPackage
+            ? preparePackageLaunch(selectedPackage, cwd, args)
+            : undefined
+          args = packageMaterial?.args ?? args
+          const bunWorker = opts.vm
+          const companion = bunWorker ? undefined : await workerFile()
+          if (supervisorStopping)
+            throw Error('Task supervisor stopped before worker launch')
           const worker = spawn(
-            opts.vm ? process.execPath : 'node',
+            bunWorker ? process.execPath : 'node',
             [
-              ...(opts.vm
+              ...(bunWorker
                 ? import.meta.url.includes('$bunfs')
                   ? ['__vm-worker']
                   : [
@@ -277,7 +304,7 @@ export function spawnCommands(
                       new URL('./gild.ts', import.meta.url).pathname,
                       '__vm-worker',
                     ]
-                : [await workerFile()]),
+                : [companion!]),
               JSON.stringify({
                 agent,
                 pinnedSkill: !!skill || !!selectedPackage,
@@ -322,30 +349,19 @@ export function spawnCommands(
                   stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
                 },
           )
+          supervisedWorker = worker
           if (report)
             worker.once('spawn', () => worker.send({ type: 'report', report }))
           if (bridge)
             worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
           if (opts.supervised) {
-            const disconnected = () => worker.kill('SIGHUP')
-            process.on('disconnect', disconnected)
-            process.on('SIGTERM', disconnected)
-            process.on('SIGHUP', disconnected)
             worker.on('message', (message) => {
               if (process.connected) process.send?.(message)
             })
-            try {
-              process.exitCode = await new Promise<number>(
-                (resolve, reject) => {
-                  worker.once('error', reject)
-                  worker.once('exit', (code) => resolve(code ?? 1))
-                },
-              )
-            } finally {
-              process.off('disconnect', disconnected)
-              process.off('SIGTERM', disconnected)
-              process.off('SIGHUP', disconnected)
-            }
+            process.exitCode = await new Promise<number>((resolve, reject) => {
+              worker.once('error', reject)
+              worker.once('exit', (code) => resolve(code ?? 1))
+            })
             return
           }
           if (opts.detach) return console.log(await detachedReady(worker))
@@ -392,6 +408,9 @@ export function spawnCommands(
           try {
             packageMaterial?.close()
           } finally {
+            if (opts.supervised)
+              for (const signal of supervisionSignals)
+                process.off(signal, supervisorStop)
             skill?.close()
           }
         }

@@ -305,6 +305,11 @@ gild package install /path/to/consumer
 gild package update /path/to/consumer
 gild spawn --as ava package personal ava
 gild spawn --as ava --vm package personal ava
+gild main start
+gild task submit --as ava package personal ava
+gild task submit --vm --as ava package personal ava
+gild task status <task-id>
+gild task cancel <task-id>
 ```
 
 `agent ls` walks only immediate package folders and warns per malformed neighbor.
@@ -341,5 +346,10 @@ extra or replaced registration data is retained with an error on cleanup.
 Requested permissions never become approval/sandbox flags. Existing native flags
 and the separately approved identity retain their normal authority boundaries.
 Kimi instructions/skills/assets delivery is unsupported and fails explicitly.
-Package `--detach` and persistent-main package execution are unsupported at this
-checkpoint: delivery requires an attached session, with no unskilled fallback.
+MAIN dispatches package tasks in the background using the same pinned resolver
+and byte delivery. Each task's supervised process owns its registrations through
+PTY exit, VM sync and cancellation; its result follows cleanup. Durable request
+identity includes package folder/member/config root and approved identity, along
+with native arguments, mode and working directory. Same-ID retries return the
+original task; interrupted tasks are recorded without automatic relaunch.
+Standalone package `--detach` remains unsupported; use MAIN for background work.
