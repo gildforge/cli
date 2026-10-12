@@ -1,0 +1,46 @@
+{
+  "proposalCommit": "41c15cea3763a79987bc18f8655db7030b7dc554",
+  "generator": {
+    "path": "scripts/generate-api-client.mjs",
+    "sha256": "5908cb2751fd551f32c7c39d8a6125ca609608034fa677d8a43c494d4bf98e75"
+  },
+  "files": [
+    {
+      "source": "lib/api/agent-profile-canonical.ts",
+      "sourceSha256": "943ff36387ea5f39edc091a8815e2f94188a5c76ef4b813b396b1bda5d20d9c4",
+      "output": "src/api/agent-profile-canonical.ts",
+      "outputSha256": "cd5bbd408d34ae60de4ec4e9b370fe1d84e24905f13b951b91415701a871cc04"
+    },
+    {
+      "source": "lib/api/agent-profile-contract.ts",
+      "sourceSha256": "7c41f5e915bead2c92598e15b240482cc8442a8f088ad64f5c2474ba8d05089d",
+      "output": "src/api/agent-profile-contract.ts",
+      "outputSha256": "cb5ba49c8db1eed34b95d837215e18fa4a89208e69d1f4c1a6d23f98d795b3c0"
+    },
+    {
+      "source": "lib/api/agent-profile-scopes.ts",
+      "sourceSha256": "e1902c97ecd81f65c926f3af5e2da15d8874958f3d47be8b717231f9df113fe9",
+      "output": "src/api/agent-profile-scopes.ts",
+      "outputSha256": "53ca4b870348c179f829e94929e6d67dca7ebe9b770ff93f3906d393f03ebd37"
+    },
+    {
+      "source": "lib/api/client.ts",
+      "sourceSha256": "7871c6c70e0a6ecd55fd22b5c49f0cea40c9575a46ff7d0eadad7315059db13e",
+      "output": "src/api/client.ts",
+      "outputSha256": "690680b648d9652473eebcdccc8412575e3d4abdfbc69f32723b873e836bff8b"
+    }
+  ],
+  "scope": "Minimal agreed project representation typed metadata/data helper additions only; exact new artifact review pending. No migration/producer/auth/route/client method/runtime implementation.",
+  "legacyScopesUnchanged": true,
+  "profileVector": {
+    "bytes": 806,
+    "sha256": "5d305adee182d62eed11d5a68ba41892739ce29c65e7647f49ffa2b62b95e024"
+  },
+  "normativeSource": {
+    "path": "docs/architecture/agent-settings-coordination-v1.md",
+    "blob": "ab7fa1a639247c35af06f008d318a2ab02682008",
+    "sha256": "2e04773738a1d2f7919340c21233088d4d91c88cfdf13bb35ac536003f615a02"
+  },
+  "canonicalCommit": "96926393d91bb61f302a788ba369c1144a00bf47",
+  "consumption": "Only exact969 project typed metadata contract copied after parent independent review/specific handoff. No migration/producer/authorization/admission/route/client methods or other output transfer. Listing absent/null/descriptor; profile references absent/empty/populated, null denied."
+}

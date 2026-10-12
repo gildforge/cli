@@ -42,8 +42,9 @@ before selecting any tool upgrade or new rootfs.
 1. Keep existing vz/gild-vz.swift and src/isolation/vz.ts. Validate the existing
 helper's architecture, entitlement and source/provenance; rebuilding/signing or
 executing its check remains a separately authorized action. Keep the current
-protocol2 guest agent/init/vsock/workspace contract and exact CLI guest-version
-handshake. Reuse a verified Ubuntu x64 rootfs if compatible; preserve the original
+protocol2 guest agent/init/vsock/workspace contract. The existing handshake checks
+protocol only; exact guest/helper/harness version and artifact provenance must be
+verified separately for admission, not inferred from diagnostic version text. Reuse a verified Ubuntu x64 rootfs if compatible; preserve the original
 image and record any changes as a new independently digested candidate.
 
 2. Add only the missing x86 VZ kernel recipe/config to the existing

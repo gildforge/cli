@@ -368,3 +368,29 @@ export async function resolveAgentRuntimeSupport(catalogValue: unknown, queryVal
   parseAgentRuntimeSupportQuery(queryValue)
   return resolvePreparedAgentRuntimeSupport(await prepareAgentRuntimeSupportCatalog(catalogValue), queryValue)
 }
+
+// Agreed d21bb89 project representation, typed data only. Parsing cannot prove
+// registry membership, resource incarnation, caller ownership or read authority.
+// Optional metadata stays outside immutable ProfileRevision and public support.
+const agentProjectId = identifier
+const agentProjectRepository = z.object({
+  owner: z.string().regex(/^[a-z0-9][a-z0-9-]{0,38}$/),
+  name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/i),
+}).strict()
+const resolvedAgentProject = z.object({
+  projectId: agentProjectId, resolution: z.literal('resolved'),
+  repository: agentProjectRepository, state: z.enum(['ready', 'pending', 'archived']),
+}).strict()
+const unresolvedAgentProject = z.object({ projectId: agentProjectId, resolution: z.literal('unresolved') }).strict()
+export const agentProjectReferenceSchema = z.discriminatedUnion('resolution', [resolvedAgentProject, unresolvedAgentProject])
+export type AgentProjectReference = z.infer<typeof agentProjectReferenceSchema>
+export const agentRepoProjectMetadataSchema = z.object({ agentProject: agentProjectReferenceSchema.nullable().optional() }).strict()
+export type AgentRepoProjectMetadata = z.infer<typeof agentRepoProjectMetadataSchema>
+export const agentProfileProjectMetadataSchema = z.object({
+  projectReferences: z.array(agentProjectReferenceSchema).max(64)
+    .refine(refs => sortedUnique(refs.map(ref => ref.projectId)), 'Project references must be unique and sorted by exact ID').optional(),
+}).strict()
+export type AgentProfileProjectMetadata = z.infer<typeof agentProfileProjectMetadataSchema>
+export function parseAgentProjectReference(value: unknown): AgentProjectReference { return parsed(agentProjectReferenceSchema, value) }
+export function parseAgentRepoProjectMetadata(value: unknown) { return parsed(agentRepoProjectMetadataSchema, value) }
+export function parseAgentProfileProjectMetadata(value: unknown) { return parsed(agentProfileProjectMetadataSchema, value) }
