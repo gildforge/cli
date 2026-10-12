@@ -15,6 +15,12 @@ import {
 } from './isolation'
 import { privateSessionsDirectory, socketPath } from './spawn-sessions'
 import {
+  CodexCredentialLease,
+  CodexCredentialError,
+  codexFileArgs,
+} from './isolation/codex-auth'
+import { adapterFor } from './spawn-adapters'
+import {
   describeSync,
   hostManifest,
   syncBack,
@@ -171,132 +177,163 @@ export async function startVmChild(opts: {
         ? '--vm needs a working vz setup: the published guest image and gild-vz helper (fetched on first use), or `vm` (kernel, rootfs, vz helper) in <config dir>/isolation.json (docs/VM.md)'
         : '--vm needs a working Firecracker setup: Firecracker on PATH (or `vm.firecracker` in <config dir>/isolation.json), mke2fs, and an accessible /dev/kvm (docs/VM.md)',
     )
-  const kb = Number(
-    execFileSync('du', ['-sk', opts.cwd], { encoding: 'utf8' }).split(/\s+/)[0],
-  )
-  if (kb > 2 * 1024 * 1024)
-    throw new Error(
-      `${opts.cwd} is larger than 2 GiB; --vm copies the working directory into the VM`,
+  const selected =
+    adapterFor(opts.binary, opts.args)?.name === 'codex'
+      ? host.vm.codexAuth
+      : undefined
+  if (selected && opts.env.OPENAI_API_KEY)
+    throw new CodexCredentialError(
+      'Selected Codex cache cannot be combined with API-key authentication',
     )
-  // What the guest starts from: the baseline every later sync is compared to.
-  const baseline = await hostManifest(opts.cwd)
-  const vmDir = await mkdtemp(
-    join(await privateSessionsDirectory(), `${opts.sessionId}.vm-`),
-  )
-  const iso: Isolation = await startVm(host.vm, opts.cwd, vmDir, opts.log)
-  const fail = async (e: unknown) => {
-    await iso.close()
-    throw e
-  }
+  const credentials = selected
+    ? await CodexCredentialLease.acquire(selected, opts.cwd)
+    : undefined
   try {
-    // Hooks run inside the guest and arrive here over vsock; only this session's id is accepted.
-    iso.onGuestMessage!(9100, (m) => {
-      if (
-        m?.op !== 'hook' ||
-        m.session !== opts.sessionId ||
-        typeof m.raw !== 'string'
+    const kb = Number(
+      execFileSync('du', ['-sk', opts.cwd], { encoding: 'utf8' }).split(
+        /\s+/,
+      )[0],
+    )
+    if (kb > 2 * 1024 * 1024)
+      throw new Error(
+        `${opts.cwd} is larger than 2 GiB; --vm copies the working directory into the VM`,
       )
-        return
-      let raw: unknown
-      try {
-        raw = JSON.parse(m.raw)
-      } catch {
-        return
-      }
-      const s = createConnection(socketPath(opts.sessionId))
-      s.on('error', () => {})
-      s.on('connect', () =>
-        s.end(
-          JSON.stringify({
-            type: 'hook',
-            agent: String(m.agent ?? 'claude'),
-            raw,
-          }) + '\n',
-        ),
-      )
-    })
-    // Small files the host prepared (hook settings, a script agent) are copied into the guest tmpfs.
-    let n = 0
-    const upload = async (path: string, executable: boolean) => {
-      if (!isAbsolute(path)) return undefined
-      const st = await stat(path).catch(() => null)
-      if (!st?.isFile() || st.size > MAX_UPLOAD) return undefined
-      const target = `/tmp/gild/${n++}-${basename(path)}`
-      await iso.put(
-        target,
-        await readFile(path, 'utf8'),
-        executable ? 0o700 : 0o600,
-      )
-      return target
+    // What the guest starts from: the baseline every later sync is compared to.
+    const baseline = await hostManifest(opts.cwd)
+    const vmDir = await mkdtemp(
+      join(await privateSessionsDirectory(), `${opts.sessionId}.vm-`),
+    )
+    const iso: Isolation = await startVm(host.vm, opts.cwd, vmDir, opts.log)
+    const fail = async (e: unknown) => {
+      credentials?.abandon()
+      await iso.close()
+      throw e
     }
-    const head = await readFile(opts.binary, {
-      encoding: 'latin1',
-      flag: 'r',
-    }).then(
-      (t) => t.slice(0, 2),
-      () => '',
-    )
-    const program =
-      (head === '#!' && (await upload(opts.binary, true))) ||
-      basename(opts.binary)
-    const args: string[] = []
-    for (const a of opts.args) args.push((await upload(a, false)) ?? a)
-    const pty = await iso.pty!({
-      argv: [program, ...args],
-      env: opts.env,
-      cwd: '/workspace',
-      cols: opts.cols,
-      rows: opts.rows,
-    })
-    const conflictDir = join(
-      await privateSessionsDirectory(),
-      `${opts.sessionId}.conflicts`,
-    )
-    // One sync at a time; each one carries only what changed since the last.
-    let chain: Promise<unknown> = Promise.resolve()
-    const sync = () => {
-      const next = chain.then(async () => {
-        const r = await syncBack({
-          root: opts.cwd,
-          guestRoot: '/workspace',
-          files: iso.files!,
-          baseline,
-          conflictDir,
-        })
-        opts.log?.(`synced ${describeSync(r)}`)
-        return r
+    try {
+      // Hooks run inside the guest and arrive here over vsock; only this session's id is accepted.
+      iso.onGuestMessage!(9100, (m) => {
+        if (
+          m?.op !== 'hook' ||
+          m.session !== opts.sessionId ||
+          typeof m.raw !== 'string'
+        )
+          return
+        let raw: unknown
+        try {
+          raw = JSON.parse(m.raw)
+        } catch {
+          return
+        }
+        const s = createConnection(socketPath(opts.sessionId))
+        s.on('error', () => {})
+        s.on('connect', () =>
+          s.end(
+            JSON.stringify({
+              type: 'hook',
+              agent: String(m.agent ?? 'claude'),
+              raw,
+            }) + '\n',
+          ),
+        )
       })
-      chain = next.catch(() => {})
-      return next
-    }
-    let disposed: Promise<SyncResult | undefined> | undefined
-    let recovery: RecoveryLocation | undefined
-    const dispose = async () => {
-      try {
-        const result = await finishVmSync(sync, iso, vmDir, opts.log)
-        recovery = result.recovery
-        return result
-      } catch (e) {
-        if (e instanceof VmSyncError) recovery = e.recovery
-        throw e
+      if (credentials) await credentials.restore(iso)
+      // Small files the host prepared (hook settings, a script agent) are copied into the guest tmpfs.
+      let n = 0
+      const upload = async (path: string, executable: boolean) => {
+        if (!isAbsolute(path)) return undefined
+        const st = await stat(path).catch(() => null)
+        if (!st?.isFile() || st.size > MAX_UPLOAD) return undefined
+        const target = `/tmp/gild/${n++}-${basename(path)}`
+        await iso.put(
+          target,
+          await readFile(path, 'utf8'),
+          executable ? 0o700 : 0o600,
+        )
+        return target
       }
-    }
-    return {
-      pid: -1,
-      write: (d) => pty.write(d),
-      resize: (c, r) => pty.resize(c, r),
-      onData: (cb) => pty.onData(cb),
-      onExit: (cb) => pty.onExit((code) => cb({ exitCode: code })),
-      pause() {},
-      resume() {},
-      kill: () => pty.close(),
-      sync,
-      dispose: () => (disposed ??= dispose()),
-      get recovery() {
-        return recovery
-      },
+      const head = await readFile(opts.binary, {
+        encoding: 'latin1',
+        flag: 'r',
+      }).then(
+        (t) => t.slice(0, 2),
+        () => '',
+      )
+      const program =
+        (head === '#!' && (await upload(opts.binary, true))) ||
+        basename(opts.binary)
+      const args: string[] = []
+      for (const a of opts.args) args.push((await upload(a, false)) ?? a)
+      const pty = await iso.pty!({
+        argv: [program, ...(credentials ? codexFileArgs(args) : args)],
+        env: credentials
+          ? { ...opts.env, CODEX_HOME: '/root/.codex' }
+          : opts.env,
+        cwd: '/workspace',
+        cols: opts.cols,
+        rows: opts.rows,
+      })
+      const conflictDir = join(
+        await privateSessionsDirectory(),
+        `${opts.sessionId}.conflicts`,
+      )
+      // One sync at a time; each one carries only what changed since the last.
+      let chain: Promise<unknown> = Promise.resolve()
+      const sync = () => {
+        const next = chain.then(async () => {
+          const r = await syncBack({
+            root: opts.cwd,
+            guestRoot: '/workspace',
+            files: iso.files!,
+            baseline,
+            conflictDir,
+          })
+          opts.log?.(`synced ${describeSync(r)}`)
+          return r
+        })
+        chain = next.catch(() => {})
+        return next
+      }
+      let disposed: Promise<SyncResult | undefined> | undefined
+      let recovery: RecoveryLocation | undefined
+      const dispose = async () => {
+        let credentialError: unknown
+        try {
+          if (credentials) await credentials.persist(iso)
+        } catch (e) {
+          credentialError = e
+        }
+        try {
+          const result = await finishVmSync(sync, iso, vmDir, opts.log)
+          if (credentialError) throw credentialError
+          credentials?.release()
+          recovery = result.recovery
+          return result
+        } catch (e) {
+          if (e instanceof VmSyncError) recovery = e.recovery
+          credentials?.abandon()
+          throw e
+        }
+      }
+      return {
+        pid: -1,
+        write: (d) => pty.write(d),
+        resize: (c, r) => pty.resize(c, r),
+        onData: (cb) => pty.onData(cb),
+        onExit: (cb) => pty.onExit((code) => cb({ exitCode: code })),
+        pause() {},
+        resume() {},
+        kill: () => pty.close(),
+        sync,
+        dispose: () => (disposed ??= dispose()),
+        get recovery() {
+          return recovery
+        },
+      }
+    } catch (e) {
+      return fail(e)
     }
   } catch (e) {
-    return fail(e)
+    credentials?.abandon()
+    throw e
   }
 }

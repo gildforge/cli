@@ -46,6 +46,7 @@ import {
   type VmPlatform,
 } from './image'
 import type { Isolation } from './session'
+import { codexAuthSchema } from './codex-auth'
 
 export * from './policy'
 export type { Isolation } from './session'
@@ -76,6 +77,7 @@ export const hostConfigSchema = (configDir: string) =>
         memoryMiB: z.number().int().min(128).default(1024),
         vcpus: z.number().int().min(1).default(2),
         egress: z.enum(['auto', 'block', 'allow']).default('auto'),
+        codexAuth: codexAuthSchema.optional(),
       })
       .optional(),
     container: z

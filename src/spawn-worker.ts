@@ -23,6 +23,7 @@ import { InjectionQueue } from './spawn-queue'
 import { startWatchdog } from './spawn-nudge-worker'
 import type { NudgeEvent } from './spawn-nudge'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
+import { CodexCredentialError } from './isolation/codex-auth'
 import {
   describeSync,
   type SyncResult,
@@ -307,7 +308,7 @@ function finish(code: number, terminate = true) {
               })
               .catch((error) => {
                 console.error(
-                  `gild: final VM sync failed: ${(error as Error).message}; recovery workspace retained`,
+                  `gild: final VM ${error instanceof CodexCredentialError ? 'credential finalization' : 'sync'} failed: ${(error as Error).message}; recovery workspace retained`,
                 )
                 code ||= 1
                 if (child && 'dispose' in child) recovery = child.recovery

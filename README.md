@@ -264,3 +264,27 @@ spawn are not exposed yet. See [current support and rehearsal requirements](docs
 before choosing a demo backend.
 
 -codex
+
+### Selected Codex cache for VM sessions (held candidate)
+
+An owner can opt into `vm.codexAuth` in the machine's `isolation.json` with
+`{"source":"/absolute/private/dedicated-codex/auth.json","dedicated":true}`.
+The source directory must be owner-private (0700), its regular file 0600, and
+outside the workspace. Active default/CODEX_HOME caches, symlinks, hardlinks,
+API-key caches and conflicting keyring/auto options are refused.
+
+Only Codex VM consumers of that selected path share the exclusive lease.
+Other tasks remain independent. The guest receives the file postboot in
+`/root/.codex` tmpfs; it is not baked into an image, passed as an argument, or
+synced with the workspace. The returned native cache is saved before VM close
+only when the captured main source is unchanged. A lost or conflicting refresh
+leaves the selected stream blocked for explicit owner reconciliation. Each
+successful next task captures the updated cache, not the original login seed.
+
+This lease cannot synchronize independent Codex applications. A dedicated
+source with no independent consumers is required; keeping another host client
+signed in is not synchronization. Guest code can read the credential, even
+with private permissions. This feature does not provide protected custody,
+provider revocation, Gild identity or installation grants. Current acceptance
+uses fake values only; live credential import and model execution need separate
+authorization.

@@ -280,6 +280,114 @@ export class AnchoredDirectory {
       closeSync(fd)
     }
   }
+  /** Capture one private owner file through this directory descriptor. */
+  readPrivateRegular(name: string, maxBytes: number, uid = process.getuid!()) {
+    const fd = check(
+      sys().openat(
+        this.fd,
+        ptr(cstr(name)),
+        constants.O_RDONLY |
+          constants.O_NOFOLLOW |
+          constants.O_NONBLOCK |
+          CLOEXEC,
+        0,
+      ),
+      'openat private file',
+    )
+    try {
+      const stat = fstatSync(fd)
+      if (
+        !stat.isFile() ||
+        stat.uid !== uid ||
+        stat.nlink !== 1 ||
+        (stat.mode & 0o777) !== 0o600 ||
+        stat.size > maxBytes
+      )
+        throw Error(
+          'private file ownership, permissions, type or size is unsafe',
+        )
+      const data = Buffer.alloc(maxBytes + 1)
+      let size = 0
+      while (size < data.length) {
+        const n = readSync(fd, data, size, data.length - size, null)
+        if (!n) break
+        size += n
+      }
+      const after = fstatSync(fd)
+      if (
+        size !== stat.size ||
+        after.size !== stat.size ||
+        after.mtimeMs !== stat.mtimeMs ||
+        after.ctimeMs !== stat.ctimeMs
+      )
+        throw Error('private file changed during capture')
+      return { data: Buffer.from(data.subarray(0, size)), stat }
+    } finally {
+      closeSync(fd)
+    }
+  }
+  /** Exclusive cooperating callers must hold their lease through this durable replacement. */
+  replacePrivateRegular(
+    name: string,
+    data: Buffer,
+    captured: ReturnType<AnchoredDirectory['readPrivateRegular']>,
+    maxBytes: number,
+    uid = process.getuid!(),
+  ) {
+    const temp = cstr(`.gild-private-${randomBytes(12).toString('hex')}`)
+    let made = false
+    try {
+      const fd = check(
+        sys().openat(
+          this.fd,
+          ptr(temp),
+          constants.O_WRONLY |
+            constants.O_CREAT |
+            constants.O_EXCL |
+            constants.O_NOFOLLOW |
+            CLOEXEC,
+          0o600,
+        ),
+        'openat private update',
+      )
+      made = true
+      try {
+        fchmodSync(fd, 0o600)
+        writeFileSync(fd, data)
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      const current = this.readPrivateRegular(name, maxBytes, uid)
+      const same =
+        [
+          'dev',
+          'ino',
+          'size',
+          'mtimeMs',
+          'ctimeMs',
+          'mode',
+          'uid',
+          'nlink',
+        ].every(
+          (key) =>
+            current.stat[key as keyof typeof current.stat] ===
+            captured.stat[key as keyof typeof captured.stat],
+        ) && current.data.equals(captured.data)
+      current.data.fill(0)
+      if (!same) return false
+      check(
+        sys().renameat(this.fd, ptr(temp), this.fd, ptr(cstr(name))),
+        'renameat private update',
+      )
+      made = false
+      fsyncSync(this.fd)
+      return true
+    } finally {
+      if (made)
+        check(sys().unlinkat(this.fd, ptr(temp), 0), 'unlinkat private update')
+    }
+  }
   /** Publish complete private bytes without replacing any existing destination. */
   putRegularIfAbsent(name: string, data: Buffer): boolean {
     const temp = cstr(`.gild-bytes-${randomBytes(12).toString('hex')}`),
