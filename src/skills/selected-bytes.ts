@@ -9,6 +9,7 @@ import {
   SkillByteError,
   validateSkillFiles,
   verifySkillBytes,
+  type LocalSkillByteExpectation,
 } from './local-bytes'
 
 export async function resolveSelectedSkill(selection: unknown, value: unknown) {
@@ -37,6 +38,27 @@ export async function readSelectedSkillBytes(
   return { manifest: binding.manifest, selection: binding.selection, files }
 }
 
+/** Complete copied-byte preflight shared by cache writes and materialization. */
+export function prepareSelectedSkillBytes(
+  specs: readonly LocalSkillByteExpectation[],
+  input: ReadonlyMap<string, Uint8Array>,
+) {
+  const provided = new Map(input)
+  if (
+    provided.size !== specs.length ||
+    [...provided.keys()].some(
+      (path) => !specs.some((spec) => spec.path === path),
+    )
+  )
+    throw new SkillByteError('skill byte set must exactly match manifest')
+  return new Map(
+    specs.map((spec) => {
+      const bytes = provided.get(spec.path)
+      if (!bytes) throw new SkillByteError('declared skill bytes are missing')
+      return [spec.path, verifySkillBytes(spec, bytes)] as const
+    }),
+  )
+}
 /** Verify the complete supplied byte set before writing any cache object. */
 export async function cacheSelectedSkillBytes(
   cache: SkillByteCache,
@@ -45,19 +67,7 @@ export async function cacheSelectedSkillBytes(
   input: ReadonlyMap<string, Uint8Array>,
 ) {
   const binding = await resolveSelectedSkill(selection, manifest)
-  const provided = new Map(input)
-  if (
-    provided.size !== binding.specs.length ||
-    [...provided.keys()].some(
-      (path) => !binding.specs.some((spec) => spec.path === path),
-    )
-  )
-    throw new SkillByteError('skill byte set must exactly match manifest')
-  const verified = binding.specs.map((spec) => {
-    const bytes = provided.get(spec.path)
-    if (!bytes) throw new SkillByteError('declared skill bytes are missing')
-    return [spec, verifySkillBytes(spec, bytes)] as const
-  })
-  for (const [spec, bytes] of verified) cache.store(spec, bytes)
+  const verified = prepareSelectedSkillBytes(binding.specs, input)
+  for (const spec of binding.specs) cache.store(spec, verified.get(spec.path)!)
   return readSelectedSkillBytes(cache, binding.selection, binding.manifest)
 }

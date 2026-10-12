@@ -1,8 +1,7 @@
 // Private CLI disk layout only, not a shared VM/container protocol. Verified
 // content is preparation, never a policy grant or permission to deliver/run.
 import { randomBytes } from 'node:crypto'
-import { fsyncSync } from 'node:fs'
-import { canonicalBytes } from '../api/agent-profile-canonical'
+import { fstatSync } from 'node:fs'
 import { AnchoredDirectory } from '../isolation/anchored-fs'
 import { resolveSelectedSkill } from './selected-bytes'
 import {
@@ -10,64 +9,9 @@ import {
   openSkillRoot,
   SkillByteError,
 } from './local-bytes'
-import { readSkillInventory, readSkillInventoryAt } from './bundle-inventory'
+import { readSkillInventory } from './bundle-inventory'
+import { readBundleAt, writeBundleDirectory } from './bundle-tree'
 
-type Binding = Awaited<ReturnType<typeof resolveSelectedSkill>>
-const MAX_MANIFEST_BYTES = 1024 * 1024
-function metadataInventory(root: AnchoredDirectory) {
-  const names = root.names(3)
-  if (
-    names.length !== 2 ||
-    names[0] !== 'files' ||
-    names[1] !== 'manifest.json'
-  )
-    throw new SkillByteError('bundle cache metadata inventory differs')
-}
-function readBundleAt(
-  namespace: AnchoredDirectory,
-  name: string,
-  binding: Binding,
-) {
-  const bundle = namespace.directory(name)
-  try {
-    assertPrivateSkillDirectory(bundle)
-    metadataInventory(bundle)
-    const raw = bundle.readRegular('manifest.json', MAX_MANIFEST_BYTES)
-    // Exact generated canonical bytes exclude duplicate keys, alternate encodings,
-    // trailing whitespace and substituted manifest metadata before any file read.
-    if (!raw.equals(Buffer.from(canonicalBytes(binding.manifest))))
-      throw new SkillByteError(
-        'cached canonical manifest differs from locked selection',
-      )
-    const directory = bundle.directory('files')
-    let files: Map<string, Buffer>
-    try {
-      files = readSkillInventoryAt(directory, binding.specs, true)
-    } finally {
-      directory.close()
-    }
-    metadataInventory(bundle)
-    return { manifest: binding.manifest, selection: binding.selection, files }
-  } finally {
-    bundle.close()
-  }
-}
-function writeFiles(
-  root: AnchoredDirectory,
-  files: ReadonlyMap<string, Buffer>,
-) {
-  for (const [path, bytes] of files) {
-    const parent = root.parent(path, true)
-    try {
-      assertPrivateSkillDirectory(parent)
-      if (!parent.putRegularIfAbsent(path.split('/').at(-1)!, bytes))
-        throw new SkillByteError('unexpected staged file collision')
-    } finally {
-      if (parent !== root) parent.close()
-    }
-  }
-  fsyncSync(root.fd)
-}
 export class SkillBundleCache {
   private readonly root: AnchoredDirectory
   constructor(path: string) {
@@ -82,6 +26,33 @@ export class SkillBundleCache {
   }
   close() {
     this.root.close()
+  }
+  /** A run destination cannot be this cache or anywhere inside it. Compare
+   * opened filesystem identities, not path prefixes or followed symlinks. */
+  assertSeparateDirectory(directory: AnchoredDirectory) {
+    const cache = fstatSync(this.root.fd, { bigint: true })
+    let at = directory.directory('.')
+    try {
+      for (let depth = 0; depth < 1024; depth++) {
+        const current = fstatSync(at.fd, { bigint: true })
+        if (current.dev === cache.dev && current.ino === cache.ino)
+          throw new SkillByteError('materialization destination overlaps cache')
+        const parent = at.directory('..')
+        let info: import('node:fs').BigIntStats
+        try {
+          info = fstatSync(parent.fd, { bigint: true })
+        } catch (error) {
+          parent.close()
+          throw error
+        }
+        at.close()
+        at = parent
+        if (info.dev === current.dev && info.ino === current.ino) return
+      }
+      throw new SkillByteError('materialization ancestry exceeds local bound')
+    } finally {
+      at.close()
+    }
   }
   private namespace(create: boolean) {
     const at = this.root.directory('sha256', create)
@@ -114,20 +85,7 @@ export class SkillBundleCache {
       const name = '.gild-bundle-' + randomBytes(12).toString('hex')
       const stage = namespace.privateDirectory(name)
       try {
-        if (
-          !stage.putRegularIfAbsent(
-            'manifest.json',
-            Buffer.from(canonicalBytes(binding.manifest)),
-          )
-        )
-          throw new SkillByteError('unexpected staged manifest collision')
-        const directory = stage.privateDirectory('files')
-        try {
-          writeFiles(directory, files)
-        } finally {
-          directory.close()
-        }
-        fsyncSync(stage.fd)
+        writeBundleDirectory(stage, binding, files)
       } finally {
         stage.close()
       }

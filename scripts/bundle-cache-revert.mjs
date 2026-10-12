@@ -35,7 +35,7 @@ const cases = [
   ],
   [
     'manifest-lock',
-    'src/skills/bundle-cache.ts',
+    'src/skills/bundle-tree.ts',
     (s) =>
       s.replace(
         '!raw.equals(Buffer.from(canonicalBytes(binding.manifest)))',
