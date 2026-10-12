@@ -35,7 +35,7 @@ const evidence = [
     'src/spawn-detach.ts',
     (source) => {
       const a = source.indexOf('export function retireSessionResources('),
-        b = source.indexOf('/** The final exit/EOF', a)
+        b = source.indexOf('export async function finalizeSessionStreams(', a)
       return (
         source.slice(0, a) +
         'export function retireSessionResources(o:any) { o.files(); o.listener(); o.endpoint() }\n' +
