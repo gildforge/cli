@@ -23,8 +23,15 @@ test('owned Git package with two agents installs to consumer; explicit update ch
   for (const directory of [source, consumer])
     await mkdir(directory, { mode: 0o700 })
   const git = (directory: string, args: string[]) =>
-    execFileSync('git', args, {
+    execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
       cwd: directory,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Gild package fixture',
+        GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'Gild package fixture',
+        GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
       .toString()
