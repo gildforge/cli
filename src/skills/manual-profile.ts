@@ -144,7 +144,15 @@ export async function prepareManualProfileSkill(
             }
           }
         }
-        check(slot, '')
+        try {
+          check(slot, '')
+        } catch (error) {
+          if (error instanceof SkillByteError) throw error
+          throw new SkillByteError(
+            'native skill registration changed or unreadable; retained for recovery: ' +
+              (error as Error).message,
+          )
+        }
         const remove = (dir: AnchoredDirectory, prefix: string) => {
           for (const n of dir.names(256)) {
             const path = prefix + n

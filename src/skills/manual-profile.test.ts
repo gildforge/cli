@@ -82,14 +82,16 @@ test('manual delivery refuses unsupported runtime, invalid pin and symlink disco
   ).rejects.toThrow()
   expect(readFileSync(join(f.source, 'SKILL.md')).length).toBe(3064)
 })
-test('changed registration is retained rather than deleted on shutdown', async () => {
-  const f = await fixture(),
-    lease = await prepareManualProfileSkill(f.spec, 'codex', f.cwd)
-  const file = join(f.cwd, lease.relativeDirectory, 'SKILL.md')
-  writeFileSync(file, 'owner change')
-  expect(() => lease.close()).toThrow()
-  expect(readFileSync(file, 'utf8')).toBe('owner change')
-})
+for (const change of ['owner change', 'x'.repeat(4096)]) {
+  test(`changed registration is reported and retained on shutdown: ${change.length} bytes`, async () => {
+    const f = await fixture(),
+      lease = await prepareManualProfileSkill(f.spec, 'codex', f.cwd)
+    const file = join(f.cwd, lease.relativeDirectory, 'SKILL.md')
+    writeFileSync(file, change)
+    expect(() => lease.close()).toThrow('retained')
+    expect(readFileSync(file, 'utf8')).toBe(change)
+  })
+}
 for (const scenario of [
   'delivery',
   'bad-pin',
