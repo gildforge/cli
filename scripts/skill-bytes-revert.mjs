@@ -4,6 +4,16 @@ import { prove } from './review-revert.mjs'
 const local = 'src/skills/local-bytes.ts'
 const native = 'src/isolation/anchored-fs.ts'
 const suite = 'src/skills/local-bytes.test.ts'
+function regularPublication(source, mutate) {
+  const begin = source.indexOf('  putRegularIfAbsent('),
+    end = source.indexOf('  entry(', begin)
+  if (begin < 0 || end < 0) throw Error('Regular publication boundary missing')
+  return (
+    source.slice(0, begin) +
+    mutate(source.slice(begin, end)) +
+    source.slice(end)
+  )
+}
 const cases = [
   [
     'byte-digest',
@@ -81,7 +91,10 @@ const cases = [
   [
     'no-replace',
     native,
-    (s) => s.replace("process.platform === 'darwin' ? 4 : 1", '0'),
+    (s) =>
+      regularPublication(s, (part) =>
+        part.replace("process.platform === 'darwin' ? 4 : 1", '0'),
+      ),
     'atomic complete-byte publication',
   ],
 ]
@@ -95,12 +108,12 @@ cases.push([
   'interrupted-publication',
   native,
   (s) =>
-    s
-      .replace(
-        "process.platform === 'darwin' ? 'renameatx_np' : 'renameat2'",
-        "'linkat'",
-      )
-      .replace("process.platform === 'darwin' ? 4 : 1", '0'),
+    regularPublication(s, (part) =>
+      part.replace("process.platform === 'darwin' ? 4 : 1", '0'),
+    ).replace(
+      "process.platform === 'darwin' ? 'renameatx_np' : 'renameat2'",
+      "'linkat'",
+    ),
   'interruption immediately after publication',
 ])
 cases.push([

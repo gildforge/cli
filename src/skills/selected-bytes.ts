@@ -11,7 +11,7 @@ import {
   verifySkillBytes,
 } from './local-bytes'
 
-async function selected(selection: unknown, value: unknown) {
+export async function resolveSelectedSkill(selection: unknown, value: unknown) {
   const identity = await skillManifestIdentity(value)
   const pin = await verifySkillSelection(selection, identity.manifest)
   const specs = validateSkillFiles(
@@ -30,7 +30,7 @@ export async function readSelectedSkillBytes(
   selection: unknown,
   manifest: unknown,
 ) {
-  const binding = await selected(selection, manifest)
+  const binding = await resolveSelectedSkill(selection, manifest)
   const files = new Map(
     binding.specs.map((spec) => [spec.path, cache.read(spec)]),
   )
@@ -44,7 +44,7 @@ export async function cacheSelectedSkillBytes(
   manifest: unknown,
   input: ReadonlyMap<string, Uint8Array>,
 ) {
-  const binding = await selected(selection, manifest)
+  const binding = await resolveSelectedSkill(selection, manifest)
   const provided = new Map(input)
   if (
     provided.size !== binding.specs.length ||

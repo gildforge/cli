@@ -94,7 +94,7 @@ export function verifySkillBytes(
     throw new SkillByteError('skill byte digest mismatch')
   return bytes
 }
-function openRoot(path: string) {
+export function openSkillRoot(path: string) {
   if (!isAbsolute(path) || resolve(path) !== path || path.includes('\0'))
     throw new SkillByteError('skill root must be a normalized absolute path')
   let at = AnchoredDirectory.open('/')
@@ -110,6 +110,11 @@ function openRoot(path: string) {
     at.close()
     throw error
   }
+}
+export function assertPrivateSkillDirectory(root: AnchoredDirectory) {
+  const info = fstatSync(root.fd)
+  if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+    throw new SkillByteError('skill byte cache must be private and owned')
 }
 function readAt(root: AnchoredDirectory, spec: LocalSkillByteExpectation) {
   let parent: AnchoredDirectory | undefined
@@ -129,7 +134,7 @@ export function readPinnedSkillFiles(
   files: readonly LocalSkillByteExpectation[],
 ) {
   const specs = validateSkillFiles(files),
-    root = openRoot(path)
+    root = openSkillRoot(path)
   try {
     return new Map(specs.map((spec) => [spec.path, readAt(root, spec)]))
   } finally {
@@ -140,13 +145,14 @@ export function readPinnedSkillFiles(
 export class SkillByteCache {
   private readonly root: AnchoredDirectory
   constructor(path: string) {
-    const root = openRoot(path),
-      info = fstatSync(root.fd)
-    if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) {
+    const root = openSkillRoot(path)
+    try {
+      assertPrivateSkillDirectory(root)
+      this.root = root
+    } catch (error) {
       root.close()
-      throw new SkillByteError('skill byte cache must be private and owned')
+      throw error
     }
-    this.root = root
   }
   close() {
     this.root.close()

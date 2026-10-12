@@ -30,6 +30,10 @@ function native() {
       : 'fstatat'
   const publishSymbol =
     process.platform === 'darwin' ? 'renameatx_np' : 'renameat2'
+  const dirSuffix =
+    process.platform === 'darwin' && process.arch === 'x64' ? '$INODE64' : ''
+  const dirOpenSymbol = 'fdopendir' + dirSuffix
+  const dirReadSymbol = 'readdir' + dirSuffix
   const lib = ffi().dlopen(
     process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
     {
@@ -41,6 +45,9 @@ function native() {
         args: ['i32', 'ptr', 'i32', 'ptr', 'u32'],
         returns: 'i32',
       },
+      [dirOpenSymbol]: { args: ['i32'], returns: 'ptr' },
+      [dirReadSymbol]: { args: ['ptr'], returns: 'ptr' },
+      closedir: { args: ['ptr'], returns: 'i32' },
       symlinkat: { args: ['ptr', 'i32', 'ptr'], returns: 'i32' },
       readlinkat: { args: ['i32', 'ptr', 'ptr', 'u64'], returns: 'i64' },
       [statSymbol]: { args: ['i32', 'ptr', 'ptr', 'i32'], returns: 'i32' },
@@ -51,6 +58,12 @@ function native() {
     ...lib.symbols,
     metadata: lib.symbols[statSymbol],
     publishNoReplace: lib.symbols[publishSymbol],
+    dirOpen: lib.symbols[dirOpenSymbol],
+    dirRead: lib.symbols[dirReadSymbol],
+    clearErrno: () =>
+      (new Int32Array(
+        ffi().toArrayBuffer(lib.symbols[errnoSymbol]()! as number, 0, 4),
+      )[0] = 0),
     errno: () =>
       new Int32Array(
         ffi().toArrayBuffer(lib.symbols[errnoSymbol]()! as number, 0, 4),
@@ -80,6 +93,89 @@ export class AnchoredDirectory {
   }
   close() {
     closeSync(this.fd)
+  }
+  /** Enumerate this opened directory, not a pathname or a followed symlink. */
+  names(limit: number): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > 8192)
+      throw new Error('invalid anchored inventory bound')
+    if (!['x64', 'arm64'].includes(process.arch))
+      throw new Error('unsupported directory ABI')
+    // A fresh open description avoids sharing the caller's directory offset.
+    const copy = this.directory('.')
+    const stream = sys().dirOpen(copy.fd) as import('bun:ffi').Pointer | null
+    if (!stream) {
+      const errno = sys().errno()
+      copy.close()
+      throw new Error(`fdopendir failed (errno ${errno})`)
+    }
+    try {
+      const names: string[] = []
+      for (;;) {
+        sys().clearErrno()
+        const entry = sys().dirRead(stream) as import('bun:ffi').Pointer | null
+        if (!entry) {
+          if (sys().errno() !== 0)
+            throw new Error(`readdir failed (errno ${sys().errno()})`)
+          return names.sort()
+        }
+        // Supported 64-bit Darwin INODE64 / glibc dirent layouts only. Read
+        // d_reclen before the name, never sizeof(dirent) or d_type as authority.
+        const head = Buffer.from(ffi().toArrayBuffer(entry as number, 0, 19))
+        const size = head.readUInt16LE(16),
+          offset = process.platform === 'darwin' ? 21 : 19
+        if (size <= offset || size > 4096)
+          throw new Error('invalid directory record')
+        const bytes = Buffer.from(
+          ffi().toArrayBuffer(entry as number, offset, size - offset),
+        )
+        const end = bytes.indexOf(0)
+        if (end < 0) throw new Error('unterminated directory name')
+        const name = bytes.subarray(0, end).toString('utf8')
+        if (name === '.' || name === '..') continue
+        if (!name || name.includes('/'))
+          throw new Error('invalid directory name')
+        if (names.length >= limit || names.includes(name))
+          throw new Error(
+            'directory inventory exceeds bound or repeats an entry',
+          )
+        names.push(name)
+      }
+    } finally {
+      check(sys().closedir(stream), 'closedir')
+    }
+  }
+  /** Create a new private child; EEXIST is an error, never reuse a stage. */
+  privateDirectory(name: string) {
+    const p = cstr(name)
+    check(sys().mkdirat(this.fd, ptr(p), 0o700), 'mkdirat private')
+    const child = this.directory(name)
+    try {
+      fchmodSync(child.fd, 0o700)
+      if ((fstatSync(child.fd).mode & 0o777) !== 0o700)
+        throw new Error('private directory mode not established')
+      return child
+    } catch (error) {
+      child.close()
+      throw error
+    }
+  }
+  /** Atomic no-replace publication of an already verified staged directory. */
+  publishDirectory(stage: string, name: string): boolean {
+    const source = cstr(stage),
+      destination = cstr(name)
+    const status = Number(
+      sys().publishNoReplace(
+        this.fd,
+        ptr(source),
+        this.fd,
+        ptr(destination),
+        process.platform === 'darwin' ? 4 : 1,
+      ),
+    )
+    if (status < 0 && sys().errno() === 17) return false
+    check(status, 'exclusive rename directory')
+    fsyncSync(this.fd)
+    return true
   }
   directory(name: string, create = false) {
     const p = cstr(name)
@@ -135,6 +231,9 @@ export class AnchoredDirectory {
     return process.platform === 'darwin'
       ? info.readUInt16LE(4)
       : info.readUInt32LE(process.arch === 'x64' ? 24 : 16)
+  }
+  hasEntry(name: string) {
+    return this.entryMode(name) !== undefined
   }
   /** Bounded bytes from a regular, unlinked-to-other-paths file, never a symlink. */
   readRegular(name: string, maxBytes: number): Buffer {
