@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { pathToFileURL } from 'node:url'
-import { mkdtemp, readFile, writeFile, access } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, access, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 const {
@@ -19,6 +19,16 @@ const {
 )
 const image = 'sha256:' + 'a'.repeat(64)
 const context = 'owned-local-context'
+// Fresh checkouts need no global .tmp setup. Each test owns and cleans its root.
+async function withTestRoot(run) {
+  const root = await mkdtemp(resolve('.gild-vz-kernel-test-'))
+  try {
+    await run(root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+  return root
+}
 const fragment = await readFile(FRAGMENT, 'utf8')
 const finalConfig = fragment
   .split('\n')
@@ -79,40 +89,44 @@ test('kernel plan rejects mutable tags invalid job limits and ambiguous mount pa
     )
 })
 test('actual archive rejection makes zero Docker calls and creates no output', async () => {
-  const root = await mkdtemp(resolve('.tmp/kernel-recipe-')),
-    archive = resolve(root, 'fixture-not-kernel.tar.xz'),
-    out = resolve(root, 'out')
-  await writeFile(archive, 'Explicit synthetic NON-kernel bytes')
-  const calls = []
-  await expect(
-    buildKernel(buildPlan(archive, out, image, context), (...args) => {
-      calls.push(args)
-      return ''
-    }),
-  ).rejects.toThrow('SHA256 mismatch')
-  expect(calls).toEqual([])
-  await expect(access(out)).rejects.toThrow()
+  const root = await withTestRoot(async (root) => {
+    const archive = resolve(root, 'fixture-not-kernel.tar.xz'),
+      out = resolve(root, 'out')
+    await writeFile(archive, 'Explicit synthetic NON-kernel bytes')
+    const calls = []
+    await expect(
+      buildKernel(buildPlan(archive, out, image, context), (...args) => {
+        calls.push(args)
+        return ''
+      }),
+    ).rejects.toThrow('SHA256 mismatch')
+    expect(calls).toEqual([])
+    await expect(access(out)).rejects.toThrow()
+  })
+  await expect(access(root)).rejects.toThrow()
 })
 test('existing guest recipe kernel-only branch really dispatches without all-in-one work', async () => {
-  const root = await mkdtemp(resolve('.tmp/kernel-entry-')),
-    archive = resolve(root, 'synthetic.tar.xz'),
-    out = resolve(root, 'out')
-  await writeFile(archive, 'NOT a kernel archive')
-  const result = spawnSync(
-    'sh',
-    [
-      'scripts/build-vm-guest.sh',
-      '--kernel-only',
-      archive,
-      out,
-      image,
-      context,
-    ],
-    { encoding: 'utf8', timeout: 5000 },
-  )
-  expect(result.status).toBe(1)
-  expect(result.stderr).toContain('Kernel archive SHA256 mismatch')
-  await expect(access(out)).rejects.toThrow()
+  const root = await withTestRoot(async (root) => {
+    const archive = resolve(root, 'synthetic.tar.xz'),
+      out = resolve(root, 'out')
+    await writeFile(archive, 'NOT a kernel archive')
+    const result = spawnSync(
+      'sh',
+      [
+        'scripts/build-vm-guest.sh',
+        '--kernel-only',
+        archive,
+        out,
+        image,
+        context,
+      ],
+      { encoding: 'utf8', timeout: 5000 },
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Kernel archive SHA256 mismatch')
+    await expect(access(out)).rejects.toThrow()
+  })
+  await expect(access(root)).rejects.toThrow()
 })
 test('x86 config requires built-in PCI devices filesystems vsock PTY and x86 boot support', () => {
   expect(() => validateConfig(fragment, finalConfig)).not.toThrow()
