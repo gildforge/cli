@@ -111,6 +111,19 @@ for (const scenario of [
       `#!/usr/bin/env python3\nimport pathlib,hashlib,json\np=list(pathlib.Path('.agents/skills').glob('*/SKILL.md'))\nassert len(p)==1,p\nb=p[0].read_bytes()\nassert hashlib.sha256(b).hexdigest()=='${f.spec.selection.entryDigest}'\nassert p[0].with_name('LICENSE').read_bytes()==pathlib.Path('${join(f.source, 'LICENSE')}').read_bytes()\npathlib.Path('delivery-proof.json').write_text(json.dumps({'digest':hashlib.sha256(b).hexdigest(),'bytes':len(b)}))\nprint('PINNED_SKILL_DELIVERED',flush=True)\n`,
       { mode: 0o700 },
     )
+    if (scenario === 'unsupported') {
+      // No ambient provider binary is needed or reachable in this child PATH.
+      for (const tool of ['python3', 'node']) {
+        const executable = Bun.which(tool)
+        if (!executable) throw Error(`Fixture requires existing ${tool}`)
+        symlinkSync(executable, join(bin, tool))
+      }
+      writeFileSync(
+        join(bin, 'claude'),
+        '#!/usr/bin/env python3\nimport pathlib\npathlib.Path("unsupported-child-ran").write_text("unexpected")\n',
+        { mode: 0o700 },
+      )
+    }
     writeFileSync(
       join(home, '.gild/agents/a.json'),
       JSON.stringify({
@@ -147,7 +160,11 @@ for (const scenario of [
             f.cwd,
           ],
       {
-        env: { HOME: home, PATH: bin + ':' + process.env.PATH, LANG: 'C' },
+        env: {
+          HOME: home,
+          PATH: scenario === 'unsupported' ? bin : bin + ':' + process.env.PATH,
+          LANG: 'C',
+        },
         stdout: 'pipe',
         stderr: 'pipe',
       },
@@ -169,6 +186,8 @@ for (const scenario of [
     if (scenario !== 'delivery') {
       expect(result.code).not.toBe(0)
       expect(readdirSync(f.cwd)).not.toContain('delivery-proof.json')
+      if (scenario === 'unsupported')
+        expect(readdirSync(f.cwd)).not.toContain('unsupported-child-ran')
       expect(result.output).toContain(
         scenario === 'detach'
           ? 'attached PTY'
