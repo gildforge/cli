@@ -349,8 +349,9 @@ export async function runLocalMain() {
         if (stopping) throw Error('Main is stopping')
         let result: unknown
         if (r.type === 'submit') {
-          const existing = state.tasks.find((t) => t.id === r.id)
-          if (existing) {
+          const existingReceipt = () => {
+            const existing = state.tasks.find((t) => t.id === r.id)
+            if (!existing) return undefined
             const original = {
               agent: existing.agent,
               args: existing.args,
@@ -361,20 +362,32 @@ export async function runLocalMain() {
               throw Error(
                 'Task reference already belongs to a different request',
               )
+            return existing
+          }
+          let existing = existingReceipt()
+          if (existing) {
+            await writes
             socket.end(JSON.stringify({ ok: true, value: existing }) + '\n')
             return
           }
           if (Buffer.byteLength(JSON.stringify(r.input)) > 8192)
             throw Error('Task input exceeds 8 KiB')
-          if (state.tasks.length >= 1000)
-            throw Error('Main task history is full')
-          if (state.tasks.filter((t) => !terminal(t)).length >= 8)
-            throw Error('Main has eight active tasks')
           if (r.input.mode === 'VM' && platform() !== 'linux')
             throw Error('MVP VM tasks require Linux Firecracker')
           const cwd = await lstat(r.input.cwd)
           if (!cwd.isDirectory() || cwd.isSymbolicLink())
             throw Error('Task directory must be an existing real directory')
+          // Recheck and reserve synchronously after the filesystem await.
+          existing = existingReceipt()
+          if (existing) {
+            await writes
+            socket.end(JSON.stringify({ ok: true, value: existing }) + '\n')
+            return
+          }
+          if (state.tasks.length >= 1000)
+            throw Error('Main task history is full')
+          if (state.tasks.filter((t) => !terminal(t)).length >= 8)
+            throw Error('Main has eight active tasks')
           const now = new Date().toISOString()
           const t: Task = {
             ...r.input,

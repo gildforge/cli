@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createConnection } from 'node:net'
@@ -245,3 +253,145 @@ test('main refuses a symlinked owner registry before dispatch', async () => {
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('concurrent same-reference requests reserve one real worker task and reject conflicting inputs', async () => {
+  const staging = resolve('../..', '.tmp')
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  const home = await mkdtemp(join(staging, 'mc-'))
+  const cwd = join(home, 'work')
+  await mkdir(cwd, { mode: 0o700 })
+  const env = {
+    HOME: home,
+    PATH: process.env.PATH!,
+    LANG: 'C',
+    TERM: 'xterm-256color',
+  }
+  const cli = async (...args: string[]) => {
+    const child = Bun.spawn(
+      [process.execPath, 'run', resolve('src/gild.ts'), ...args],
+      { env, cwd, stdout: 'pipe', stderr: 'pipe' },
+    )
+    const [code, text, error] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    if (code) throw Error(error)
+    return JSON.parse(text)
+  }
+  const wrapper = join(home, 'delayed-stat-main.ts')
+  await writeFile(
+    wrapper,
+    `import {mock} from 'bun:test';import * as fs from 'node:fs/promises';const realStat=fs.lstat;mock.module('node:fs/promises',()=>({...fs,lstat:async(path:any,...args:any[])=>{if(path===${JSON.stringify(cwd)})await Bun.sleep(100);return realStat(path,...args)}}));const {runLocalMain}=await import(${JSON.stringify(resolve('src/local-main.ts'))});await runLocalMain()`,
+  )
+  const service = Bun.spawn([process.execPath, 'run', wrapper], {
+    env,
+    cwd,
+    stdout: 'ignore',
+    stderr: 'pipe',
+  })
+  let running = false
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        await cli('main', 'status')
+        running = true
+        break
+      } catch {
+        await Bun.sleep(20)
+      }
+    }
+    if (!running) throw Error('Controlled main did not start')
+    const id = randomUUID(),
+      input = {
+        agent: '/bin/sh',
+        args: ['-c', 'printf "one worker effect\\n" >> effects.txt'],
+        cwd,
+        mode: 'HOST',
+      }
+    // Open every real socket before writing, to deliver requests in one I/O turn.
+    const peers = Array.from({ length: 8 }, () => {
+      const socket = createConnection(join(home, '.gild/main/main.sock'))
+      socket.setEncoding('utf8')
+      const ready = new Promise<void>((resolve, reject) => {
+        socket.once('connect', resolve)
+        socket.once('error', reject)
+      })
+      const response = new Promise<any>((resolve, reject) => {
+        let text = ''
+        socket.setTimeout(10000, () => {
+          socket.destroy()
+          reject(Error('concurrent receipt timeout'))
+        })
+        socket.on('error', reject)
+        socket.on('data', (data) => {
+          text += data
+          if (text.includes('\n')) {
+            socket.destroy()
+            resolve(JSON.parse(text.slice(0, text.indexOf('\n'))))
+          }
+        })
+      })
+      return { socket, ready, response }
+    })
+    await Promise.all(peers.map((p) => p.ready))
+    for (const p of peers)
+      p.socket.write(JSON.stringify({ type: 'submit', id, input }) + '\n')
+    const receipts = await Promise.all(peers.map((p) => p.response))
+    expect(receipts.every((r) => r.ok && r.value.id === id)).toBe(true)
+    let result: any
+    for (let attempt = 0; attempt < 100; attempt++) {
+      result = await cli('task', 'status', id)
+      if (result.status === 'SUCCEEDED' || result.status === 'FAILED') break
+      await Bun.sleep(50)
+    }
+    const rows = (await cli('main', 'status')).tasks.filter(
+      (t: any) => t.id === id,
+    )
+    await Bun.sleep(300)
+    const effects = await readFile(join(cwd, 'effects.txt'), 'utf8').catch(
+      () => '',
+    )
+    console.log(
+      'Concurrent real effect/row evidence:',
+      JSON.stringify({
+        rowCount: rows.length,
+        effectCount: effects.split('one worker effect').length - 1,
+        status: result.status,
+        error: result.error,
+      }),
+    )
+    expect(rows.length).toBe(1)
+    expect(result.status).toBe('SUCCEEDED')
+    expect(await readFile(join(cwd, 'effects.txt'), 'utf8')).toBe(
+      'one worker effect\n',
+    )
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        'run',
+        resolve('src/gild.ts'),
+        'task',
+        'submit',
+        '--id',
+        id,
+        '/bin/sh',
+        '-c',
+        'printf "changed effect" >> effects.txt',
+      ],
+      { env, cwd, stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect(await child.exited).not.toBe(0)
+    expect(await new Response(child.stderr).text()).toContain(
+      'different request',
+    )
+    expect(await readFile(join(cwd, 'effects.txt'), 'utf8')).toBe(
+      'one worker effect\n',
+    )
+  } finally {
+    if (running) await cli('main', 'stop')
+    else service.kill('SIGTERM')
+    await service.exited
+    await rm(home, { recursive: true, force: true })
+  }
+}, 30000)
