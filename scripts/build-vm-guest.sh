@@ -8,6 +8,11 @@
 #   scripts/build-vm-guest.sh <out> [rootfs size, default 3G]
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
+# Explicit kernel-only path: no guest-agent/rootfs/tag/package/download side effects.
+if [ "${1:-}" = --kernel-only ]; then
+  shift
+  exec node "$here/scripts/build-vz-kernel.mjs" "$@"
+fi
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 size=${2:-3G}
 kernel=${KERNEL_VERSION:-6.12.112}

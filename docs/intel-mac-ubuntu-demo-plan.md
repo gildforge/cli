@@ -22,20 +22,17 @@ with virtio PCI block/console/vsock/filesystem/network; it needs a matching Inte
 Linux bzImage. Published Firecracker vmlinux is not proven a compatible VZ kernel.
 The same existing VZ backend/helper is retained; no alternative hypervisor.
 
-Initial bounded Gild checkout/config and documented local image-location inventory
-found synthetic ASCII rootfs/vmlinux test fixtures, no bootable pair. It excludes
-other locations and dependency/build internals; it does not establish that Sami's
-image is absent. The designated reviewer owns read-only older-image lookup. Before
-changing anything, reconcile their actual rootfs/kernel path, architecture, image
-manifest/digest/protocol/version, prior boot log and installed package/file/version
-observations. Prefer reuse of a verified image and existing Claude/Codex tooling.
-No image mount, boot, guest command or package installation is done here.
-
-Historical FINDINGS documents Apple Silicon bugsy VZ boots and fixture PTY/sync
-runs, not Intel real-model/skill execution. Code recipes establish Ubuntu24.04
-userland, not an installed coding CLI or verified instruction delivery. An old image
-may contain Claude/Codex despite their absence from current recipes. Inspect it
-before selecting any tool upgrade or new rootfs.
+The designated lookup is now complete: no genuine custom rootfs was found in the
+checked local Gild checkout/cache/VZ locations; apparent ext4 files were fixtures.
+This is scoped absence, not a scan of every device or machine. Historical
+/Volumes/Projects/claude/gild-cli-microvm2/FINDINGS.md mentions
+agent-rootfs-v8.ext4 on Demon; its exact remote path/content is unverified. Do not
+wait for or duplicate that lookup, contact another machine, or assume that image
+contains particular tools. Published Linux-x64 Ubuntu24.04 rootfs is a possible
+input requiring separately approved download/integrity/protocol/tool validation.
+Existing helper x86_64 provenance/execution remains unverified. See the concrete
+[kernel-only proposal](intel-vz-kernel-build-proposal.md) for the source patch and
+separate build/check/boot/rehearsal approval boundaries.
 
 ## Smallest source/build proposal after reconciliation
 
@@ -108,13 +105,24 @@ verified catalog values cannot stand in for that demonstration.
 
 ## Admission and staged verification prerequisites
 
-The runtime catalog currently has no real verified model/effort/delivery/enforcement
-tuple. Configuration alone cannot run. Canonical authenticated identity/profile/
-project mapping, task/grant/start/claim/snapshot/result and continuation/audience APIs
-plus exact measured compatibility/immutable admission are still required. Raw
-spawn --vm fixtures must not bypass those dependencies. Switching executionMode
-preserves the same agent generation and creates the explicit new selection/revision
-and immutable VM run decision; authority and pinned content are rechecked.
+Separate owner-initiated manual execution from the optional new central assignment
+service. The existing manual spawn mode does not inherently require new Task/
+OwnerAssignmentPolicy/claim APIs for a truthful owner-authorized demonstration.
+Do not describe manual runs as centrally admitted or centrally permission-enforced.
+Current native interactive spawn is the owner's ordinary OS user, not the dedicated
+OS-user isolation runner; its sockets/private files do not provide same-user secret
+protection. Existing configured mandatory isolation/network/identity controls must
+hold; a missing control cannot be relabeled enforced. An exact harness/model/skill
+support claim still requires actual measured delivery/effects, not catalog fixtures.
+
+For the manual video, preserve the same approved agent identity, finish/stop HOST,
+then start a distinct fresh GUEST session with captured immutable input/artifact
+hashes and independently recorded result. Raw session ID alone does not prove the
+new central immutable admission protocol. Coordinator delegation, automatic grants,
+foreign approval and full Settings CRUD/rollback may remain explicitly unavailable
+under Sami's simplified demo direction. They become dependencies only if those
+specific features are included in the video's actual claims. Do not invent a local
+consent service or bypass current configured mandatory controls to show them.
 
 Once separately authorized, first boot/handshake/device tests are local/offline with
 owned disposable paths and exact owned PID cleanup. Verify x86_64/Ubuntu version,
