@@ -395,3 +395,92 @@ test('concurrent same-reference requests reserve one real worker task and reject
     await rm(home, { recursive: true, force: true })
   }
 }, 30000)
+
+test('main stop fences a submission awaiting directory validation before it can dispatch', async () => {
+  const staging = resolve('../..', '.tmp')
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  const home = await mkdtemp(join(staging, 'sr-')),
+    cwd = join(home, 'work')
+  await mkdir(cwd, { mode: 0o700 })
+  const env = {
+    HOME: home,
+    PATH: process.env.PATH!,
+    TERM: 'xterm-256color',
+    LANG: 'C',
+  }
+  const wrapper = join(home, 'delayed-stat-main.ts')
+  await writeFile(
+    wrapper,
+    `import {mock} from 'bun:test';import * as fs from 'node:fs/promises';const realStat=fs.lstat;mock.module('node:fs/promises',()=>({...fs,lstat:async(path:any,...args:any[])=>{if(path===${JSON.stringify(cwd)})await Bun.sleep(100);return realStat(path,...args)}}));const {runLocalMain}=await import(${JSON.stringify(resolve('src/local-main.ts'))});await runLocalMain()`,
+  )
+  const service = Bun.spawn([process.execPath, 'run', wrapper], {
+    env,
+    cwd,
+    stdout: 'ignore',
+    stderr: 'pipe',
+  })
+  const rpc = async (value: unknown) => {
+    const socket = createConnection(join(home, '.gild/main/main.sock'))
+    socket.setEncoding('utf8')
+    return new Promise<any>((resolve, reject) => {
+      let text = ''
+      socket.setTimeout(5000, () => {
+        socket.destroy()
+        reject(Error('stop fence timed out'))
+      })
+      socket.on('error', reject)
+      socket.on('connect', () => socket.write(JSON.stringify(value) + '\n'))
+      socket.on('data', (data) => {
+        text += data
+        if (text.includes('\n')) {
+          socket.destroy()
+          resolve(JSON.parse(text.slice(0, text.indexOf('\n'))))
+        }
+      })
+    })
+  }
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        await rpc({ type: 'status' })
+        break
+      } catch {
+        await Bun.sleep(20)
+      }
+    }
+    const id = randomUUID()
+    const submission = rpc({
+      type: 'submit',
+      id,
+      input: {
+        agent: '/bin/sh',
+        args: ['-c', 'printf "unexpected late effect" > late.txt'],
+        cwd,
+        mode: 'HOST',
+      },
+    })
+    await Bun.sleep(20)
+    expect((await rpc({ type: 'stop' })).value.stopping).toBe(true)
+    const response = await submission
+    await service.exited
+    const state = JSON.parse(
+      await readFile(join(home, '.gild/main/state.json'), 'utf8'),
+    )
+    const lateEffect = await stat(join(cwd, 'late.txt')).catch(() => null)
+    console.log(
+      'Stop/reservation real evidence:',
+      JSON.stringify({
+        response,
+        rows: state.tasks.length,
+        lateEffect: !!lateEffect,
+      }),
+    )
+    expect(response.error).toBe('Main is stopping')
+    expect(state.tasks).toEqual([])
+    expect(lateEffect).toBe(null)
+  } finally {
+    service.kill('SIGTERM')
+    await service.exited
+    await rm(home, { recursive: true, force: true })
+  }
+}, 15000)

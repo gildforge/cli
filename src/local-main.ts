@@ -377,6 +377,7 @@ export async function runLocalMain() {
           const cwd = await lstat(r.input.cwd)
           if (!cwd.isDirectory() || cwd.isSymbolicLink())
             throw Error('Task directory must be an existing real directory')
+          if (stopping) throw Error('Main is stopping')
           // Recheck and reserve synchronously after the filesystem await.
           existing = existingReceipt()
           if (existing) {
