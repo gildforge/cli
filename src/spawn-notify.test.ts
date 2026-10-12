@@ -8,7 +8,9 @@ import { originalNotify } from './spawn-adapters/codex-notify'
 
 async function fixture(run: (root: string) => Promise<void>) {
   await mkdir('.tmp', { recursive: true })
-  const root = await mkdtemp(resolve('.tmp/notify-'))
+  const root = await mkdtemp(
+    resolve(process.env.TEST_GILD_FIXTURE_TMP ?? '.tmp', 'notify-'),
+  )
   const old = process.env.CODEX_HOME
   process.env.CODEX_HOME = root
   try {

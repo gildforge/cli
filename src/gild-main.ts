@@ -36,6 +36,7 @@ import { homedir, hostname } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
+import { mainCommands } from './local-main'
 import { spawnCommands, localEvents } from './spawn'
 import { profileCommands } from './agent-profiles'
 import { tailEvents } from './events-tail'
@@ -1290,6 +1291,7 @@ async function chatClient(
 chatCommands(program, chatClient)
 issueCommands(program, chatClient)
 prCommands(program, chatClient)
+mainCommands(program)
 runnerCommands(program, loadIdentity)
 spawnCommands(
   program,

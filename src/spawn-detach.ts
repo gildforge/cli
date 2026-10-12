@@ -307,7 +307,8 @@ export async function finalizeSessionStreams(o: {
   return code
 }
 export type StartMessage =
-  { type: 'ready'; id: string } | { type: 'failed'; error: string }
+  | { type: 'ready'; id: string; pid?: number; started?: string }
+  | { type: 'failed'; error: string }
 /** The worker tells `gild spawn --detach` over IPC that it is ready, or why not. */
 export function reportDetached(
   detach: unknown,

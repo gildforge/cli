@@ -27,7 +27,7 @@ class API(http.server.BaseHTTPRequestHandler):
             for e,d in events:self.wfile.write(f'event: {e}\ndata: {json.dumps(d)}\n\n'.encode());self.wfile.flush()
         else:self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(message).encode())
 server=Server(('127.0.0.1',0),API);threading.Thread(target=server.serve_forever,daemon=True).start()
-with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='live-') as tmp:
+with tempfile.TemporaryDirectory(dir=pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP',ROOT/'.tmp')),prefix='live-') as tmp:
     d=pathlib.Path(tmp);config=d/'config';config.mkdir();project=d/'project';(project/'.claude').mkdir(parents=True)
     rec=ROOT/'scripts/fixtures/record-hook.py';record=d/'native.jsonl'
     settings=[]

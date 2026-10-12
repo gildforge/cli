@@ -297,14 +297,35 @@ export async function guestPty(
   request: PtyRequest,
 ): Promise<PtyHandle> {
   const ch = await open()
-  let buf = Buffer.alloc(0),
-    exited = false,
-    dataCb: (d: Buffer) => void = () => {},
-    exitCb: (code: number) => void = () => {}
+  let buf = Buffer.alloc(0)
+  let exitCode: number | undefined
+  const dataCallbacks = new Set<(d: Buffer) => void>()
+  const exitCallbacks = new Set<(code: number) => void>()
+  const pending: Buffer[] = []
+  let pendingBytes = 0
+  let startupOverflow = false
+  const output = (bytes: Buffer) => {
+    if (startupOverflow) return
+    if (dataCallbacks.size) {
+      for (const cb of dataCallbacks) cb(bytes)
+    } else {
+      if (pendingBytes + bytes.length > 256 * 1024) {
+        startupOverflow = true
+        pending.push(
+          Buffer.from('gild: guest PTY startup output exceeds 256 KiB\r\n'),
+        )
+        done(1)
+        ch.close()
+        return
+      }
+      pending.push(bytes)
+      pendingBytes += bytes.length
+    }
+  }
   const done = (code: number) => {
-    if (exited) return
-    exited = true
-    exitCb(code)
+    if (exitCode !== undefined) return
+    exitCode = code
+    for (const cb of exitCallbacks) cb(code)
   }
   ch.onData((chunk) => {
     buf = Buffer.concat([buf, chunk])
@@ -312,10 +333,10 @@ export async function guestPty(
       const n = buf.readUInt32BE(0)
       const r = JSON.parse(buf.subarray(4, 4 + n).toString()) as Reply
       buf = buf.subarray(4 + n)
-      if (r.t === 'out') dataCb(Buffer.from(r.d, 'base64'))
+      if (r.t === 'out') output(Buffer.from(r.d, 'base64'))
       else if (r.t === 'exit') done(r.code)
       else if (r.t === 'error') {
-        dataCb(Buffer.from(`gild: ${r.message}\r\n`))
+        output(Buffer.from(`gild: ${r.message}\r\n`))
         done(127)
       }
     }
@@ -326,8 +347,16 @@ export async function guestPty(
     write: (d) =>
       ch.write(frame({ t: 'in', d: Buffer.from(d).toString('base64') })),
     resize: (cols, rows) => ch.write(frame({ t: 'resize', cols, rows })),
-    onData: (cb) => (dataCb = cb),
-    onExit: (cb) => (exitCb = cb),
+    onData: (cb) => {
+      dataCallbacks.add(cb)
+      const buffered = pending.splice(0)
+      pendingBytes = 0
+      for (const bytes of buffered) cb(bytes)
+    },
+    onExit: (cb) => {
+      exitCallbacks.add(cb)
+      if (exitCode !== undefined) cb(exitCode)
+    },
     close: () => ch.close(),
   }
 }

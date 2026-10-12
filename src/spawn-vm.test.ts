@@ -360,7 +360,9 @@ test('guest env: a fixed baseline, plus only adapter additions and allowlisted n
 
 test('spawn --vm --detach starts the VM worker (no TTY needed) and reports why a VM could not start', async () => {
   await mkdir(resolve('.tmp'), { recursive: true })
-  const home = await mkdtemp(resolve('.tmp/vm-detach-'))
+  const home = await mkdtemp(
+    resolve(process.env.TEST_GILD_FIXTURE_TMP ?? '.tmp', 'vm-detach-'),
+  )
   try {
     const config = join(home, 'config')
     await mkdir(config)

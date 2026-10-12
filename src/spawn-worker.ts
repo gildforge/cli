@@ -50,6 +50,7 @@ type Options = {
   idleMs: number
   ptyModule: string
   hookCommand: string[]
+  supervised?: boolean
   pinnedSkill?: boolean
   printId?: boolean
   reporting?: boolean
@@ -361,7 +362,8 @@ process.on('SIGHUP', () => finish(129))
 // Raw-mode Ctrl-C goes down stdin. An externally delivered SIGINT hangs up gild.
 process.on('SIGINT', () => finish(130))
 // A detached worker outlives the `gild spawn --detach` that started it.
-if (!options.detach) process.on('disconnect', () => finish(1))
+if (!options.detach || options.supervised)
+  process.on('disconnect', () => finish(1))
 process.on('uncaughtException', failed)
 process.on('unhandledRejection', failed)
 process.on('exit', () => {
@@ -540,6 +542,14 @@ async function main() {
           host.attach(socket, request)
           if (!closing) host.feed(socket, data.slice(data.indexOf('\n') + 1))
         } else if (request.type === 'stop') {
+          if (
+            request.expected &&
+            (request.expected.pid !== process.pid ||
+              request.expected.started !== started)
+          )
+            throw Error(
+              'Session identity changed; foreign worker was not stopped',
+            )
           if (!child) throw new Error('Session is starting')
           subscribers.add(socket)
           socket.setTimeout(0)
@@ -669,7 +679,18 @@ async function main() {
           encoding: null,
         })
     // Output from the first byte on, so attach can replay the start.
-    if (host) child.onData((data) => host!.push(data as unknown as Buffer))
+    if (host)
+      child.onData((data) => {
+        host!.push(data as unknown as Buffer)
+        if (options.supervised && process.connected) {
+          // Bounded receipt output; never build an unbounded IPC backlog.
+          const bytes = data as unknown as Buffer
+          const kept = bytes.subarray(0, Math.max(0, 16384 - supervisedBytes))
+          supervisedBytes += kept.length
+          if (kept.length)
+            process.send?.({ type: 'output', data: kept.toString('base64') })
+        }
+      })
     child.onData((data) => quiet?.output(data as unknown as Buffer))
   } catch (error) {
     return fallback(error)
@@ -734,7 +755,12 @@ async function main() {
     child.onExit(({ exitCode, signal }) =>
       finish(signal ? 128 + signal : exitCode, false),
     )
-    reportDetached(options.detach, { type: 'ready', id: options.id })
+    reportDetached(options.detach, {
+      type: 'ready',
+      id: options.id,
+      pid: process.pid,
+      started,
+    })
     return
   }
   process.stdin.on('data', (data: Buffer) => {
@@ -776,5 +802,6 @@ function stop(graceMs: unknown) {
     setTimeout(() => finish(137), 2000)
   }, grace)
 }
+let supervisedBytes = 0
 const started = new Date().toISOString()
 main().catch(failed)

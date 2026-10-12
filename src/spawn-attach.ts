@@ -162,7 +162,11 @@ export async function attachSession(id: string, watch: boolean) {
 }
 
 /** Takes a session offline and prints its final `exited` event. */
-export async function stopSession(id: string, graceMs: number) {
+export async function stopSession(
+  id: string,
+  graceMs: number,
+  expected?: { pid: number; started: string },
+) {
   const directory = await privateSessionsDirectory()
   const socket = connect(id, directory)
   const text = await new Promise<string>((resolve, reject) => {
@@ -173,7 +177,7 @@ export async function stopSession(id: string, graceMs: number) {
     }, graceMs + 10000)
     socket.setEncoding('utf8')
     socket.on('connect', () =>
-      socket.write(JSON.stringify({ type: 'stop', graceMs }) + '\n'),
+      socket.write(JSON.stringify({ type: 'stop', graceMs, expected }) + '\n'),
     )
     socket.on('data', (chunk: string) => (data += chunk))
     socket.on('error', (error) => {

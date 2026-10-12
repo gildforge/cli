@@ -8,7 +8,7 @@ class Server(http.server.ThreadingHTTPServer):
         # http.server.HTTPServer.server_bind resolves the host with socket.getfqdn,
         # a reverse DNS lookup that hangs where the resolver is slow; tests bind 127.0.0.1.
         socketserver.TCPServer.server_bind(self);self.server_name=self.server_address[0];self.server_port=self.server_address[1]
-with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='ev-') as d:
+with tempfile.TemporaryDirectory(dir=pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP',ROOT/'.tmp')),prefix='ev-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py')
     configs=[home/'.claude/settings.json',home/'project/.claude/settings.json',home/'project/.claude/settings.local.json']
     for p in configs:p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"hooks":{}}')

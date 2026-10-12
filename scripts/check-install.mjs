@@ -1,6 +1,12 @@
 // Fresh global install, all-platform dependency audit, and real detached PTY.
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
@@ -17,9 +23,12 @@ const dest = join(root, '.tmp', reverted ? 'install-revert' : 'install')
 rmSync(dest, { recursive: true, force: true })
 for (const dir of ['home', 'prefix', 'graph', 'cache'])
   mkdirSync(join(dest, dir), { recursive: true })
+const installHome = process.env.TEST_GILD_FIXTURE_TMP
+  ? mkdtempSync(join(process.env.TEST_GILD_FIXTURE_TMP, 'install-home-'))
+  : join(dest, 'home')
 const env = {
   ...process.env,
-  HOME: join(dest, 'home'),
+  HOME: installHome,
   TMPDIR: join(root, '.tmp'),
   npm_config_cache: join(dest, 'cache'),
   npm_config_userconfig: join(dest, 'user.npmrc'),
@@ -206,7 +215,7 @@ try {
     if (label === 'status' && !JSON.parse(result.stdout).detached)
       throw new Error('spawn did not create a detached PTY session')
     if (label === 'send') {
-      const log = join(dest, 'home', '.gild', 'sessions', 't', 'output.log')
+      const log = join(installHome, '.gild', 'sessions', 't', 'output.log')
       let delivered = false
       for (let attempt = 0; attempt < 40 && !delivered; attempt++) {
         await delay(100)

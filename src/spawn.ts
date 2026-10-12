@@ -20,7 +20,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { loadHostConfig, parseLevel, prepareVm, statusLines } from './isolation'
-import { Command, InvalidArgumentError } from 'commander'
+import { Command, InvalidArgumentError, Option } from 'commander'
 import { spawnWorkerSource } from './spawn-bundle' with { type: 'macro' }
 import {
   liveSessions,
@@ -102,6 +102,7 @@ export function spawnCommands(
       '--detach',
       'run in the background with no terminal; prints the session id (see gild attach, gild stop)',
     )
+    .addOption(new Option('--supervised').hideHelp())
     .option('--cols <n>', 'detached terminal width', dimension, DEFAULT_COLS)
     .option('--rows <n>', 'detached terminal height', dimension, DEFAULT_ROWS)
     .allowUnknownOption()
@@ -116,12 +117,17 @@ export function spawnCommands(
           printId?: boolean
           nudge?: string[]
           detach?: boolean
+          supervised?: boolean
           cols: number
           rows: number
           vm?: boolean
           configDir: string
         },
       ) => {
+        if (opts.supervised && (!opts.detach || !process.connected))
+          throw Error(
+            'Supervised spawn requires a local main IPC parent and --detach',
+          )
         const resolved =
           agent === 'agent'
             ? await resolveProfile(args.shift() ?? '', args)
@@ -245,6 +251,7 @@ export function spawnCommands(
               JSON.stringify({
                 agent,
                 pinnedSkill: !!skill,
+                supervised: !!opts.supervised,
                 args,
                 id,
                 idleMs: opts.idleMs,
@@ -289,6 +296,28 @@ export function spawnCommands(
             worker.once('spawn', () => worker.send({ type: 'report', report }))
           if (bridge)
             worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
+          if (opts.supervised) {
+            const disconnected = () => worker.kill('SIGHUP')
+            process.on('disconnect', disconnected)
+            process.on('SIGTERM', disconnected)
+            process.on('SIGHUP', disconnected)
+            worker.on('message', (message) => {
+              if (process.connected) process.send?.(message)
+            })
+            try {
+              process.exitCode = await new Promise<number>(
+                (resolve, reject) => {
+                  worker.once('error', reject)
+                  worker.once('exit', (code) => resolve(code ?? 1))
+                },
+              )
+            } finally {
+              process.off('disconnect', disconnected)
+              process.off('SIGTERM', disconnected)
+              process.off('SIGHUP', disconnected)
+            }
+            return
+          }
           if (opts.detach) return console.log(await detachedReady(worker))
           const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
           const interrupted = () => {}

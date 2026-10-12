@@ -185,6 +185,36 @@ arguments precede invocation arguments and use the existing events adapters.
 See [profile management and verified flags](docs/agent-profiles.md) and
 [adapter experiments, live evidence and validation](docs/spawn-events.md).
 
+### Owner-local main and tasks
+
+The background main coordinates work on the user's machine without a website
+queue. This MVP uses a private Unix socket: the main and worker share the same
+machine and OS account. Remote worker enrollment and transport are not exposed.
+HOST tasks use the existing terminal worker; `task submit --vm` uses Linux
+Firecracker with the owner's existing VM configuration. macOS tasks use HOST.
+
+```sh
+gild main start
+gild task submit --id 39b5c086-b56d-4545-93f1-c768230f46e1 /bin/sh -c 'printf "local result\n"'
+gild task status 39b5c086-b56d-4545-93f1-c768230f46e1
+gild task cancel 39b5c086-b56d-4545-93f1-c768230f46e1
+gild main status
+gild main stop
+```
+
+Keep a fresh UUID for each intended task. Retrying the same ID and inputs returns
+the saved state; changing its inputs is refused. Main restarts mark unfinished
+tasks interrupted and do not execute them again. Status retains bounded output
+and the exit code after session cleanup. Cancellation verifies the original
+worker's PID and start time before stopping it. Main shutdown affects only its
+own tasks. No OS service is installed by `main start`.
+
+`task submit agent <profile>` keeps existing approved-identity checks. Pinned
+skills still require attached PTY sessions and are refused by this unattended
+path. Raw local diagnostics demonstrate dispatch without granting a forge
+identity or model access. All HOST work runs as the current OS user; a private
+socket does not isolate tasks from other processes under that same user.
+
 ### Detached sessions (for orchestrator agents)
 
 An agent's Bash tool has no terminal. `--detach` starts the session in the

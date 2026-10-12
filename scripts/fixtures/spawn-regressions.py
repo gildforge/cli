@@ -6,7 +6,7 @@ NODE = os.environ['TEST_NODE']
 if CLI[0] == 'node': CLI[0] = NODE
 WORKER = os.environ['TEST_WORKER']
 CASE = sys.argv[1]
-with tempfile.TemporaryDirectory(dir=ROOT/'.tmp', prefix='r-') as d:
+with tempfile.TemporaryDirectory(dir=pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP',ROOT/'.tmp')), prefix='r-') as d:
     root=pathlib.Path(d)
     native=root/'claude'
     native.write_text('#!'+sys.executable+'\nimport json,os,sys,signal,time\n'

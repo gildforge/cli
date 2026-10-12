@@ -7,7 +7,7 @@ CASE = sys.argv[1]
 
 class Session:
     def __init__(self, mode='lines', idle=150, name='test', extra=None, stale=False):
-        self.home = tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='s-')
+        self.home = tempfile.TemporaryDirectory(dir=pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP',ROOT / '.tmp')), prefix='s-')
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
         attrs = termios.tcgetattr(self.slave)

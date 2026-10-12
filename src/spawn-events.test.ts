@@ -65,7 +65,9 @@ test('hook bounds unfinished stdin to a 200ms forwarding deadline and releases i
 
 test('hook forwards raw stdin and notify argv; absent sockets and incomplete stdin finish silently', async () => {
   await mkdir('.tmp', { recursive: true })
-  const home = await mkdtemp(resolve('.tmp/h-'))
+  const home = await mkdtemp(
+    resolve(process.env.TEST_GILD_FIXTURE_TMP ?? '.tmp', 'h-'),
+  )
   await mkdir(join(home, '.gild/sessions'), { recursive: true })
   const messages: any[] = []
   const server = createServer((socket) => {

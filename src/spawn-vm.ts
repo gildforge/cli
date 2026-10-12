@@ -248,8 +248,6 @@ export async function startVmChild(opts: {
       cols: opts.cols,
       rows: opts.rows,
     })
-    let exitCb: (e: { exitCode: number }) => void = () => {}
-    pty.onExit((code) => exitCb({ exitCode: code }))
     const conflictDir = join(
       await privateSessionsDirectory(),
       `${opts.sessionId}.conflicts`,
@@ -288,7 +286,7 @@ export async function startVmChild(opts: {
       write: (d) => pty.write(d),
       resize: (c, r) => pty.resize(c, r),
       onData: (cb) => pty.onData(cb),
-      onExit: (cb) => (exitCb = cb),
+      onExit: (cb) => pty.onExit((code) => cb({ exitCode: code })),
       pause() {},
       resume() {},
       kill: () => pty.close(),
