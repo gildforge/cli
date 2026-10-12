@@ -9,6 +9,7 @@ const {
   FRAGMENT,
   buildPlan,
   buildKernel,
+  scratchPreparationArgs,
   validateConfig,
   validateBzImage,
   CONTAINER_RECIPE,
@@ -203,4 +204,36 @@ test('container recipe parses as shell without executing any command', () => {
   })
   expect(r.status).toBe(0)
   expect(r.stderr).toBe('')
+})
+
+test('kernel source and objects use an owned Linux scratch while only artifacts use host bind', () => {
+  const plan = buildPlan('local.tar.xz', 'new-output', image, context)
+  expect(plan.scratchVolume).toMatch(/^gild-vz-kernel-70-[a-f0-9-]{36}$/)
+  expect(plan.args).toContain(
+    `type=volume,source=${plan.scratchVolume},target=/build,volume-nocopy`,
+  )
+  expect(CONTAINER_RECIPE).toContain(
+    'tar -xJf /inputs/linux.tar.xz -C /build/work',
+  )
+  expect(CONTAINER_RECIPE).not.toContain('/out/work')
+  expect(CONTAINER_RECIPE).not.toContain('rm -rf')
+  expect(CONTAINER_RECIPE).not.toContain('--absolute-names')
+  expect(plan.args).not.toContain('--user=0:0')
+  expect(plan.args.some((a) => a.startsWith('--cap-add'))).toBe(false)
+})
+test('scratch initialization mounts only the fresh volume and grants only ownership capability', () => {
+  const plan = buildPlan('local.tar.xz', 'new-output', image, context),
+    args = scratchPreparationArgs(plan)
+  expect(args).toContain('--cap-drop=ALL')
+  expect(args).toContain('--cap-add=CHOWN')
+  expect(args).toContain('--network=none')
+  expect(args).toContain('--pull=never')
+  expect(args.filter((a) => a.startsWith('type=')).length).toBe(1)
+  expect(args).toContain(
+    `type=volume,source=${plan.scratchVolume},target=/build,volume-nocopy`,
+  )
+  expect(args.some((a) => a.startsWith('type=bind'))).toBe(false)
+  expect(args.at(-1)).toBe(
+    `chmod 700 /build && chown ${process.getuid()}:${process.getgid()} /build`,
+  )
 })

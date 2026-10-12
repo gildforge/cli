@@ -1,6 +1,6 @@
 // Local-input, kernel-only builder for the existing VZ backend. Never pulls images,
 // installs packages, creates a rootfs, or downloads a source archive.
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
@@ -47,7 +47,9 @@ export function buildPlan(source, output, image, context, jobs = 2) {
     out = resolve(output)
   if ([archive, out, FRAGMENT].some((p) => /[,\n\r]/.test(p)))
     throw Error('Bind mount paths must not contain commas or newlines')
+  const scratchVolume = 'gild-vz-kernel-70-' + randomUUID()
   return {
+    scratchVolume,
     archive,
     out,
     image,
@@ -76,6 +78,8 @@ export function buildPlan(source, output, image, context, jobs = 2) {
       `type=bind,source=${resolve(out, 'kernel.fragment')},target=/inputs/fragment,readonly`,
       '--mount',
       `type=bind,source=${out},target=/out`,
+      '--mount',
+      `type=volume,source=${scratchVolume},target=/build,volume-nocopy`,
       '--entrypoint=sh',
       image,
       '-eu',
@@ -83,15 +87,42 @@ export function buildPlan(source, output, image, context, jobs = 2) {
     ],
   }
 }
+// Only the fresh empty Linux volume is mounted for ownership initialization.
+// The actual compiler keeps the normal unprivileged user and all capabilities dropped.
+export function scratchPreparationArgs(plan) {
+  return [
+    '--context',
+    plan.context,
+    'run',
+    '--rm',
+    '--pull=never',
+    '--network=none',
+    '--read-only',
+    '--cap-drop=ALL',
+    '--cap-add=CHOWN',
+    '--security-opt=no-new-privileges',
+    '--cpus=2',
+    '--memory=256m',
+    '--pids-limit=64',
+    '--user=0:0',
+    '--mount',
+    `type=volume,source=${plan.scratchVolume},target=/build,volume-nocopy`,
+    '--entrypoint=sh',
+    plan.image,
+    '-eu',
+    '-c',
+    `chmod 700 /build && chown ${process.getuid()}:${process.getgid()} /build`,
+  ]
+}
 export const CONTAINER_RECIPE = `
 [ "$(uname -m)" = x86_64 ] || { echo 'Native x86_64 builder required' >&2; exit 1; }
 for tool in gcc make ld as ar nm objcopy objdump readelf flex bison bc perl python3 tar xz sha256sum; do
   command -v "$tool" >/dev/null || { echo "Missing builder tool: $tool" >&2; exit 1; }
 done
 printf '%s  /inputs/linux.tar.xz\\n' '${KERNEL_SHA256}' | sha256sum -c -
-mkdir /out/work
-tar -xJf /inputs/linux.tar.xz -C /out/work
-cd /out/work/linux-${KERNEL_VERSION}
+mkdir /build/work
+tar -xJf /inputs/linux.tar.xz -C /build/work
+cd /build/work/linux-${KERNEL_VERSION}
 KCONFIG_ALLCONFIG=/inputs/fragment make -s ARCH=x86 allnoconfig
 while IFS='=' read -r name value; do
   case "$name" in CONFIG_*) ;; *) continue ;; esac
@@ -111,7 +142,7 @@ grep -Eq 'Machine: +Advanced Micro Devices X86-64' /out/vmlinux-header.txt
 cp arch/x86/boot/bzImage /out/bzImage
 cp .config /out/bzImage.config
 { gcc --version; ld --version; make --version; } > /out/toolchain.txt
-rm -rf /out/work
+# Retain this OWNED scratch volume and failed attempts; no broad cleanup.
 `
 export async function buildKernel(plan, run = execFileSync) {
   const hash = createHash('sha256')
@@ -166,6 +197,36 @@ export async function buildKernel(plan, run = execFileSync) {
     CONTAINER_RECIPE.replace('JOB_COUNT', String(plan.jobs)),
     { mode: 0o400, flag: 'wx' },
   )
+  const createdVolume = run(
+    'docker',
+    [
+      '--context',
+      plan.context,
+      'volume',
+      'create',
+      '--driver=local',
+      '--label=gild.cli.issue=70',
+      plan.scratchVolume,
+    ],
+    { encoding: 'utf8' },
+  ).trim()
+  if (createdVolume !== plan.scratchVolume)
+    throw Error('Unexpected scratch volume')
+  await writeFile(
+    resolve(plan.out, 'scratch-volume.json'),
+    JSON.stringify(
+      {
+        name: plan.scratchVolume,
+        ownerUid: process.getuid(),
+        ownerGid: process.getgid(),
+        retain: true,
+      },
+      null,
+      2,
+    ) + '\n',
+    { flag: 'wx' },
+  )
+  run('docker', scratchPreparationArgs(plan), { stdio: 'inherit' })
   run('docker', plan.args, { stdio: 'inherit' })
   const kernel = await readFile(resolve(plan.out, 'bzImage'))
   const config = await readFile(resolve(plan.out, 'bzImage.config'), 'utf8')
@@ -186,6 +247,10 @@ export async function buildKernel(plan, run = execFileSync) {
     dockerContext: plan.context,
     dockerEndpoint: endpoint,
     jobs: plan.jobs,
+    scratchVolume: plan.scratchVolume,
+    workspaceFilesystem:
+      'Owned case-sensitive Linux local volume on the existing Docker filesystem',
+    scratchRetained: true,
     fragmentSha256: sha(fragment),
     recipeSha256: sha(CONTAINER_RECIPE.replace('JOB_COUNT', String(plan.jobs))),
     kernelSha256: sha(kernel),

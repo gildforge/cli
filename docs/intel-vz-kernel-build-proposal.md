@@ -8,7 +8,7 @@ scripts/build-vm-guest.sh --kernel-only <local-archive> <NEW-output-dir> <local-
 ```
 
 It delegates only to scripts/build-vz-kernel.mjs. Existing guest-agent/rootfs/ARM
-behavior is unchanged. This entry does not pull/build/tag a container image,
+behavior is unchanged. This kernel entry does not pull/build/tag a container image,
 install packages, download archives, build guest tools/rootfs, boot anything,
 change global config or touch credentials. Actual compilation has NOT run.
 
@@ -51,9 +51,12 @@ not Projects. Conservative **13GiB extra disk budget**:142M compressed archive,
 up to3GiB source tree allowance, up to5GiB object/intermediate/output allowance,
 and roughly4GiB reserve for container/image/daemon overhead. This is a planning
 allowance, NOT measured peak for the unbuilt config/toolchain. Require20GiB free
-at the output volume and Docker storage before starting. Container source AND
-objects are under the output bind mount `/out/work`, so this proposal actually
-moves the large compile workspace to internal Data, not just final bzImage.
+at the output volume and Docker storage before starting. After the first approved extraction failure, container source AND objects are
+under `/build/work` in ONE fresh owned case-sensitive Linux Docker local volume.
+The existing Docker filesystem is physically on internal Data and its ACTUAL
+free space is checked; host `/out` holds final artifacts and evidence only. This
+avoids GNU tar delayed symlink placeholder permission failures on Mac virtiofs.
+Do not weaken extraction safety, drop source symlinks or run the compiler as root.
 The base builder layers and any Docker VM disk remain wherever that approved
 local daemon stores them. Their location/free space must be confirmed during the
 separately approved Docker preflight; this proposal does not move daemon storage.
@@ -77,8 +80,12 @@ scripts/build-vm-guest.sh --kernel-only /Users/sami/Documents/Codex/gild-cli-int
 
    Build is one native x86 container,2CPUs/4GiB RAM/512PID limit, no network,
    no pulls, read-only base/capabilities dropped, unprivileged owner UID/GID.
-   Archive/fragment read-only inputs, exclusive new0700 output directory. No
-   borrowed rootfs, shared Docker tag or cache cleanup. Build script and copied
+   Archive/fragment read-only inputs, exclusive new0700 host artifact directory,
+   ONE fresh owned Linux scratch volume for source/objects. Only its initially
+   empty root gets0700/owner UID/GID through a separate no-network initialization
+   container with ONLY CHOWN capability; compiler stays unprivileged/ALL caps
+   dropped. No host root/shared ownership changes. No borrowed rootfs, shared
+   Docker tag or cache cleanup. Build script and copied
    fragment are frozen under output; artifact evidence binds their hashes.
 3. **Artifact/check permission**: read only this candidate's bzImage,
    bzImage.config, kernel.fragment, build.sh, vmlinux-header.txt, toolchain.txt and
@@ -114,8 +121,10 @@ scripts/build-vz-helper.sh /Users/sami/Documents/Codex/gild-cli-intel-kernel-70/
 The kernel container writes its own container.cid and uses --rm. On a failed build,
 preserve ONLY this new output for diagnosis; no success evidence is emitted. On
 interruption, stop/remove only the exact owned CID recorded there, never a name
-pattern/shared container/image. Container source work is removed only on success;
-failed workspace/output remains owner cleanup. No cleanup has been performed.
+pattern/shared container/image. OWNED scratch source/objects and both failed and successful output are retained;
+no volume or broad workspace deletion occurs. `scratch-volume.json` and final
+`kernel-evidence.json` record the exact scratch volume/owner. Future cleanup is
+limited to those explicit owned resources; no shared cleanup is performed.
 
 ## Manual demo scope and focused evidence
 
@@ -133,7 +142,7 @@ snapshots. Missing image/harness/real skill/provider access are runtime dependen
 full coordinator/admin/settings/history/scale/polish are optional follow-ups under
 Sami's simplified direction unless included in the video's claimed feature set.
 
-Focused non-build evidence:7tests/87assertions including actual wrong-archive
+Focused non-build evidence after scratch correction:9tests/105assertions including actual wrong-archive
 rejection before any Docker call, real entrypoint dispatch, plan flags/input bounds,
 config and boot-format negatives, and actual shell syntax parsing. Three temporary
 source guard removals each fail an intended Bun assertion (network argument,
@@ -142,5 +151,18 @@ provider test, old572test/CI repeat or performance claim. Full formatting, Node/
 syntax and diff validation accompany the checkpoint. New source needs its own
 review; previous572 acceptance stays historical/data-only. Package0.6.9/held draft
 and merge/release/deploy holds remain.
+
+
+Actual approved input preparation (2026-10-12): existing Colima start and pinned
+archive download completed; source148648524bytes/hash verified. Separate human
+approval then allowed one derived builder on EXISTING exact Rust base adding
+ONLY flex,bison,bc,libelf-dev (+necessary dependencies) inside the image.
+Credential-free official deb.debian.org apt sources verified. Derived local native
+image SHA2561c54d59cd5d0f8579f486e38f94cf2fc80d6277b824a9276de655fe2ee5b2e45;
+packages flex2.6.4-8.2,bison2:3.8.2+dfsg-1+b1,bc1.07.1-3+b1,libelf-dev0.188-2.1.
+Base was cached; no new base pull or host install. First attempt failed in tar
+BEFORE Kconfig/compiler. Failed work/log retained. Parent authorized the bounded
+Linux scratch correction and safe retry with same verified archive/builder and
+limits; no guest boot/provider/security/global/release permission inferred.
 
 -codex
