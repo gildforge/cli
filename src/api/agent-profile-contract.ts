@@ -85,3 +85,130 @@ export async function verifySkillSelection(selection: unknown, manifest: unknown
     throw new TypeError('Skill selection does not match immutable manifest')
   return parsed
 }
+
+// Next bounded wire slice: declarative records only. Parsing/hashing never
+// authenticates generations/evidence or substitutes for policy/start claims.
+const identityId = z.uuid()
+const time = z.iso.datetime()
+const text = (bytes: number) => z.string().refine(isUnicodeScalarString)
+  .refine(value => new TextEncoder().encode(value).length <= bytes)
+const ids = z.array(identifier).max(32).refine(sortedUnique, 'IDs must be unique and sorted')
+const dnsHost = z.string().max(253).refine(value => {
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)) return false
+  try { return new URL('https://' + value).hostname === value && !/^\d+(?:\.\d+){3}$/.test(value) } catch { return false }
+}, 'Expected lower-case exact DNS name, not an IP/URL/wildcard')
+export const desiredControlsSchema = z.object({
+  filesystem: z.object({ mode: z.literal('project-only'), readProjectIds: ids, writeProjectIds: ids, requireEnforced: z.boolean() }).strict(),
+  network: z.object({ mode: z.enum(['deny', 'allow-listed']), hosts: z.array(dnsHost).max(32).refine(sortedUnique), requireEnforced: z.boolean() }).strict()
+    .refine(value => value.mode !== 'deny' || value.hosts.length === 0, 'Deny requires empty hosts'),
+  tools: z.object({ allow: ids, requireEnforced: z.boolean() }).strict(),
+  delegation: z.object({ allow: z.literal(false), requireEnforced: z.boolean() }).strict(),
+}).strict()
+export const profileRuntimeSchema = z.object({
+  harnessId: identifier, adapterVersion: identifier, executionMode: z.enum(['host', 'vm']),
+  model: identifier.nullable(), effort: identifier.nullable(),
+}).strict()
+export type DesiredControls = z.infer<typeof desiredControlsSchema>
+export type ProfileRuntime = z.infer<typeof profileRuntimeSchema>
+const profileFields = {
+  persona: z.object({ displayName: text(256).refine(value => value.length > 0), description: text(4096), instructions: text(16384) }).strict(),
+  runtime: profileRuntimeSchema,
+  skills: z.array(skillSelectionSchema).max(16).refine(values => new Set(values.map(v => v.pinId)).size === values.length, 'Duplicate skill pin'),
+  desiredControls: desiredControlsSchema,
+}
+export const profileRevisionSchema = z.object({
+  contractVersion: z.literal(1), agentIdentityId: identityId, ownerIdentityId: identityId,
+  revisionId: identifier, previousRevisionId: identifier.nullable(), createdAt: time, createdByIdentityId: identityId,
+  rollbackOf: identifier.optional(), ...profileFields,
+}).strict().refine(value => value.previousRevisionId !== value.revisionId && value.rollbackOf !== value.revisionId, 'Revision cannot reference itself')
+export type ProfileRevision = z.infer<typeof profileRevisionSchema>
+// Own-property preconditions are checked after authentication, BEFORE strict
+// body parsing, so missing/stale revisions retain the agreed428/412 ordering.
+export const replaceProfileInputSchema = z.object({ contractVersion: z.literal(1), expectedRevisionId: identifier.nullable().optional(), ...profileFields }).strict()
+export const rollbackProfileInputSchema = z.object({ contractVersion: z.literal(1), expectedRevisionId: identifier.optional(), restoreRevisionId: identifier }).strict()
+export type ReplaceProfileInput = z.infer<typeof replaceProfileInputSchema>
+export type RollbackProfileInput = z.infer<typeof rollbackProfileInputSchema>
+export const PROFILE_DELIVERY_MODES = ['interactive', 'piped', 'resume', 'offline-content'] as const
+const reportControl = z.object({
+  status: z.enum(['enforced', 'advisory', 'unsupported']), boundary: z.enum(['server', 'owned-host-process', 'vm', 'unverified']),
+  trust: z.enum(['server-enforced', 'verified-adapter-evidence', 'owner-local-report']), evidenceIds: ids,
+}).strict()
+const evidence = z.object({ id: identifier, reference: text(2048), version: identifier, digest, observedAt: time, limits: text(4096) }).strict()
+export const runtimeSupportReportSchema = z.object({
+  contractVersion: z.literal(1), reportId: identifier, harnessId: identifier, harnessVersion: identifier, adapterVersion: identifier,
+  executionMode: z.enum(['host', 'vm']), processIsolation: z.enum(['owned-process', 'shared-process', 'vm', 'unverified']),
+  discovery: z.object({ available: z.boolean(), methods: z.array(text(256).refine(v => v.length > 0)).max(32).refine(sortedUnique) }).strict()
+    .refine(value => value.available || value.methods.length === 0, 'Unavailable discovery has no methods'),
+  delivery: z.object({ status: z.enum(['verified', 'unverified', 'unsupported']), modes: z.array(z.enum(PROFILE_DELIVERY_MODES)).max(4).refine(sortedUnique) }).strict(),
+  controls: z.object({ filesystem: reportControl, network: reportControl, tools: reportControl, delegation: reportControl }).strict(),
+  evidence: z.array(evidence).max(64),
+}).strict().superRefine((report, ctx) => {
+  const known = new Set(report.evidence.map(e => e.id))
+  if (known.size !== report.evidence.length) ctx.addIssue({ code: 'custom', message: 'Duplicate evidence identity' })
+  for (const control of Object.values(report.controls)) for (const id of control.evidenceIds)
+    if (!known.has(id)) ctx.addIssue({ code: 'custom', message: 'Undeclared control evidence' })
+})
+export type RuntimeSupportReport = z.infer<typeof runtimeSupportReportSchema>
+export const runSnapshotSchema = z.object({
+  contractVersion: z.literal(1), snapshotId: identifier, agentIdentityId: identityId, ownerIdentityId: identityId,
+  profileRevisionId: identifier, profileDigest: digest, createdAt: time,
+  runtime: profileRuntimeSchema,
+  skills: z.array(z.object({ selection: skillSelectionSchema, manifest: skillManifestSchema }).strict()).max(16),
+  supportReportId: identifier, supportReportDigest: digest,
+}).strict()
+export type RunSnapshot = z.infer<typeof runSnapshotSchema>
+export class AgentProfileContractError extends TypeError {
+  readonly code: string
+  readonly status: number
+  constructor(code: string, status: number) { super(code); this.name = 'AgentProfileContractError'; this.code = code; this.status = status }
+}
+function parsed<T>(schema: z.ZodType<T>, value: unknown): T {
+  try {
+    canonicalBytes(value)
+    if (value && typeof value === 'object' && 'contractVersion' in value && value.contractVersion !== 1)
+      throw new AgentProfileContractError('CONTRACT_UNSUPPORTED', 422)
+    return schema.parse(value)
+  } catch (error) {
+    if (error instanceof AgentProfileContractError) throw error
+    throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  }
+}
+export const parseProfileRevision = (value: unknown) => parsed(profileRevisionSchema, value)
+export const parseRuntimeSupportReport = (value: unknown) => parsed(runtimeSupportReportSchema, value)
+export const parseRunSnapshot = (value: unknown) => parsed(runSnapshotSchema, value)
+export function requireProfilePrecondition(value: unknown, currentRevisionId: string | null) {
+  const own = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'expectedRevisionId') : undefined
+  if (!own) throw new AgentProfileContractError('PRECONDITION_REQUIRED', 428)
+  if (!('value' in own) || (own.value !== null && (typeof own.value !== 'string' || !identifier.safeParse(own.value).success)))
+    throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  if (own.value !== currentRevisionId) throw new AgentProfileContractError('REVISION_STALE', 412)
+}
+export function parseReplaceProfileInput(value: unknown, currentRevisionId: string | null) {
+  requireProfilePrecondition(value, currentRevisionId)
+  return parsed(replaceProfileInputSchema, value)
+}
+export function parseRollbackProfileInput(value: unknown, currentRevisionId: string) {
+  requireProfilePrecondition(value, currentRevisionId)
+  return parsed(rollbackProfileInputSchema, value)
+}
+/** Data integrity only: live identity/ownership, real adapter/model support,
+ * project/tool authority, audience and fresh execution policy are still required. */
+export async function verifyRunSnapshotArtifacts(value: unknown, profileValue: unknown, reportValue: unknown, mode: (typeof PROFILE_DELIVERY_MODES)[number]) {
+  const snapshot = parseRunSnapshot(value), profile = parseProfileRevision(profileValue), report = parseRuntimeSupportReport(reportValue)
+  if (snapshot.agentIdentityId !== profile.agentIdentityId || snapshot.ownerIdentityId !== profile.ownerIdentityId
+    || snapshot.profileRevisionId !== profile.revisionId || snapshot.profileDigest !== await canonicalDigest(profile)
+    || canonicalBytes(snapshot.runtime).toString() !== canonicalBytes(profile.runtime).toString()
+    || snapshot.supportReportId !== report.reportId || snapshot.supportReportDigest !== await canonicalDigest(report)
+    || report.harnessId !== snapshot.runtime.harnessId || report.adapterVersion !== snapshot.runtime.adapterVersion || report.executionMode !== snapshot.runtime.executionMode)
+    throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  if (snapshot.skills.length !== profile.skills.length) throw new AgentProfileContractError('SKILL_UNSUPPORTED', 422)
+  for (let i = 0; i < snapshot.skills.length; i++) {
+    const { selection, manifest } = snapshot.skills[i]
+    if (canonicalBytes(selection).toString() !== canonicalBytes(profile.skills[i]).toString()) throw new AgentProfileContractError('SKILL_UNSUPPORTED', 422)
+    try { await verifySkillSelection(selection, manifest) } catch { throw new AgentProfileContractError('SKILL_UNSUPPORTED', 422) }
+  }
+  if (report.delivery.status !== 'verified' || !report.delivery.modes.includes(mode)) throw new AgentProfileContractError('DELIVERY_UNVERIFIED', 422)
+  for (const key of ['filesystem', 'network', 'tools', 'delegation'] as const)
+    if (profile.desiredControls[key].requireEnforced && (report.controls[key].status !== 'enforced' || report.controls[key].boundary === 'unverified')) throw new AgentProfileContractError('ENFORCEMENT_UNSUPPORTED', 422)
+  return snapshot
+}

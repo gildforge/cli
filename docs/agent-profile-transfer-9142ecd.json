@@ -1,0 +1,41 @@
+{
+  "canonicalCommit": "9142ecd8858dca7d5a37f909869a05ad513f0c1b",
+  "proposalCommit": "41c15cea3763a79987bc18f8655db7030b7dc554",
+  "generator": {
+    "path": "scripts/generate-api-client.mjs",
+    "sha256": "5908cb2751fd551f32c7c39d8a6125ca609608034fa677d8a43c494d4bf98e75"
+  },
+  "files": [
+    {
+      "source": "lib/api/agent-profile-canonical.ts",
+      "sourceSha256": "943ff36387ea5f39edc091a8815e2f94188a5c76ef4b813b396b1bda5d20d9c4",
+      "output": "src/api/agent-profile-canonical.ts",
+      "outputSha256": "cd5bbd408d34ae60de4ec4e9b370fe1d84e24905f13b951b91415701a871cc04"
+    },
+    {
+      "source": "lib/api/agent-profile-contract.ts",
+      "sourceSha256": "6dde1071bf619c1b0888876f6f775930a3c1af17f4556c8d7179a9f5d8fad64a",
+      "output": "src/api/agent-profile-contract.ts",
+      "outputSha256": "e71692d72e6305ba2344f1a3e64a49327ced6b1ffad539423cedbadd1917160f"
+    },
+    {
+      "source": "lib/api/agent-profile-scopes.ts",
+      "sourceSha256": "e1902c97ecd81f65c926f3af5e2da15d8874958f3d47be8b717231f9df113fe9",
+      "output": "src/api/agent-profile-scopes.ts",
+      "outputSha256": "53ca4b870348c179f829e94929e6d67dca7ebe9b770ff93f3906d393f03ebd37"
+    },
+    {
+      "source": "lib/api/client.ts",
+      "sourceSha256": "7871c6c70e0a6ecd55fd22b5c49f0cea40c9575a46ff7d0eadad7315059db13e",
+      "output": "src/api/client.ts",
+      "outputSha256": "690680b648d9652473eebcdccc8412575e3d4abdfbc69f32723b873e836bff8b"
+    }
+  ],
+  "scope": "declarative profile/control/support/snapshot/precondition helpers only; no live operations/auth/storage/migrations or launch permits",
+  "legacyScopesUnchanged": true,
+  "profileVector": {
+    "bytes": 806,
+    "sha256": "5d305adee182d62eed11d5a68ba41892739ce29c65e7647f49ffa2b62b95e024"
+  },
+  "consumption": "Only changed contract output copied; canonical/scopes/client/generator/legacy scopes unchanged; data-only schemas, no live authority."
+}

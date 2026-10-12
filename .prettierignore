@@ -11,3 +11,5 @@ src/actions/support.ts
 src/channel/state.ts
 # Unmodified upstream fixture: formatting would change its verified pinned bytes.
 scripts/fixtures/skills/ecc-verification-loop/SKILL.md
+# Frozen canonical profile vector from the exact website handoff, no newline.
+scripts/fixtures/skills/agent-profile-revision-v1.json
