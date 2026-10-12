@@ -8,6 +8,11 @@ import { randomBytes } from 'node:crypto'
 import { AnchoredDirectory } from './isolation/anchored-fs'
 import { configuredEditor, editJsonDefinition } from './configured-editor'
 import {
+  PACKAGE_OBJECTS,
+  proofGit,
+  pinnedSourceLock,
+} from './package-git-proof'
+import {
   type AgentPackageManifest,
   type AgentPackageLock,
   type AgentPackageDependency,
@@ -198,6 +203,8 @@ type Source = {
 }
 export type PackageGitOptions = {
   transportRepository?: (repository: string) => string
+  /** Private existing-Git proof bytes, never a portable manifest field. */
+  proofDirectory?: string
 }
 /** Git performs authentication through its existing configuration; no token is read by this resolver. */
 export async function gitPackageSource(
@@ -207,15 +214,22 @@ export async function gitPackageSource(
   options: PackageGitOptions = {},
 ): Promise<Source> {
   const repo = await mkdtemp(join(temporary, 'repo-'))
-  const git = (args: string[], maximum = MAX_FILE) =>
+  const git = (args: string[], input?: Buffer) =>
     execFileSync(
       'git',
-      ['--literal-pathspecs', '-c', 'core.hooksPath=/dev/null', ...args],
+      [
+        '--no-replace-objects',
+        '--literal-pathspecs',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...args,
+      ],
       {
         cwd: repo,
-        maxBuffer: maximum,
+        input,
+        maxBuffer: MAX_FILE,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
   try {
@@ -287,6 +301,21 @@ export async function gitPackageSource(
       : undefined
     if (sourceLock)
       await verifyAgentPackageLock(raw, sourceLock.toString('utf8'))
+    if (sourceLock && options.proofDirectory) {
+      const cache = proofGit(options.proofDirectory)
+      const verified = pinnedSourceLock(entry, git, (type, data, id) => {
+        if (
+          cache(['hash-object', '-w', '-t', type, '--stdin'], data)
+            .toString()
+            .trim() !== id
+        )
+          throw Error('Retained Git object hash mismatch')
+      })
+      if (!verified.equals(sourceLock))
+        throw Error('Fetched source lock proof mismatch')
+      if (!pinnedSourceLock(entry, cache).equals(sourceLock))
+        throw Error('Retained source lock proof mismatch')
+    }
     return { entry, manifest, files, sourceLock }
   } finally {
     await rm(repo, { recursive: true, force: true })
@@ -351,7 +380,7 @@ async function materializedTree(
   }
   return tree
 }
-function ignore(root: AnchoredDirectory, paths: string[]) {
+export function ignorePackagePaths(root: AnchoredDirectory, paths: string[]) {
   const extra = paths.map((p) => '/' + p + '/').join('\n') + '\n'
   if (!root.hasEntry('.gitignore')) {
     if (!root.putRegularIfAbsent('.gitignore', Buffer.from(extra)))
@@ -455,13 +484,21 @@ export async function installPackage(
       )
     if (previous && !update)
       await verifyAgentPackageLock(captured.data, previous)
-    ignore(root, [
+    ignorePackagePaths(root, [
       operation,
       '.gild-package-operation',
+      PACKAGE_OBJECTS,
       ...Object.entries(manifest.dependencies).map(([alias, dep]) =>
         agentPackageInstallPath(dep.kind, alias),
       ),
     ])
+    const objects = root.directory(PACKAGE_OBJECTS, true)
+    objects.close()
+    const proofDirectory = join(directory, PACKAGE_OBJECTS)
+    options = { ...options, proofDirectory }
+    execFileSync('git', ['init', '--bare', '--quiet', proofDirectory], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     temporary = join(directory, operation)
     await mkdir(temporary, { mode: 0o700 })
     const entries: AgentPackageLock['dependencies'] = {}
@@ -542,7 +579,7 @@ export async function installPackage(
         backup = old
           ? '.gild-backup-' + randomBytes(12).toString('hex')
           : undefined
-      ignore(root, [stage, ...(backup ? [backup] : [])])
+      ignorePackagePaths(root, [stage, ...(backup ? [backup] : [])])
       const staged = root.privateDirectory(stage)
       try {
         for (const [path, data] of tree) write(staged, path, data)

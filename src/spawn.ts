@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { resolveProfile } from './agent-profiles'
+import { packageDirectory } from './agent-packages'
+import { resolvePackageLaunch, preparePackageLaunch } from './package-launch'
 import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
@@ -133,13 +135,28 @@ export function spawnCommands(
             ? await resolveProfile(args.shift() ?? '', args)
             : undefined
         const profile = resolved?.profile
+        const selectedPackage =
+          agent === 'package'
+            ? await resolvePackageLaunch(
+                packageDirectory(args.shift() ?? '', opts.configDir),
+                args.shift() ?? '',
+              )
+            : undefined
+        if (selectedPackage && (!opts.as || !resolveIdentity))
+          throw Error(
+            'Package launch needs --as with a separately approved Gild identity',
+          )
+        if (selectedPackage && opts.detach)
+          throw Error(
+            'Package byte delivery currently requires an attached session; no unskilled detached fallback',
+          )
         if (profile && opts.as && opts.as !== profile.name)
           throw Error(
             'A profile uses its own approved agent label; --as must match the profile name',
           )
         if (profile && opts.name)
           throw Error('Profile sessions are named after the agent; omit --name')
-        agent = profile?.runtime ?? agent
+        agent = selectedPackage?.agent.runtime ?? profile?.runtime ?? agent
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
@@ -173,26 +190,35 @@ export function spawnCommands(
               `--vm: ${vmUnavailable}. It never falls back to running on the host`,
             )
         }
-        if (
+        const nativeOnly =
           !opts.detach &&
           (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
-        ) {
-          if (profile?.skill)
-            throw Error(
-              'Pinned profile skills require an interactive PTY; no unskilled fallback is allowed',
-            )
-          process.exitCode = await runNative(
-            binary,
-            args,
-            cwd,
-            agentEnvironment(binary, profile?.env),
+        if (nativeOnly && profile?.skill)
+          throw Error(
+            'Pinned profile skills require an interactive PTY; no unskilled fallback is allowed',
           )
-          return
-        }
         const identity =
-          label && resolveIdentity
+          label && resolveIdentity && (!nativeOnly || !!selectedPackage)
             ? await resolveIdentity(label, cwd, !!profile)
             : undefined
+        if (selectedPackage && !identity)
+          throw Error('Package launch identity was not approved')
+        if (nativeOnly) {
+          const material = selectedPackage
+            ? preparePackageLaunch(selectedPackage, cwd, args)
+            : undefined
+          try {
+            process.exitCode = await runNative(
+              binary,
+              material?.args ?? args,
+              cwd,
+              agentEnvironment(binary, profile?.env),
+            )
+          } finally {
+            material?.close()
+          }
+          return
+        }
         const report = identity?.report
         const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
         const rules = nudges.map(parseNudge)
@@ -235,6 +261,10 @@ export function spawnCommands(
               cwd,
             )
           : undefined
+        const packageMaterial = selectedPackage
+          ? preparePackageLaunch(selectedPackage, cwd, args)
+          : undefined
+        args = packageMaterial?.args ?? args
         try {
           const worker = spawn(
             opts.vm ? process.execPath : 'node',
@@ -250,7 +280,7 @@ export function spawnCommands(
                 : [await workerFile()]),
               JSON.stringify({
                 agent,
-                pinnedSkill: !!skill,
+                pinnedSkill: !!skill || !!selectedPackage,
                 supervised: !!opts.supervised,
                 args,
                 id,
@@ -343,7 +373,7 @@ export function spawnCommands(
               )
             })
           } catch (error) {
-            if (opts.vm || profile?.skill) throw error
+            if (opts.vm || profile?.skill || selectedPackage) throw error
             debugFallback(error)
             process.exitCode = await runNative(
               realAgent(agent, cwd),
@@ -359,7 +389,11 @@ export function spawnCommands(
             )
           }
         } finally {
-          skill?.close()
+          try {
+            packageMaterial?.close()
+          } finally {
+            skill?.close()
+          }
         }
       },
     )

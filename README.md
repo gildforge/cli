@@ -169,11 +169,11 @@ coalesce to at most one per second, and finish with ended. Prompts, arguments,
 commands and file paths stay local. Channel mention subscriptions remain a
 future source for the same injection queue.
 
-Local profiles make a gild label runnable with `gild spawn agent ava`:
+Explicit legacy profiles make a gild label runnable with `gild spawn agent ava`:
 
 ```sh
 gild agent add ava --runtime claude --model claude-opus-5-5 --effort high --dir /path/to/repo
-gild agent ls
+gild agent ls --legacy
 gild spawn agent ava --continue
 gild send ava "Review the README"
 ```
@@ -303,6 +303,8 @@ gild agent edit personal
 gild agent edit personal --member ava --model gpt-6.1-sol
 gild package install /path/to/consumer
 gild package update /path/to/consumer
+gild spawn --as ava package personal ava
+gild spawn --as ava --vm package personal ava
 ```
 
 `agent ls` walks only immediate package folders and warns per malformed neighbor.
@@ -323,3 +325,21 @@ verified, generated paths are ignored by Git, and tracked/unowned/modified
 collisions are refused. Installation never commits or pushes fetched content.
 Existing Git handles repository authentication; no credential is stored in the
 manifest or lock. Live private-target access remains a separate acceptance step.
+
+Package launch selects a folder/member independently of the approved `--as`
+identity and runs in the current working directory. It reads only authored files
+and exact installed pins, with no network/latest resolution. Explicit install
+retains the minimal ordinary Git commit/tree/blob objects needed to verify nested
+source locks offline; missing or changed objects fail before staging or spawning.
+Reinstall explicitly if an older installation lacks these objects.
+
+Codex instructions use its additive `developer_instructions` configuration;
+Claude uses `--append-system-prompt`. Selected skills and declared LICENSE bytes
+are staged in fresh owned `.agents/skills` (Codex) or `.claude/skills` (Claude)
+registrations. Declared assets receive private workspace copies. Changed,
+extra or replaced registration data is retained with an error on cleanup.
+Requested permissions never become approval/sandbox flags. Existing native flags
+and the separately approved identity retain their normal authority boundaries.
+Kimi instructions/skills/assets delivery is unsupported and fails explicitly.
+Package `--detach` and persistent-main package execution are unsupported at this
+checkpoint: delivery requires an attached session, with no unskilled fallback.
