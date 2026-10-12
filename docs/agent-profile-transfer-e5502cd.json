@@ -1,0 +1,48 @@
+{
+  "proposalCommit": "41c15cea3763a79987bc18f8655db7030b7dc554",
+  "generator": {
+    "path": "scripts/generate-api-client.mjs",
+    "sha256": "5908cb2751fd551f32c7c39d8a6125ca609608034fa677d8a43c494d4bf98e75"
+  },
+  "files": [
+    {
+      "source": "lib/api/agent-profile-canonical.ts",
+      "sourceSha256": "943ff36387ea5f39edc091a8815e2f94188a5c76ef4b813b396b1bda5d20d9c4",
+      "output": "src/api/agent-profile-canonical.ts",
+      "outputSha256": "cd5bbd408d34ae60de4ec4e9b370fe1d84e24905f13b951b91415701a871cc04"
+    },
+    {
+      "source": "lib/api/agent-profile-contract.ts",
+      "sourceSha256": "cfcefd07567297aa70b244417db138ac0a66316e307a1a0b8049e5395e0486ab",
+      "output": "src/api/agent-profile-contract.ts",
+      "outputSha256": "d10f2b57b7466e1e5ee6bf6e13a7ece38e07cdb057b96877ec80a22be973c6f5"
+    },
+    {
+      "source": "lib/api/agent-profile-scopes.ts",
+      "sourceSha256": "e1902c97ecd81f65c926f3af5e2da15d8874958f3d47be8b717231f9df113fe9",
+      "output": "src/api/agent-profile-scopes.ts",
+      "outputSha256": "53ca4b870348c179f829e94929e6d67dca7ebe9b770ff93f3906d393f03ebd37"
+    },
+    {
+      "source": "lib/api/client.ts",
+      "sourceSha256": "7871c6c70e0a6ecd55fd22b5c49f0cea40c9575a46ff7d0eadad7315059db13e",
+      "output": "src/api/client.ts",
+      "outputSha256": "690680b648d9652473eebcdccc8412575e3d4abdfbc69f32723b873e836bff8b"
+    }
+  ],
+  "scope": "Bounded duplicate-response report identity and exact named per-control evidence correction; fields/configuration/storage unchanged. No registered HTTP or execution authority.",
+  "legacyScopesUnchanged": true,
+  "profileVector": {
+    "bytes": 806,
+    "sha256": "5d305adee182d62eed11d5a68ba41892739ce29c65e7647f49ffa2b62b95e024"
+  },
+  "normativeSource": {
+    "path": "docs/architecture/agent-settings-coordination-v1.md",
+    "blob": "ab7fa1a639247c35af06f008d318a2ab02682008",
+    "sha256": "2e04773738a1d2f7919340c21233088d4d91c88cfdf13bb35ac536003f615a02"
+  },
+  "consumption": "Only e5502cd contract output copied after final field agreement and independent correction clearance. No project proposal/route/client/scopes/generator/other output transfer or authority wiring.",
+  "canonicalCommit": "e5502cddf259121263f2d6b11e6845e75c226c6c",
+  "stagingLedgerObservedCommit": "112c209b2ea763fc88472bad11140875cda8b799",
+  "agreement": "Final CLI field/parser agreement and independent corrected-source clearance at e5502cd / docblob ab7fa1a639247c35af06f008d318a2ab02682008. Stage advanced metadata only; exact consumed contract still matches agreed commit. Project proposal separate; no project shared fields consumed."
+}
