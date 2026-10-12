@@ -394,3 +394,122 @@ export type AgentProfileProjectMetadata = z.infer<typeof agentProfileProjectMeta
 export function parseAgentProjectReference(value: unknown): AgentProjectReference { return parsed(agentProjectReferenceSchema, value) }
 export function parseAgentRepoProjectMetadata(value: unknown) { return parsed(agentRepoProjectMetadataSchema, value) }
 export function parseAgentProfileProjectMetadata(value: unknown) { return parsed(agentProfileProjectMetadataSchema, value) }
+
+// Minimal internal assignment slice at reviewed94fe. These are DATA records,
+// not registered HTTP operations, owner consent, live admission or launch permits.
+const assignmentMode = z.enum(['interactive', 'piped'])
+const assignmentReaders = z.array(identityId).min(2).max(32).refine(sortedUnique)
+const parentPolicyPin = z.object({ policyId: identifier, revisionId: identifier, digest }).strict()
+export const ownerAssignmentPolicyInputSchema = z.object({
+  profileRevisionId: identifier, deliveryMode: assignmentMode,
+  maxTaskExecutions: z.number().int().min(1).max(32), expiresAt: time,
+  readerIdentityIds: assignmentReaders,
+}).strict()
+const coordinationFields = {
+  coordinatorIdentityId: identityId.nullable(), projectIds: ids,
+  actions: z.tuple([z.literal('task.execute')]), expiresAt: time.nullable(),
+  requesterIdentityIds: z.array(identityId).max(32).refine(sortedUnique),
+  assignmentPolicy: ownerAssignmentPolicyInputSchema.nullable(),
+}
+export const replaceAgentCoordinationSchema = z.object({
+  contractVersion: z.literal(1), expectedRevisionId: identifier.nullable().optional(), ...coordinationFields,
+}).strict()
+export const ownerAssignmentPolicySchema = z.object({
+  contractVersion: z.literal(1), policyId: identifier, revisionId: identifier,
+  ownerConsentRevisionId: identifier, ownerIdentityId: identityId, targetAgentIdentityId: identityId,
+  createdAt: time, profileDigest: digest.nullable(),
+  ancestors: z.array(parentPolicyPin).max(32).refine(rows => new Set(rows.map(r => r.policyId)).size === rows.length),
+  ...coordinationFields,
+}).strict().superRefine((value, ctx) => {
+  const reject = (message: string) => ctx.addIssue({ code: 'custom', message })
+  if (value.ancestors.some(a => a.policyId === value.policyId)) reject('Policy cannot be its own ancestor')
+  const policy = value.assignmentPolicy
+  if (!policy) { if (value.profileDigest !== null) reject('Closed policy has no profile digest'); return }
+  if (!value.coordinatorIdentityId || !value.profileDigest || !value.projectIds.length) reject('Assignment requires explicit coordinator/profile/projects')
+  if (Date.parse(policy.expiresAt) <= Date.parse(value.createdAt)
+    || Date.parse(policy.expiresAt) > Date.parse(value.createdAt) + 86400000
+    || value.expiresAt !== null && Date.parse(policy.expiresAt) > Date.parse(value.expiresAt)) reject('Bounded assignment expiry')
+  if (!policy.readerIdentityIds.includes(value.ownerIdentityId) || !policy.readerIdentityIds.includes(value.targetAgentIdentityId)) reject('Explicit owner and target audience required')
+})
+export const agentAssignmentInputSchema = z.object({
+  contractVersion: z.literal(1), assignmentRequestId: identifier, expectedCoordinationRevisionId: identifier,
+  targetAgentIdentityId: identityId, projectId: identifier, action: z.literal('task.execute'),
+  profileRevisionId: identifier, deliveryMode: assignmentMode, instruction: text(16384),
+  context: z.array(z.never()).length(0),
+}).strict()
+export const agentTaskSchema = z.object({
+  contractVersion: z.literal(1), taskId: identifier, taskRevisionId: identifier,
+  requesterIdentityId: identityId, ownerIdentityId: identityId, targetAgentIdentityId: identityId,
+  projectId: identifier, action: z.literal('task.execute'), profileRevisionId: identifier,
+  deliveryMode: assignmentMode, instruction: text(16384), context: z.array(z.never()).length(0),
+  createdAt: time, expiresAt: time, readerIdentityIds: assignmentReaders,
+  grantId: identifier, grantRevisionId: identifier,
+  authorizationSource: z.literal('own-coordinator'), sourcePolicyId: identifier,
+  sourcePolicyRevisionId: identifier, sourcePolicyDigest: digest, ownerConsentRevisionId: identifier,
+}).strict().superRefine((value, ctx) => {
+  if (Date.parse(value.expiresAt) <= Date.parse(value.createdAt)
+    || Date.parse(value.expiresAt) > Date.parse(value.createdAt) + 86400000
+    || !value.readerIdentityIds.includes(value.ownerIdentityId) || !value.readerIdentityIds.includes(value.targetAgentIdentityId))
+    ctx.addIssue({ code: 'custom', message: 'Task expiry and explicit audience binding' })
+})
+export const agentAssignmentReceiptSchema = z.object({
+  contractVersion: z.literal(1), assignmentRequestId: identifier, taskId: identifier,
+  taskRevisionId: identifier, taskDigest: digest, decision: z.literal('assigned'),
+  grantId: identifier, grantRevisionId: identifier, sourcePolicyId: identifier,
+  sourcePolicyRevisionId: identifier, sourcePolicyDigest: digest,
+  launchAuthority: z.literal(false), executionAuthority: z.literal(false),
+}).strict()
+export type OwnerAssignmentPolicyInput = z.infer<typeof ownerAssignmentPolicyInputSchema>
+export type OwnerAssignmentPolicy = z.infer<typeof ownerAssignmentPolicySchema>
+export type ReplaceAgentCoordinationInput = z.infer<typeof replaceAgentCoordinationSchema>
+export type AgentAssignmentInput = z.infer<typeof agentAssignmentInputSchema>
+export type AgentTask = z.infer<typeof agentTaskSchema>
+export type AgentAssignmentReceipt = z.infer<typeof agentAssignmentReceiptSchema>
+export const parseOwnerAssignmentPolicy = (value: unknown) => parsed(ownerAssignmentPolicySchema, value)
+export const parseAgentTask = (value: unknown) => parsed(agentTaskSchema, value)
+export const parseAgentAssignmentReceipt = (value: unknown) => parsed(agentAssignmentReceiptSchema, value)
+export function parseReplaceAgentCoordination(value: unknown, current: string | null) {
+  requireProfilePrecondition(value, current)
+  return parsed(replaceAgentCoordinationSchema, value)
+}
+export function parseAgentAssignmentInput(value: unknown, current: string) {
+  const own = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'expectedCoordinationRevisionId') : undefined
+  if (!own) throw new AgentProfileContractError('PRECONDITION_REQUIRED', 428)
+  if (!('value' in own) || !identifier.safeParse(own.value).success) throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  if (own.value !== current) throw new AgentProfileContractError('REVISION_STALE', 412)
+  return parsed(agentAssignmentInputSchema, value)
+}
+/** Complete immutable relationship integrity only. Caller/owner/project consent,
+ * current policy/expiry/fences, budgets and actual credential proof are SERVER duties. */
+export async function verifyOwnerAssignmentPolicyProfile(policyValue: unknown, profileValue: unknown) {
+  const policy = parseOwnerAssignmentPolicy(policyValue), profile = parseProfileRevision(profileValue)
+  const selected = policy.assignmentPolicy
+  if (!selected || profile.agentIdentityId !== policy.targetAgentIdentityId || profile.ownerIdentityId !== policy.ownerIdentityId
+    || profile.revisionId !== selected.profileRevisionId || await canonicalDigest(profile) !== policy.profileDigest
+    || policy.projectIds.some(id => ![...profile.desiredControls.filesystem.readProjectIds, ...profile.desiredControls.filesystem.writeProjectIds].includes(id)))
+    throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  return policy
+}
+export async function verifyAgentAssignmentArtifacts(taskValue: unknown, policyValue: unknown, requestValue: unknown, receiptValue: unknown) {
+  const task = parseAgentTask(taskValue), policy = parseOwnerAssignmentPolicy(policyValue)
+  const request = parseAgentAssignmentInput(requestValue, policy.revisionId), receipt = parseAgentAssignmentReceipt(receiptValue)
+  const selected = policy.assignmentPolicy
+  const bad = !selected || task.requesterIdentityId !== policy.coordinatorIdentityId
+    || task.ownerIdentityId !== policy.ownerIdentityId || task.targetAgentIdentityId !== policy.targetAgentIdentityId
+    || task.targetAgentIdentityId !== request.targetAgentIdentityId || task.projectId !== request.projectId
+    || !policy.projectIds.includes(task.projectId) || task.action !== request.action
+    || task.profileRevisionId !== selected?.profileRevisionId || task.profileRevisionId !== request.profileRevisionId
+    || task.deliveryMode !== selected?.deliveryMode || task.deliveryMode !== request.deliveryMode
+    || task.instruction !== request.instruction || task.sourcePolicyId !== policy.policyId
+    || task.sourcePolicyRevisionId !== policy.revisionId || task.sourcePolicyDigest !== await canonicalDigest(policy)
+    || task.ownerConsentRevisionId !== policy.ownerConsentRevisionId
+    || Date.parse(task.createdAt) < Date.parse(policy.createdAt) || Date.parse(task.expiresAt) > Date.parse(selected?.expiresAt ?? '')
+    || canonicalJSON(task.readerIdentityIds) !== canonicalJSON(selected?.readerIdentityIds)
+    || receipt.assignmentRequestId !== request.assignmentRequestId || receipt.taskId !== task.taskId
+    || receipt.taskRevisionId !== task.taskRevisionId || receipt.taskDigest !== await canonicalDigest(task)
+    || receipt.grantId !== task.grantId || receipt.grantRevisionId !== task.grantRevisionId
+    || receipt.sourcePolicyId !== task.sourcePolicyId || receipt.sourcePolicyRevisionId !== task.sourcePolicyRevisionId
+    || receipt.sourcePolicyDigest !== task.sourcePolicyDigest
+  if (bad) throw new AgentProfileContractError('VALIDATION_FAILED', 422)
+  return receipt
+}
