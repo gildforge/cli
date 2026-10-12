@@ -243,6 +243,34 @@ export function endSocket(socket: Socket, last?: string) {
     }
   })
 }
+/** The final exit/EOF promises retirement: cleanup must finish before any
+ * subscriber or stop caller can observe completion. Existing peers stay open
+ * during cleanup so the final event is still delivered rather than reset. */
+export async function finalizeSessionStreams(o: {
+  session: string
+  code: number
+  recovery?: RecoveryLocation
+  events: readonly Socket[]
+  viewers: readonly Socket[]
+  cleanup: () => void | Promise<void>
+}) {
+  await o.cleanup()
+  const line = exitLine(o.session, o.code, o.recovery)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.all([
+        ...o.events.map((socket) => endSocket(socket, line)),
+        ...o.viewers.map((socket) => endSocket(socket)),
+      ]),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 500)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 export type StartMessage =
   { type: 'ready'; id: string } | { type: 'failed'; error: string }
 /** The worker tells `gild spawn --detach` over IPC that it is ready, or why not. */

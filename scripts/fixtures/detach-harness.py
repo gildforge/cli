@@ -8,7 +8,9 @@ CLI = json.loads(os.environ['TEST_GILD_COMMAND'])
 CASE = sys.argv[1]
 AGENT = ROOT / 'scripts/fixtures/detach-agent.py'
 
-home = tempfile.TemporaryDirectory(dir=ROOT / '.tmp', prefix='d-')
+TEMP_ROOT = pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP', ROOT / '.tmp'))
+TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+home = tempfile.TemporaryDirectory(dir=TEMP_ROOT, prefix='d-')
 HOME = pathlib.Path(home.name)
 BIN = HOME / 'bin'; BIN.mkdir()
 for name in ['claude', 'plain']: (BIN / name).symlink_to(AGENT)

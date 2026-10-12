@@ -15,7 +15,12 @@ for (const [mode, outcome] of [
 ] as const) {
   test(`VM worker final result: ${mode} ${outcome} sync precedes exit and recovery delivery`, async () => {
     await mkdir('.tmp', { recursive: true })
-    const home = await mkdtemp(resolve('.tmp/final-worker-'))
+    const home = await mkdtemp(
+      join(
+        process.env.TEST_GILD_FIXTURE_TMP ?? resolve('.tmp'),
+        'final-worker-',
+      ),
+    )
     const worker = join(home, 'worker.mjs')
     const built = await Bun.build({
       entrypoints: [resolve('src/spawn-worker.ts')],
@@ -109,24 +114,32 @@ for (const [mode, outcome] of [
         events!.once('error', reject)
       })
       let lines = ''
-      const finalEvent = new Promise<{ event: any; noteExists: boolean }>(
-        (done, reject) => {
-          events!.on('error', reject)
-          events!.on('data', (chunk) => {
-            lines += chunk.toString()
-            for (const line of lines.trim().split('\n')) {
-              try {
-                const event = JSON.parse(line)
-                if (event.type === 'exited')
-                  done({ event, noteExists: existsSync(recovery.note) })
-              } catch {}
-            }
-          })
-          events!.on('close', () =>
-            reject(Error('subscriber closed without final event')),
-          )
-        },
-      )
+      const finalEvent = new Promise<{
+        event: any
+        noteExists: boolean
+        sessionFilesGone: boolean
+      }>((done, reject) => {
+        events!.on('error', reject)
+        events!.on('data', (chunk) => {
+          lines += chunk.toString()
+          for (const line of lines.trim().split('\n')) {
+            try {
+              const event = JSON.parse(line)
+              if (event.type === 'exited')
+                done({
+                  event,
+                  noteExists: existsSync(recovery.note),
+                  sessionFilesGone:
+                    !existsSync(path) &&
+                    !existsSync(join(home, '.gild/sessions', id)),
+                })
+            } catch {}
+          }
+        })
+        events!.on('close', () =>
+          reject(Error('subscriber closed without final event')),
+        )
+      })
       // If an earlier assertion fails, cleanup may close this subscriber first.
       // The awaited promise below still rejects on a premature close.
       void finalEvent.catch(() => {})
@@ -156,6 +169,7 @@ for (const [mode, outcome] of [
       const observed = await finalEvent
       expect(reply.code).toBe(outcome === 'success' ? 0 : 1)
       expect(observed.event.code).toBe(reply.code)
+      expect(observed.sessionFilesGone).toBe(true)
       expect(observed.noteExists).toBe(outcome !== 'success')
       expect(reply.recovery).toEqual(
         outcome === 'success' ? undefined : recovery,

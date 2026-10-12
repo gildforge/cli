@@ -5,7 +5,9 @@ CLI=json.loads(os.environ['TEST_GILD_COMMAND'])
 TOKEN='fixture-scoped-token'
 def iso(t):return time.strftime('%Y-%m-%dT%H:%M:%S',time.gmtime(t))+'.000Z'
 (ROOT/'.tmp').mkdir(exist_ok=True)
-with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
+TEMP_ROOT=pathlib.Path(os.environ.get('TEST_GILD_FIXTURE_TMP',ROOT/'.tmp'))
+TEMP_ROOT.mkdir(parents=True,exist_ok=True)
+with tempfile.TemporaryDirectory(dir=TEMP_ROOT,prefix='nudge-') as d:
     home=pathlib.Path(d);bin=home/'bin';bin.mkdir();(bin/'claude').symlink_to(ROOT/'scripts/fixtures/events-agent.py')
     for p in [home/'.claude/settings.json']:p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{"hooks":{}}')
     env={**os.environ,'HOME':d,'PATH':str(bin)+os.pathsep+os.environ['PATH']}
@@ -170,6 +172,10 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.tmp',prefix='nudge-') as d:
         assert sorted(set(forge['reads']))==['20','30'],forge['reads']
         st=run.rule('mention-unanswered:2s');assert st['fired']==1 and st['nextDue'] is None,st
         assert TOKEN not in run.events.decode() and TOKEN not in json.dumps(run.status())
+        # The external mention turns re-arm idle, but the final Stop/CLI query
+        # need not leave enough scheduler time for its next timer. Await the
+        # actual fire AND PTY delivery under the existing wait/overall budgets.
+        run.wait(lambda:run.rule('idle:1s:2')['fired']>2 and len([l for l in run.nudges() if l.startswith('[gild] nudge: idle ')])>2)
         # gild status (the CLI) shows the same rules.
         p=gild('status','fixture');assert p.returncode==0,p
         cli=json.loads(p.stdout);assert [(n['rule'],n['fired']) for n in cli['nudges']][1:]==[('waiting:1s',1),('mention-unanswered:2s',1),('ci:owner/ci',1)],cli['nudges']

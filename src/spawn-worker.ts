@@ -30,8 +30,7 @@ import {
 } from './isolation/sync'
 import {
   DetachedHost,
-  endSocket,
-  exitLine,
+  finalizeSessionStreams,
   reportDetached,
 } from './spawn-detach'
 import {
@@ -99,6 +98,7 @@ let queue: InjectionQueue | undefined
 let path: string | undefined
 let ownsSocket = false
 let closing = false
+let retired = false
 let host: DetachedHost | undefined
 let adapterReceive: ((raw: unknown) => void) | undefined
 let adapterCleanup: (() => void) | undefined
@@ -210,6 +210,12 @@ function quiesce() {
 function restore() {
   quiesce()
   for (const socket of sockets) socket.destroy()
+  retireSession()
+}
+/** Retire owned files/listener once, leaving connected peers for the final exit. */
+function retireSession() {
+  if (retired) return
+  retired = true
   host?.cleanup()
   server.close()
   if (ownsSocket && path) {
@@ -217,22 +223,23 @@ function restore() {
       unlinkSync(path)
     } catch {}
   }
+  ownsSocket = false
 }
 /** The final event: subscribers (and a `gild stop` caller) learn the exit
- * code, and are closed in order before the socket goes. */
+ * code only after owned session files/listener are retired. */
 let exitFlushed: Promise<unknown> = Promise.resolve()
 function announceExit(code: number, recovery?: RecoveryLocation) {
   const events = [...subscribers]
   const viewers = host?.endViewers() ?? []
   subscribers.clear()
-  const line = exitLine(options.id, code, recovery)
-  exitFlushed = Promise.race([
-    Promise.all([
-      ...events.map((socket) => endSocket(socket, line)),
-      ...viewers.map((socket) => endSocket(socket)),
-    ]),
-    new Promise((resolve) => setTimeout(resolve, 500)),
-  ])
+  exitFlushed = finalizeSessionStreams({
+    session: options.id,
+    code,
+    recovery,
+    events,
+    viewers,
+    cleanup: retireSession,
+  })
   for (const socket of [...events, ...viewers]) sockets.delete(socket)
 }
 function finish(code: number, terminate = true) {

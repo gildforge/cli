@@ -33,6 +33,7 @@ const child = spawn(
     'src/spawn-notify.test.ts',
     'src/agent-profiles.test.ts',
     'src/spawn-detach.test.ts',
+    'src/spawn-exit-cleanup.test.ts',
     'src/spawn-nudge-pty.test.ts',
     'src/spawn-vm.test.ts',
     'src/spawn-bridge.test.ts',
