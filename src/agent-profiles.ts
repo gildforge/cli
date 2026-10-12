@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto'
 import { Command } from 'commander'
 import { z } from 'zod'
 import { nudgeSpec } from './spawn-nudge'
+import { manualProfileSkillSchema } from './skills/manual-profile'
 
 // Runtime settings only. Scoped tokens stay in the existing identity store.
 const nameSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$/)
@@ -54,6 +55,7 @@ export const profileSchema = z.strictObject({
     .optional(),
   nudges: z.array(nudgeSpec).optional(),
   on: z.array(triggerSchema).optional(),
+  skill: manualProfileSkillSchema.optional(),
 })
 export type AgentProfile = z.infer<typeof profileSchema>
 export const profilesDirectory = () => join(homedir(), '.gild', 'agents')
@@ -88,7 +90,7 @@ export function parseProfile(value: unknown): AgentProfile {
   if (!result.success)
     throw Error(
       nudgeError(result.error.issues) ??
-        'Invalid agent profile: only name, runtime, model, effort, directory, args, env, channels, on and nudges are allowed; credentials belong in the identity store' +
+        'Invalid agent profile: only name, runtime, model, effort, directory, args, env, channels, on, nudges and skill are allowed; credentials belong in the identity store' +
           (result.error.issues[0]
             ? ` (${result.error.issues[0].path.join('.') || 'profile'}: ${result.error.issues[0].message})`
             : ''),
@@ -230,6 +232,11 @@ export function profileCommands(agent: Command) {
       .option('--clear-channels', 'clear reserved channels')
       .option('--clear-nudges', 'clear watchdog rules')
       .option('--clear-on', 'clear event triggers')
+      .option(
+        '--skill-spec <json>',
+        'owner-selected pinned skill/cache JSON (Codex native delivery)',
+      )
+      .option('--clear-skill', 'clear the local pinned skill selection')
       .option('--file <json>', 'read a complete, credential-free profile JSON')
       .action(async (name: string, opts) => {
         profilePath(name)
@@ -253,6 +260,15 @@ export function profileCommands(agent: Command) {
         await saveProfile(
           {
             ...previous,
+            ...(opts.skillSpec
+              ? {
+                  skill: manualProfileSkillSchema.parse(
+                    JSON.parse(await readFile(opts.skillSpec, 'utf8')),
+                  ),
+                }
+              : opts.clearSkill
+                ? { skill: undefined }
+                : {}),
             ...(opts.runtime !== undefined ? { runtime: opts.runtime } : {}),
             ...(opts.dir !== undefined ? { directory: resolve(opts.dir) } : {}),
             ...(opts.model !== undefined

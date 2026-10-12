@@ -1,3 +1,5 @@
+import { prepareManualProfileSkill } from './skills/manual-profile'
+import { adapterFor } from './spawn-adapters'
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
@@ -135,6 +137,10 @@ export function spawnCommands(
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()
         const label = profile?.name ?? opts.as
+        if (profile?.skill && opts.detach)
+          throw Error(
+            'Pinned profile skills currently require attached PTY sessions',
+          )
         const binary = realAgent(agent, cwd)
         if (opts.detach && !supportsPty())
           throw Error(
@@ -165,6 +171,10 @@ export function spawnCommands(
           !opts.detach &&
           (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
         ) {
+          if (profile?.skill)
+            throw Error(
+              'Pinned profile skills require an interactive PTY; no unskilled fallback is allowed',
+            )
           process.exitCode = await runNative(
             binary,
             args,
@@ -212,97 +222,115 @@ export function spawnCommands(
             )
           : new URL('../node_modules/node-pty/lib/index.js', import.meta.url)
               .pathname
-        const worker = spawn(
-          opts.vm ? process.execPath : 'node',
-          [
-            ...(opts.vm
-              ? import.meta.url.includes('$bunfs')
-                ? ['__vm-worker']
-                : [
-                    'run',
-                    new URL('./gild.ts', import.meta.url).pathname,
-                    '__vm-worker',
-                  ]
-              : [await workerFile()]),
-            JSON.stringify({
-              agent,
-              args,
-              id,
-              idleMs: opts.idleMs,
-              ptyModule,
-              vm: opts.vm ? { configDir: opts.configDir } : undefined,
-              // Inside the guest the hook is the guest agent, which relays over vsock.
-              hookCommand: opts.vm
-                ? ['/usr/local/bin/gild-guest-agent']
-                : import.meta.url.includes('$bunfs')
-                  ? [process.execPath]
+        const skill = profile?.skill
+          ? await prepareManualProfileSkill(
+              profile.skill,
+              adapterFor(agent, args)?.name ?? agent,
+              cwd,
+            )
+          : undefined
+        try {
+          const worker = spawn(
+            opts.vm ? process.execPath : 'node',
+            [
+              ...(opts.vm
+                ? import.meta.url.includes('$bunfs')
+                  ? ['__vm-worker']
                   : [
-                      process.execPath,
                       'run',
                       new URL('./gild.ts', import.meta.url).pathname,
-                    ],
-              reporting: !!report,
-              bridging: !!bridge,
-              identity: identity?.agent,
-              printId: opts.printId,
-              profile: profile
-                ? {
-                    name: profile.name,
-                    channels: profile.channels,
-                    on: profile.on,
-                  }
-                : undefined,
-              envAllowlist: profile?.env,
-              nudges,
-              detach: opts.detach
-                ? { cols: opts.cols, rows: opts.rows }
-                : undefined,
-            }),
-          ],
-          opts.detach
-            ? detachedSpawn(cwd)
-            : {
-                cwd,
-                stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-              },
-        )
-        if (report)
-          worker.once('spawn', () => worker.send({ type: 'report', report }))
-        if (bridge)
-          worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
-        if (opts.detach) return console.log(await detachedReady(worker))
-        const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
-        const interrupted = () => {}
-        process.on('SIGINT', interrupted)
-        const disconnected = () => worker.kill('SIGHUP')
-        process.on('disconnect', disconnected)
-        const handlers = signals.map((signal) => () => worker.kill(signal))
-        signals.forEach((signal, index) => process.on(signal, handlers[index]))
-        try {
-          process.exitCode = await new Promise<number>((resolve, reject) => {
-            worker.once('error', reject)
-            worker.once('exit', (code, signal) =>
-              resolve(
-                code ??
-                  (signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143),
-              ),
-            )
-          })
-        } catch (error) {
-          if (opts.vm) throw error
-          debugFallback(error)
-          process.exitCode = await runNative(
-            realAgent(agent, cwd),
-            args,
-            cwd,
-            agentEnvironment(realAgent(agent, cwd), profile?.env),
+                      '__vm-worker',
+                    ]
+                : [await workerFile()]),
+              JSON.stringify({
+                agent,
+                pinnedSkill: !!skill,
+                args,
+                id,
+                idleMs: opts.idleMs,
+                ptyModule,
+                vm: opts.vm ? { configDir: opts.configDir } : undefined,
+                // Inside the guest the hook is the guest agent, which relays over vsock.
+                hookCommand: opts.vm
+                  ? ['/usr/local/bin/gild-guest-agent']
+                  : import.meta.url.includes('$bunfs')
+                    ? [process.execPath]
+                    : [
+                        process.execPath,
+                        'run',
+                        new URL('./gild.ts', import.meta.url).pathname,
+                      ],
+                reporting: !!report,
+                bridging: !!bridge,
+                identity: identity?.agent,
+                printId: opts.printId,
+                profile: profile
+                  ? {
+                      name: profile.name,
+                      channels: profile.channels,
+                      on: profile.on,
+                    }
+                  : undefined,
+                envAllowlist: profile?.env,
+                nudges,
+                detach: opts.detach
+                  ? { cols: opts.cols, rows: opts.rows }
+                  : undefined,
+              }),
+            ],
+            opts.detach
+              ? detachedSpawn(cwd)
+              : {
+                  cwd,
+                  stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+                },
           )
-        } finally {
-          process.off('SIGINT', interrupted)
-          process.off('disconnect', disconnected)
+          if (report)
+            worker.once('spawn', () => worker.send({ type: 'report', report }))
+          if (bridge)
+            worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
+          if (opts.detach) return console.log(await detachedReady(worker))
+          const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
+          const interrupted = () => {}
+          process.on('SIGINT', interrupted)
+          const disconnected = () => worker.kill('SIGHUP')
+          process.on('disconnect', disconnected)
+          const handlers = signals.map((signal) => () => worker.kill(signal))
           signals.forEach((signal, index) =>
-            process.off(signal, handlers[index]),
+            process.on(signal, handlers[index]),
           )
+          try {
+            process.exitCode = await new Promise<number>((resolve, reject) => {
+              worker.once('error', reject)
+              worker.once('exit', (code, signal) =>
+                resolve(
+                  code ??
+                    (signal === 'SIGINT'
+                      ? 130
+                      : signal === 'SIGHUP'
+                        ? 129
+                        : 143),
+                ),
+              )
+            })
+          } catch (error) {
+            if (opts.vm || profile?.skill) throw error
+            debugFallback(error)
+            process.exitCode = await runNative(
+              realAgent(agent, cwd),
+              args,
+              cwd,
+              agentEnvironment(realAgent(agent, cwd), profile?.env),
+            )
+          } finally {
+            process.off('SIGINT', interrupted)
+            process.off('disconnect', disconnected)
+            signals.forEach((signal, index) =>
+              process.off(signal, handlers[index]),
+            )
+          }
+        } finally {
+          skill?.close()
         }
       },
     )

@@ -103,6 +103,33 @@ the selected skill, pinned snapshot/report/version/identity binding and honest m
 limits. Metadata skills/list, an echo/PTy fixture, prepared files or synthetic
 verified catalog values cannot stand in for that demonstration.
 
+## Held manual profile delivery candidate
+
+A local profile can carry `skill: {cacheDirectory, selection, manifest}`; the cache
+path is absolute and owned, selection is the immutable pin/bundle/entry digests,
+and manifest is the strict versioned skill contract. `gild agent edit <name>
+--skill-spec <json>` selects it; `--clear-skill` removes that local selection.
+No credential values belong in this JSON. The cache must already contain the
+verified complete bundle; a miss or invalid selection fails before agent launch.
+
+For attached Codex PTY sessions, the Bun parent verifies/materializes exact bytes,
+registers a fresh private `.agents/skills/gild-selected-<nonce>` in the profile
+project before the native worker or VM clone starts, and holds descriptors until
+the worker exits (after VM sync). It removes only the unchanged owned registration;
+modified/replaced/extra data is retained and reported. Private materializations
+remain available for recovery. Detached sessions, non-PTY launches and other
+harnesses explicitly fail; there is no unskilled fallback. The worker receives a
+boolean requirement, not the skill body/cache/manifest in argv.
+
+Codex's documented project discovery scans `.agents/skills`; actual instructions
+are loaded on demand. The new real PTY fixture drives the production profile/spawn
+action and a fake Codex child that reads and hashes the actual ECC SKILL.md and
+LICENSE. This proves launch delivery and cleanup, not real model instruction use,
+provider authentication, same-UID protection or a supported guest tuple. Existing
+skills with duplicate native names can still be discoverable; don't claim that
+registration replaces or centrally controls all native skill sources. Two ordered
+real HOST/GUEST rehearsals remain required for the video claim.
+
 ## Admission and staged verification prerequisites
 
 Separate owner-initiated manual execution from the optional new central assignment
@@ -142,3 +169,27 @@ No release is necessary to review the source/design plan; draft/package0.6.9
 and merge/release/deploy/permission holds remain.
 
 -codex
+
+## 2026-10-12 offline comparison result
+
+The retained baseline kernel `bd471bb09087a54280ce492261ec84b432ca3c95ee7f6b2124fb0ccd9f0392a5`
+failed VZ start with `VZErrorDomain code=1` before guest readiness. A separately
+owned one-setting experiment adds `CONFIG_RELOCATABLE=y` using the exact existing
+Linux6.12.112 archive and immutable builder, 2CPU/4GiB/512PID/no-network compiler.
+Candidate kernel SHA256 is
+`94c9178fbe5f3b5702845a1e15d2a274114bb7a7c2e317e3cbcd1a42fc93b678`, final config SHA256
+`d620c2eeb3769bc227a2aa8f003beccaa3f5278040bc319c988f21e32e2e4f14`.
+The full config changes RELOCATABLE n→y and exposes the dependent disabled
+`CONFIG_RANDOMIZE_BASE` marker; EFI, physical start/alignment and all other
+options are unchanged. Header relocation byte changes0→1, xloadflags0x21→0x23.
+Original source fragment and baseline artifacts remain unchanged.
+
+The controlled outside-Documents comparison uses the same verified rootfs,
+helper, exact baseline commandline, 2CPU/1GiB/noNIC/noShare and fresh owned disk.
+VZ reports `started 162`; protocol2 is absent after30seconds and serial is empty.
+One diagnostic commandline-only run enabling verbose console logs reports
+`started 156` but also times out with no serial. Every owned helper PID stopped.
+This supports resolving the observed VZ startup rejection; it does not establish
+Linux boot, Ubuntu/tool inventory, real skill execution or a supported VM tuple.
+No further kernel build or blind boot was run. Next inspect VZ x86 boot/device
+requirements against the minimal config before selecting another bounded change.

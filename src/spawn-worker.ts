@@ -50,6 +50,7 @@ type Options = {
   idleMs: number
   ptyModule: string
   hookCommand: string[]
+  pinnedSkill?: boolean
   printId?: boolean
   reporting?: boolean
   bridging?: boolean
@@ -375,9 +376,9 @@ process.on('exit', () => {
 })
 
 async function fallback(error: unknown) {
-  if (options.vm) {
+  if (options.vm || options.pinnedSkill) {
     // Never quietly run an agent that was asked to be isolated on the host.
-    const message = `--vm failed: ${(error as Error)?.message ?? error}`
+    const message = `${options.vm ? '--vm' : 'Pinned skill launch'} failed: ${(error as Error)?.message ?? error}`
     restore()
     // After restore: `gild spawn --detach` returns on this message, with the session already gone.
     await reportDetached(options.detach, { type: 'failed', error: message })

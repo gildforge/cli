@@ -29,6 +29,16 @@ func die(_ message: String, _ code: Int32 = 2) -> Never {
   exit(code)
 }
 
+// Preserve framework diagnostics for this owned VM; no debugger or global log scrape.
+func virtualMachineError(_ error: Error, _ depth: Int = 0) -> String {
+  let e = error as NSError
+  var text = "\(e.localizedDescription) [domain=\(e.domain) code=\(e.code) userInfo=\(e.userInfo)]"
+  if depth < 4, let underlying = e.userInfo[NSUnderlyingErrorKey] as? Error {
+    text += " underlying=" + virtualMachineError(underlying, depth + 1)
+  }
+  return text
+}
+
 func hasEntitlement() -> Bool {
   guard let task = SecTaskCreateFromSelf(nil) else { return false }
   let value = SecTaskCopyValueForEntitlement(
@@ -226,6 +236,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
       c.networkDevices = [n]
     }
     try c.validate()
+    print("configuration validated cpus=\(c.cpuCount) memory=\(c.memorySize) network=\(o.net)")
     return c
   }
 
@@ -233,7 +244,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     let t0 = Date()
     do {
       vm = VZVirtualMachine(configuration: try configuration())
-    } catch { die("configuration: \(error.localizedDescription)") }
+    } catch { die("configuration: \(virtualMachineError(error))") }
     vm.delegate = self
     device = vm.socketDevices.first as? VZVirtioSocketDevice
     listener.delegate = self
@@ -243,7 +254,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     vm.start { result in
       switch result {
       case .success: print("started \(Int(Date().timeIntervalSince(t0) * 1000))")
-      case .failure(let e): die("start: \(e.localizedDescription)", 1)
+      case .failure(let e): die("start: \(virtualMachineError(e))", 1)
       }
     }
   }
@@ -289,7 +300,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
 
   func guestDidStop(_ virtualMachine: VZVirtualMachine) { unlink(o.vsock); exit(0) }
   func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
-    die("stopped: \(error.localizedDescription)", 1)
+    die("stopped: \(virtualMachineError(error))", 1)
   }
 }
 
