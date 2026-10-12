@@ -75,7 +75,17 @@ function checkCache(bytes: Buffer) {
       !parsed ||
       typeof parsed !== 'object' ||
       Array.isArray(parsed) ||
-      parsed.OPENAI_API_KEY
+      parsed.OPENAI_API_KEY ||
+      parsed.auth_mode !== 'chatgpt' ||
+      !parsed.tokens ||
+      typeof parsed.tokens !== 'object' ||
+      Array.isArray(parsed.tokens) ||
+      !['access_token', 'refresh_token'].every(
+        (key) =>
+          typeof parsed.tokens[key] === 'string' &&
+          parsed.tokens[key].trim().length > 0 &&
+          parsed.tokens[key].length <= 32768,
+      )
     )
       throw Error()
   } catch {

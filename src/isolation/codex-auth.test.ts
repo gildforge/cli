@@ -256,6 +256,37 @@ test('guest cache loss/invalid bytes retains source and blocks the selected stre
     expect(await readFile(f.source, 'utf8')).toBe(cache('0'))
   }))
 
+test('empty or wrong native ChatGPT cache cannot overwrite the main source', async () => {
+  for (const invalid of [
+    '{}',
+    JSON.stringify({ auth_mode: 'chatgpt', tokens: {} }),
+    JSON.stringify({
+      auth_mode: 'chatgpt',
+      tokens: { access_token: '', refresh_token: 'FAKE' },
+    }),
+  ]) {
+    await fixture(async (f) => {
+      const g = guest(),
+        lease = await CodexCredentialLease.acquire(
+          { source: f.source, dedicated: true },
+          f.work,
+          f.locks,
+        )
+      await lease.restore(g.iso)
+      g.set(invalid)
+      await expect(lease.persist(g.iso)).rejects.toThrow('reconciliation')
+      expect(await readFile(f.source, 'utf8')).toBe(cache('0'))
+      await expect(
+        CodexCredentialLease.acquire(
+          { source: f.source, dedicated: true },
+          f.work,
+          f.locks,
+        ),
+      ).rejects.toThrow('reconciliation')
+    })
+  }
+})
+
 test('source is opt-in, rejects API-key caches and rejects unbounded file capture', () =>
   fixture(async (f) => {
     await expect(
