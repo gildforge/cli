@@ -177,6 +177,11 @@ export class AnchoredDirectory {
     fsyncSync(this.fd)
     return true
   }
+  /** Move a verified owned entry without replacing another destination. */
+  moveEntry(name: string, destination: string) {
+    if (!this.publishDirectory(name, destination))
+      throw Error('Owned move destination already exists')
+  }
   directory(name: string, create = false) {
     const p = cstr(name)
     if (create) {
@@ -235,6 +240,10 @@ export class AnchoredDirectory {
   hasEntry(name: string) {
     return this.entryMode(name) !== undefined
   }
+  entryType(name: string) {
+    const mode = this.entryMode(name)
+    return mode === undefined ? undefined : mode & constants.S_IFMT
+  }
   /** Bounded bytes from a regular, unlinked-to-other-paths file, never a symlink. */
   readRegular(name: string, maxBytes: number): Buffer {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
@@ -281,7 +290,12 @@ export class AnchoredDirectory {
     }
   }
   /** Capture one private owner file through this directory descriptor. */
-  readPrivateRegular(name: string, maxBytes: number, uid = process.getuid!()) {
+  readPrivateRegular(
+    name: string,
+    maxBytes: number,
+    uid = process.getuid!(),
+    privateRequired = true,
+  ) {
     const fd = check(
       sys().openat(
         this.fd,
@@ -300,7 +314,9 @@ export class AnchoredDirectory {
         !stat.isFile() ||
         stat.uid !== uid ||
         stat.nlink !== 1 ||
-        (stat.mode & 0o777) !== 0o600 ||
+        (privateRequired
+          ? (stat.mode & 0o777) !== 0o600
+          : !!(stat.mode & 0o022)) ||
         stat.size > maxBytes
       )
         throw Error(
@@ -333,6 +349,7 @@ export class AnchoredDirectory {
     captured: ReturnType<AnchoredDirectory['readPrivateRegular']>,
     maxBytes: number,
     uid = process.getuid!(),
+    privateRequired = true,
   ) {
     const temp = cstr(`.gild-private-${randomBytes(12).toString('hex')}`)
     let made = false
@@ -358,7 +375,12 @@ export class AnchoredDirectory {
       } finally {
         closeSync(fd)
       }
-      const current = this.readPrivateRegular(name, maxBytes, uid)
+      const current = this.readPrivateRegular(
+        name,
+        maxBytes,
+        uid,
+        privateRequired,
+      )
       const same =
         [
           'dev',

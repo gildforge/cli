@@ -16,6 +16,15 @@ import { Command } from 'commander'
 import { z } from 'zod'
 import { nudgeSpec } from './spawn-nudge'
 import { manualProfileSkillSchema } from './skills/manual-profile'
+import {
+  defaultPackageRoot,
+  packageDirectory,
+  listPackages,
+  showPackage,
+  editPackage,
+  patchPackageMember,
+} from './agent-packages'
+import { editJsonDefinition } from './configured-editor'
 
 // Runtime settings only. Scoped tokens stay in the existing identity store.
 const nameSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$/)
@@ -237,8 +246,58 @@ export function profileCommands(agent: Command) {
         'owner-selected pinned skill/cache JSON (Codex native delivery)',
       )
       .option('--clear-skill', 'clear the local pinned skill selection')
+      .option('--legacy', 'operate on the former machine-local runtime profile')
+      .option(
+        '--member <key>',
+        'explicit authored member for package field shortcuts',
+      )
       .option('--file <json>', 'read a complete, credential-free profile JSON')
-      .action(async (name: string, opts) => {
+      .action(async (name: string, opts, command: Command) => {
+        if (verb === 'edit' && !opts.legacy) {
+          const directory = packageDirectory(
+            name,
+            command.optsWithGlobals().configDir ?? defaultPackageRoot(),
+          )
+          if (opts.member) {
+            await patchPackageMember(directory, opts.member, opts)
+            console.log('Updated package member ' + opts.member)
+          } else {
+            if (Object.keys(opts).length)
+              throw Error(
+                'Specify --member for package shortcuts, or --legacy for old machine profiles',
+              )
+            const result = await editPackage(directory)
+            console.log(
+              result.changed
+                ? 'Updated gild.json'
+                : result.cancelled
+                  ? 'Edit cancelled; gild.json unchanged'
+                  : 'No definition changes',
+            )
+          }
+          return
+        }
+        if (
+          verb === 'edit' &&
+          Object.keys(opts).every((key) => key === 'legacy')
+        ) {
+          await privateDirectory()
+          const result = await editJsonDefinition(profilePath(name), (text) => {
+            const value = parseProfile(JSON.parse(text))
+            if (value.name !== name)
+              throw Error('Cannot rename a profile through its draft')
+            return value
+          })
+          console.log(
+            result.changed
+              ? 'Updated legacy profile ' + name
+              : result.cancelled
+                ? 'Edit cancelled; profile unchanged'
+                : 'No profile changes',
+          )
+          return
+        }
+        delete opts.legacy
         profilePath(name)
         if (opts.file) {
           if (Object.keys(opts).some((key) => key !== 'file'))
@@ -316,9 +375,27 @@ export function profileCommands(agent: Command) {
     })
   agent
     .command('ls')
-    .description('list local runtime profiles')
-    .option('--json', 'print profiles as JSON')
-    .action(async (opts) => {
+    .description('list agents from immediate package manifests offline')
+    .option('--json', 'print packages as JSON')
+    .option('--legacy', 'list former machine-local runtime profiles')
+    .action(async (opts, command: Command) => {
+      if (!opts.legacy) {
+        const result = await listPackages(
+          command.optsWithGlobals().configDir ?? defaultPackageRoot(),
+        )
+        for (const warning of result.warnings) console.error(warning)
+        console.log(
+          opts.json
+            ? JSON.stringify(result.packages)
+            : result.packages
+                .map(
+                  (p) =>
+                    p.folder + '\t' + Object.keys(p.manifest.agents).join(','),
+                )
+                .join('\n'),
+        )
+        return
+      }
       await privateDirectory()
       const profiles: AgentProfile[] = []
       for (const entry of (await readdir(profilesDirectory())).sort()) {
@@ -340,4 +417,28 @@ export function profileCommands(agent: Command) {
           )
       }
     })
+  agent
+    .command('show <package> [member]')
+    .description('show a portable package or declared member offline')
+    .action(
+      async (
+        name: string,
+        member: string | undefined,
+        opts: unknown,
+        command: Command,
+      ) =>
+        console.log(
+          JSON.stringify(
+            await showPackage(
+              packageDirectory(
+                name,
+                command.optsWithGlobals().configDir ?? defaultPackageRoot(),
+              ),
+              member,
+            ),
+            null,
+            2,
+          ),
+        ),
+    )
 }

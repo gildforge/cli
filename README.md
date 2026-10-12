@@ -288,3 +288,38 @@ with private permissions. This feature does not provide protected custody,
 provider revocation, Gild identity or installation grants. Current acceptance
 uses fake values only; live credential import and model execution need separate
 authorization.
+
+## Portable agent packages (held candidate)
+
+A named folder such as `~/.config/gild/personal` contains a private Git package.
+`gild.json` defines multiple agent members, declared authored files and Git
+references; `gild.lock` records exact commits and content inventories. Requested
+permissions are descriptive data and grant no access or execution rights.
+
+```sh
+gild agent ls
+gild agent show personal ava
+gild agent edit personal
+gild agent edit personal --member ava --model gpt-6.1-sol
+gild package install /path/to/consumer
+gild package update /path/to/consumer
+```
+
+`agent ls` walks only immediate package folders and warns per malformed neighbor.
+Identity/credential, runner and VM directories are reserved and never packages.
+`agent edit` uses VISUAL, then EDITOR, as an executable with quoted arguments;
+it appends a private draft filename and does not run a shell expression or
+expand variables. Configure waiting behavior where needed, e.g. `code --wait`.
+Valid saves are schema-checked and version-guarded; cancel, invalid data and
+concurrent changes preserve the saved file. Member shortcuts require `--member`.
+Former machine profiles are available only through explicit `--legacy` selectors;
+no settings or credential migration is performed.
+
+Dependencies are installed in derived `agents/<alias>`, `skills/<alias>` and
+`assets/<alias>` directories. Ordinary install keeps existing pins; only update
+resolves mutable references such as latest again. Nested dependencies use the
+source package's committed lock. Declared plain files and license bytes are
+verified, generated paths are ignored by Git, and tracked/unowned/modified
+collisions are refused. Installation never commits or pushes fetched content.
+Existing Git handles repository authentication; no credential is stored in the
+manifest or lock. Live private-target access remains a separate acceptance step.

@@ -93,6 +93,7 @@ test('profile CRUD writes machine-local settings and keeps existing approved cre
         [
           'agent',
           'edit',
+          '--legacy',
           'test',
           '--model',
           'opus',
@@ -113,7 +114,7 @@ test('profile CRUD writes machine-local settings and keeps existing approved cre
       args: [],
     }
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(updated)
-    const listed = await run(h, ['agent', 'ls', '--json'], f.root)
+    const listed = await run(h, ['agent', 'ls', '--legacy', '--json'], f.root)
     expect(listed.code).toBe(0)
     expect(JSON.parse(listed.out)).toEqual([updated])
     expect((await run(h, ['agent', 'list'], f.root)).out).toContain(
@@ -124,14 +125,20 @@ test('profile CRUD writes machine-local settings and keeps existing approved cre
       out: '',
       err: '',
     })
-    expect((await run(h, ['agent', 'ls', '--json'], f.root)).out.trim()).toBe(
-      '[]',
-    )
+    expect(
+      (await run(h, ['agent', 'ls', '--legacy', '--json'], f.root)).out.trim(),
+    ).toBe('[]')
     expect(await readFile(join(f.root, 'agents/test.json'), 'utf8')).toBe(
       credential,
     )
     expect(
-      (await run(h, ['agent', 'edit', 'test', '--model', 'opus'], f.root)).code,
+      (
+        await run(
+          h,
+          ['agent', 'edit', '--legacy', 'test', '--model', 'opus'],
+          f.root,
+        )
+      ).code,
     ).toBe(1)
   } finally {
     await rm(h, { recursive: true, force: true })
@@ -161,15 +168,17 @@ test('profile files reject tokens and secret fields without writing or echoing c
       const rejected = await run(h, ['agent', 'add', 'ava', '--file', file])
       expect(rejected.code).toBe(1)
       expect(rejected.err).not.toContain(secret)
-      expect((await run(h, ['agent', 'ls', '--json'])).out.trim()).toBe('[]')
+      expect(
+        (await run(h, ['agent', 'ls', '--legacy', '--json'])).out.trim(),
+      ).toBe('[]')
     }
     await writeFile(file, JSON.stringify(valid))
     expect((await run(h, ['agent', 'add', 'ava', '--file', file])).code).toBe(0)
     const before = await readFile(join(h, '.gild/agents/ava.json'), 'utf8')
     await writeFile(file, JSON.stringify({ ...valid, token: secret }))
-    expect((await run(h, ['agent', 'edit', 'ava', '--file', file])).code).toBe(
-      1,
-    )
+    expect(
+      (await run(h, ['agent', 'edit', '--legacy', 'ava', '--file', file])).code,
+    ).toBe(1)
     expect(await readFile(join(h, '.gild/agents/ava.json'), 'utf8')).toBe(
       before,
     )
@@ -232,7 +241,7 @@ test('profile triggers: --on is repeatable, grammar-validated, --clear-on clears
     for (const bad of ['labeled', 'Issues.labeled', 'issues.', 'issues..x']) {
       const rejected = await run(
         h,
-        ['agent', 'edit', 'test', '--on', bad],
+        ['agent', 'edit', '--legacy', 'test', '--on', bad],
         f.root,
       )
       expect(rejected.code).toBe(1)
@@ -241,7 +250,7 @@ test('profile triggers: --on is repeatable, grammar-validated, --clear-on clears
     // A rejected edit must not have touched the stored triggers.
     expect(JSON.parse(await readFile(path, 'utf8')).on).toHaveLength(3)
     expect(
-      await run(h, ['agent', 'edit', 'test', '--clear-on'], f.root),
+      await run(h, ['agent', 'edit', '--legacy', 'test', '--clear-on'], f.root),
     ).toEqual({ code: 0, out: '', err: '' })
     expect(JSON.parse(await readFile(path, 'utf8')).on).toBeUndefined()
   } finally {
