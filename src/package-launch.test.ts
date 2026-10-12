@@ -501,3 +501,123 @@ if '--slow' in args:time.sleep(60)
     else console.log('Owned failing MAIN package fixture retained:', f.root)
   }
 }, 60000)
+
+test('MAIN loss during awaited identity denies package staging and actual worker launch', async () => {
+  const f = await fixture(),
+    sourceDirectory = join(f.root, 'src')
+  await mkdir(sourceDirectory)
+  const built = await Bun.build({
+    entrypoints: [resolve('scripts/fixtures/package-main.ts')],
+    target: 'bun',
+    outdir: sourceDirectory,
+    naming: 'main.mjs',
+  })
+  expect(built.success, JSON.stringify(built.logs)).toBe(true)
+  await writeFile(
+    join(sourceDirectory, 'gild.ts'),
+    "await import('./main.mjs')\n",
+  )
+  await symlink(resolve('node_modules'), join(f.root, 'node_modules'))
+  await writeFile(
+    join(f.work, 'defer-identity'),
+    'owned delay at identity seam',
+  )
+  await writeFile(
+    join(f.bin, 'codex'),
+    '#!/usr/bin/env python3\nimport pathlib\npathlib.Path("unexpected-worker-effect").write_text("started after MAIN died")\n',
+    { mode: 0o700 },
+  )
+  const env = {
+    HOME: f.root,
+    PATH: f.bin + ':' + process.env.PATH,
+    LANG: 'C',
+    TERM: 'xterm-256color',
+    TMPDIR: f.root,
+  }
+  const run = async (...args: string[]) => {
+    const child = Bun.spawn(
+      [process.execPath, 'run', join(sourceDirectory, 'gild.ts'), ...args],
+      { cwd: f.work, env, stdout: 'pipe', stderr: 'pipe' },
+    )
+    const [code, out, error] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    if (code) throw Error(error || out)
+    return JSON.parse(out)
+  }
+  const waitFile = async (name: string) => {
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      try {
+        return await readFile(join(f.work, name), 'utf8')
+      } catch {}
+      await Bun.sleep(25)
+    }
+    throw Error('Owned identity delay marker missing: ' + name)
+  }
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  let main: any,
+    childPid: number | undefined,
+    passed = false
+  try {
+    main = await run('main', 'start')
+    await run(
+      'task',
+      'submit',
+      '--as',
+      'fixture-approved',
+      '--config-dir',
+      f.config,
+      'package',
+      'demo',
+      'selected',
+    )
+    childPid = Number(await waitFile('identity-awaiting'))
+    expect(alive(childPid)).toBe(true)
+    process.kill(main.pid, 'SIGKILL')
+    main = undefined
+    // Wait for the actual parent channel EOF before releasing the delayed callback.
+    await Bun.sleep(150)
+    await writeFile(
+      join(f.work, 'identity-release'),
+      'release after actual MAIN exit',
+    )
+    const observedConnection = await waitFile('identity-returned')
+    const deadline = Date.now() + 8000
+    while (alive(childPid) && Date.now() < deadline) await Bun.sleep(30)
+    expect(alive(childPid)).toBe(false)
+    const names = await readdir(f.work)
+    console.log(
+      'MAIN pre-registration loss effects:',
+      JSON.stringify({
+        observedConnection,
+        childEffect: names.includes('unexpected-worker-effect'),
+        stagingRoot: names.includes('.agents'),
+        packageStage: names.some((p) => p.startsWith('.gild-package-run-')),
+      }),
+    )
+    expect(names).not.toContain('unexpected-worker-effect')
+    expect(names).not.toContain('.agents')
+    expect(names.some((p) => p.startsWith('.gild-package-run-'))).toBe(false)
+    expect(observedConnection).toBe('false')
+    passed = true
+  } finally {
+    if (main) await run('main', 'stop')
+    if (childPid && alive(childPid)) process.kill(childPid, 'SIGHUP')
+    if (passed) await rm(f.root, { recursive: true, force: true })
+    else
+      console.log(
+        'Owned failing pre-registration-loss fixture retained:',
+        f.root,
+      )
+  }
+}, 30000)

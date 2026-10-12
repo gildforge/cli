@@ -130,144 +130,6 @@ export function spawnCommands(
           throw Error(
             'Supervised spawn requires a local main IPC parent and --detach',
           )
-        const resolved =
-          agent === 'agent'
-            ? await resolveProfile(args.shift() ?? '', args)
-            : undefined
-        const profile = resolved?.profile
-        const packageSelection =
-          agent === 'package'
-            ? {
-                directory: packageDirectory(args.shift() ?? '', opts.configDir),
-                member: args.shift() ?? '',
-              }
-            : undefined
-        const selectedPackage =
-          agent === 'package'
-            ? await resolvePackageLaunch(
-                packageSelection!.directory,
-                packageSelection!.member,
-              )
-            : undefined
-        if (selectedPackage && (!opts.as || !resolveIdentity))
-          throw Error(
-            'Package launch needs --as with a separately approved Gild identity',
-          )
-        if (selectedPackage && opts.detach && !opts.supervised)
-          throw Error(
-            'Package byte delivery currently requires an attached session; no unskilled detached fallback',
-          )
-        if (profile && opts.as && opts.as !== profile.name)
-          throw Error(
-            'A profile uses its own approved agent label; --as must match the profile name',
-          )
-        if (profile && opts.name)
-          throw Error('Profile sessions are named after the agent; omit --name')
-        agent = selectedPackage?.agent.runtime ?? profile?.runtime ?? agent
-        args = resolved?.args ?? args
-        const cwd = profile?.directory ?? process.cwd()
-        const label = profile?.name ?? opts.as
-        if (profile?.skill && opts.detach)
-          throw Error(
-            'Pinned profile skills currently require attached PTY sessions',
-          )
-        const binary = realAgent(agent, cwd)
-        if (opts.detach && !supportsPty())
-          throw Error(
-            'Detached sessions need a PTY, unavailable on this platform',
-          )
-        // Detached, the guest pty is the terminal; attached, it needs a real one.
-        if (
-          opts.vm &&
-          !opts.detach &&
-          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
-        )
-          throw Error(
-            '--vm needs an interactive terminal (or --detach); it never falls back to running on the host',
-          )
-        // First --vm use: fetch the published guest image here, where the
-        // terminal shows its progress; the worker then finds it installed.
-        if (opts.vm) {
-          const { vmUnavailable } = await prepareVm(opts.configDir, {
-            want: true,
-            log: (line) => console.error(`gild: ${line}`),
-          })
-          if (vmUnavailable)
-            throw Error(
-              `--vm: ${vmUnavailable}. It never falls back to running on the host`,
-            )
-        }
-        const nativeOnly =
-          !opts.detach &&
-          (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
-        if (nativeOnly && profile?.skill)
-          throw Error(
-            'Pinned profile skills require an interactive PTY; no unskilled fallback is allowed',
-          )
-        const identity =
-          label && resolveIdentity && (!nativeOnly || !!selectedPackage)
-            ? await resolveIdentity(label, cwd, !!profile)
-            : undefined
-        if (selectedPackage && !identity)
-          throw Error('Package launch identity was not approved')
-        if (nativeOnly) {
-          const material = selectedPackage
-            ? preparePackageLaunch(selectedPackage, cwd, args)
-            : undefined
-          try {
-            process.exitCode = await runNative(
-              binary,
-              material?.args ?? args,
-              cwd,
-              agentEnvironment(binary, profile?.env),
-            )
-          } finally {
-            material?.close()
-          }
-          return
-        }
-        const report = identity?.report
-        const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
-        const rules = nudges.map(parseNudge)
-        // ci and mention rules read the profile's events subscription.
-        if (rules.some((r) => r.kind === 'ci') && !(profile && identity))
-          throw Error(
-            'ci nudges need an agent profile with an approved identity (gild spawn agent <name>)',
-          )
-        if (
-          rules.some((r) => r.kind === 'mention-unanswered') &&
-          !(profile?.channels?.length && identity)
-        )
-          throw Error(
-            'mention-unanswered nudges need an agent profile with --channel and an approved identity',
-          )
-        const bridge =
-          profile?.channels?.length || rules.some((r) => r.kind === 'ci')
-            ? identity?.bridge
-            : undefined
-        const id =
-          profile?.name ??
-          opts.name ??
-          `agent-${randomBytes(3).toString('hex')}`
-        socketPath(id)
-        const ptyModule = import.meta.url.includes('$bunfs')
-          ? join(
-              dirname(process.execPath),
-              '..',
-              'vendor',
-              'node-pty',
-              'lib',
-              'index.js',
-            )
-          : new URL('../node_modules/node-pty/lib/index.js', import.meta.url)
-              .pathname
-        const skill = profile?.skill
-          ? await prepareManualProfileSkill(
-              profile.skill,
-              adapterFor(agent, args)?.name ?? agent,
-              cwd,
-            )
-          : undefined
         // MAIN's supervised task process owns delivery, never the submitting CLI.
         // Keep native PTY work in Node; Bun holds the descriptor-bound lease until
         // that worker exits (including VM final sync), then reports its own result.
@@ -277,142 +139,299 @@ export function spawnCommands(
           supervisorStopping = true
           supervisedWorker?.kill('SIGHUP')
         }
+        const supervisorStopped = () =>
+          opts.supervised && (supervisorStopping || !process.connected)
         const supervisionSignals = ['disconnect', 'SIGTERM', 'SIGHUP'] as const
         if (opts.supervised)
           for (const signal of supervisionSignals)
             process.on(signal, supervisorStop)
-        let packageMaterial: ReturnType<typeof preparePackageLaunch> | undefined
         try {
-          if (supervisorStopping)
-            throw Error('Task supervisor stopped before package delivery')
-          packageMaterial = selectedPackage
-            ? preparePackageLaunch(selectedPackage, cwd, args)
-            : undefined
-          args = packageMaterial?.args ?? args
-          const bunWorker = opts.vm
-          const companion = bunWorker ? undefined : await workerFile()
-          if (supervisorStopping)
-            throw Error('Task supervisor stopped before worker launch')
-          const worker = spawn(
-            bunWorker ? process.execPath : 'node',
-            [
-              ...(bunWorker
-                ? import.meta.url.includes('$bunfs')
-                  ? ['__vm-worker']
-                  : [
-                      'run',
-                      new URL('./gild.ts', import.meta.url).pathname,
-                      '__vm-worker',
-                    ]
-                : [companion!]),
-              JSON.stringify({
-                agent,
-                pinnedSkill: !!skill || !!selectedPackage,
-                supervised: !!opts.supervised,
-                args,
-                id,
-                idleMs: opts.idleMs,
-                ptyModule,
-                vm: opts.vm ? { configDir: opts.configDir } : undefined,
-                // Inside the guest the hook is the guest agent, which relays over vsock.
-                hookCommand: opts.vm
-                  ? ['/usr/local/bin/gild-guest-agent']
-                  : import.meta.url.includes('$bunfs')
-                    ? [process.execPath]
-                    : [
-                        process.execPath,
-                        'run',
-                        new URL('./gild.ts', import.meta.url).pathname,
-                      ],
-                reporting: !!report,
-                bridging: !!bridge,
-                identity: identity?.agent,
-                printId: opts.printId,
-                profile: profile
-                  ? {
-                      name: profile.name,
-                      channels: profile.channels,
-                      on: profile.on,
-                    }
-                  : undefined,
-                envAllowlist: profile?.env,
-                nudges,
-                detach: opts.detach
-                  ? { cols: opts.cols, rows: opts.rows }
-                  : undefined,
-              }),
-            ],
-            opts.detach
-              ? detachedSpawn(cwd)
-              : {
-                  cwd,
-                  stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-                },
+          const resolved =
+            agent === 'agent'
+              ? await resolveProfile(args.shift() ?? '', args)
+              : undefined
+          const profile = resolved?.profile
+          const packageSelection =
+            agent === 'package'
+              ? {
+                  directory: packageDirectory(
+                    args.shift() ?? '',
+                    opts.configDir,
+                  ),
+                  member: args.shift() ?? '',
+                }
+              : undefined
+          const selectedPackage =
+            agent === 'package'
+              ? await resolvePackageLaunch(
+                  packageSelection!.directory,
+                  packageSelection!.member,
+                )
+              : undefined
+          if (selectedPackage && (!opts.as || !resolveIdentity))
+            throw Error(
+              'Package launch needs --as with a separately approved Gild identity',
+            )
+          if (selectedPackage && opts.detach && !opts.supervised)
+            throw Error(
+              'Package byte delivery currently requires an attached session; no unskilled detached fallback',
+            )
+          if (profile && opts.as && opts.as !== profile.name)
+            throw Error(
+              'A profile uses its own approved agent label; --as must match the profile name',
+            )
+          if (profile && opts.name)
+            throw Error(
+              'Profile sessions are named after the agent; omit --name',
+            )
+          agent = selectedPackage?.agent.runtime ?? profile?.runtime ?? agent
+          args = resolved?.args ?? args
+          const cwd = profile?.directory ?? process.cwd()
+          const label = profile?.name ?? opts.as
+          if (profile?.skill && opts.detach)
+            throw Error(
+              'Pinned profile skills currently require attached PTY sessions',
+            )
+          const binary = realAgent(agent, cwd)
+          if (opts.detach && !supportsPty())
+            throw Error(
+              'Detached sessions need a PTY, unavailable on this platform',
+            )
+          // Detached, the guest pty is the terminal; attached, it needs a real one.
+          if (
+            opts.vm &&
+            !opts.detach &&
+            (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
           )
-          supervisedWorker = worker
-          if (report)
-            worker.once('spawn', () => worker.send({ type: 'report', report }))
-          if (bridge)
-            worker.once('spawn', () => worker.send({ type: 'bridge', bridge }))
-          if (opts.supervised) {
-            worker.on('message', (message) => {
-              if (process.connected) process.send?.(message)
+            throw Error(
+              '--vm needs an interactive terminal (or --detach); it never falls back to running on the host',
+            )
+          // First --vm use: fetch the published guest image here, where the
+          // terminal shows its progress; the worker then finds it installed.
+          if (opts.vm) {
+            const { vmUnavailable } = await prepareVm(opts.configDir, {
+              want: true,
+              log: (line) => console.error(`gild: ${line}`),
             })
-            process.exitCode = await new Promise<number>((resolve, reject) => {
-              worker.once('error', reject)
-              worker.once('exit', (code) => resolve(code ?? 1))
-            })
+            if (vmUnavailable)
+              throw Error(
+                `--vm: ${vmUnavailable}. It never falls back to running on the host`,
+              )
+          }
+          const nativeOnly =
+            !opts.detach &&
+            (!process.stdin.isTTY || !process.stdout.isTTY || !supportsPty())
+          if (nativeOnly && profile?.skill)
+            throw Error(
+              'Pinned profile skills require an interactive PTY; no unskilled fallback is allowed',
+            )
+          const identity =
+            label && resolveIdentity && (!nativeOnly || !!selectedPackage)
+              ? await resolveIdentity(label, cwd, !!profile)
+              : undefined
+          if (selectedPackage && !identity)
+            throw Error('Package launch identity was not approved')
+          if (nativeOnly) {
+            const material = selectedPackage
+              ? preparePackageLaunch(selectedPackage, cwd, args)
+              : undefined
+            try {
+              process.exitCode = await runNative(
+                binary,
+                material?.args ?? args,
+                cwd,
+                agentEnvironment(binary, profile?.env),
+              )
+            } finally {
+              material?.close()
+            }
             return
           }
-          if (opts.detach) return console.log(await detachedReady(worker))
-          const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
-          const interrupted = () => {}
-          process.on('SIGINT', interrupted)
-          const disconnected = () => worker.kill('SIGHUP')
-          process.on('disconnect', disconnected)
-          const handlers = signals.map((signal) => () => worker.kill(signal))
-          signals.forEach((signal, index) =>
-            process.on(signal, handlers[index]),
+          const report = identity?.report
+          const nudges = [...(profile?.nudges ?? []), ...(opts.nudge ?? [])]
+          const rules = nudges.map(parseNudge)
+          // ci and mention rules read the profile's events subscription.
+          if (rules.some((r) => r.kind === 'ci') && !(profile && identity))
+            throw Error(
+              'ci nudges need an agent profile with an approved identity (gild spawn agent <name>)',
+            )
+          if (
+            rules.some((r) => r.kind === 'mention-unanswered') &&
+            !(profile?.channels?.length && identity)
           )
-          try {
-            process.exitCode = await new Promise<number>((resolve, reject) => {
-              worker.once('error', reject)
-              worker.once('exit', (code, signal) =>
-                resolve(
-                  code ??
-                    (signal === 'SIGINT'
-                      ? 130
-                      : signal === 'SIGHUP'
-                        ? 129
-                        : 143),
-                ),
+            throw Error(
+              'mention-unanswered nudges need an agent profile with --channel and an approved identity',
+            )
+          const bridge =
+            profile?.channels?.length || rules.some((r) => r.kind === 'ci')
+              ? identity?.bridge
+              : undefined
+          const id =
+            profile?.name ??
+            opts.name ??
+            `agent-${randomBytes(3).toString('hex')}`
+          socketPath(id)
+          const ptyModule = import.meta.url.includes('$bunfs')
+            ? join(
+                dirname(process.execPath),
+                '..',
+                'vendor',
+                'node-pty',
+                'lib',
+                'index.js',
               )
-            })
-          } catch (error) {
-            if (opts.vm || profile?.skill || selectedPackage) throw error
-            debugFallback(error)
-            process.exitCode = await runNative(
-              realAgent(agent, cwd),
-              args,
-              cwd,
-              agentEnvironment(realAgent(agent, cwd), profile?.env),
+            : new URL('../node_modules/node-pty/lib/index.js', import.meta.url)
+                .pathname
+          const skill = profile?.skill
+            ? await prepareManualProfileSkill(
+                profile.skill,
+                adapterFor(agent, args)?.name ?? agent,
+                cwd,
+              )
+            : undefined
+          let packageMaterial:
+            ReturnType<typeof preparePackageLaunch> | undefined
+          try {
+            if (supervisorStopped())
+              throw Error('Task supervisor stopped before package delivery')
+            packageMaterial = selectedPackage
+              ? preparePackageLaunch(selectedPackage, cwd, args)
+              : undefined
+            args = packageMaterial?.args ?? args
+            const bunWorker = opts.vm
+            const companion = bunWorker ? undefined : await workerFile()
+            if (supervisorStopped())
+              throw Error('Task supervisor stopped before worker launch')
+            const worker = spawn(
+              bunWorker ? process.execPath : 'node',
+              [
+                ...(bunWorker
+                  ? import.meta.url.includes('$bunfs')
+                    ? ['__vm-worker']
+                    : [
+                        'run',
+                        new URL('./gild.ts', import.meta.url).pathname,
+                        '__vm-worker',
+                      ]
+                  : [companion!]),
+                JSON.stringify({
+                  agent,
+                  pinnedSkill: !!skill || !!selectedPackage,
+                  supervised: !!opts.supervised,
+                  args,
+                  id,
+                  idleMs: opts.idleMs,
+                  ptyModule,
+                  vm: opts.vm ? { configDir: opts.configDir } : undefined,
+                  // Inside the guest the hook is the guest agent, which relays over vsock.
+                  hookCommand: opts.vm
+                    ? ['/usr/local/bin/gild-guest-agent']
+                    : import.meta.url.includes('$bunfs')
+                      ? [process.execPath]
+                      : [
+                          process.execPath,
+                          'run',
+                          new URL('./gild.ts', import.meta.url).pathname,
+                        ],
+                  reporting: !!report,
+                  bridging: !!bridge,
+                  identity: identity?.agent,
+                  printId: opts.printId,
+                  profile: profile
+                    ? {
+                        name: profile.name,
+                        channels: profile.channels,
+                        on: profile.on,
+                      }
+                    : undefined,
+                  envAllowlist: profile?.env,
+                  nudges,
+                  detach: opts.detach
+                    ? { cols: opts.cols, rows: opts.rows }
+                    : undefined,
+                }),
+              ],
+              opts.detach
+                ? detachedSpawn(cwd)
+                : {
+                    cwd,
+                    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+                  },
             )
-          } finally {
-            process.off('SIGINT', interrupted)
-            process.off('disconnect', disconnected)
+            supervisedWorker = worker
+            if (report)
+              worker.once('spawn', () =>
+                worker.send({ type: 'report', report }),
+              )
+            if (bridge)
+              worker.once('spawn', () =>
+                worker.send({ type: 'bridge', bridge }),
+              )
+            if (opts.supervised) {
+              worker.on('message', (message) => {
+                if (process.connected) process.send?.(message)
+              })
+              process.exitCode = await new Promise<number>(
+                (resolve, reject) => {
+                  worker.once('error', reject)
+                  worker.once('exit', (code) => resolve(code ?? 1))
+                },
+              )
+              return
+            }
+            if (opts.detach) return console.log(await detachedReady(worker))
+            const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGHUP', 'SIGWINCH']
+            const interrupted = () => {}
+            process.on('SIGINT', interrupted)
+            const disconnected = () => worker.kill('SIGHUP')
+            process.on('disconnect', disconnected)
+            const handlers = signals.map((signal) => () => worker.kill(signal))
             signals.forEach((signal, index) =>
-              process.off(signal, handlers[index]),
+              process.on(signal, handlers[index]),
             )
+            try {
+              process.exitCode = await new Promise<number>(
+                (resolve, reject) => {
+                  worker.once('error', reject)
+                  worker.once('exit', (code, signal) =>
+                    resolve(
+                      code ??
+                        (signal === 'SIGINT'
+                          ? 130
+                          : signal === 'SIGHUP'
+                            ? 129
+                            : 143),
+                    ),
+                  )
+                },
+              )
+            } catch (error) {
+              if (opts.vm || profile?.skill || selectedPackage) throw error
+              debugFallback(error)
+              process.exitCode = await runNative(
+                realAgent(agent, cwd),
+                args,
+                cwd,
+                agentEnvironment(realAgent(agent, cwd), profile?.env),
+              )
+            } finally {
+              process.off('SIGINT', interrupted)
+              process.off('disconnect', disconnected)
+              signals.forEach((signal, index) =>
+                process.off(signal, handlers[index]),
+              )
+            }
+          } finally {
+            try {
+              packageMaterial?.close()
+            } finally {
+              skill?.close()
+            }
           }
         } finally {
-          try {
-            packageMaterial?.close()
-          } finally {
-            if (opts.supervised)
-              for (const signal of supervisionSignals)
-                process.off(signal, supervisorStop)
-            skill?.close()
-          }
+          if (opts.supervised)
+            for (const signal of supervisionSignals)
+              process.off(signal, supervisorStop)
         }
       },
     )
