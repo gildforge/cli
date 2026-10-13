@@ -243,6 +243,11 @@ authCmd
           },
         ])
 
+    if (!answers.confirm) {
+      console.log('Identity creation cancelled.')
+      return
+    }
+
     const { publicKey, privateKey } = generateKeyPairSync('ed25519')
     const identity: Identity = {
       schema: 1,
