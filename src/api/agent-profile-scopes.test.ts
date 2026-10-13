@@ -36,16 +36,26 @@ test('generated feature scope check refuses implicit legacy and anonymous author
     hasAgentProfileScope(principal(['agent:profile']), 'agent:execute'),
   ).toBe(false)
 })
-test('minimal feature artifact preserves existing grant and legacy scope semantics', () => {
-  expect(grantScopes([])).toEqual(['repo:read'])
-  expect(grantScopes(['review'])).toEqual(['repo:read', 'pulls:write'])
+test('feature scopes stay separate from canonical approved-agent grants and legacy scope semantics', () => {
+  expect(grantScopes([])).toEqual(['repo:read', 'channel:write'])
+  expect(grantScopes(['review'])).toEqual([
+    'repo:read',
+    'channel:write',
+    'pulls:write',
+  ])
   expect(grantScopes(['pr'])).toEqual([
     'repo:read',
+    'channel:write',
     'repo:write',
     'issues:write',
     'pulls:write',
   ])
   expect(hasScope(principal(null), 'repo:read')).toBe(true)
+  for (const grants of [[], ['review'], ['pr']])
+    for (const scope of AGENT_PROFILE_SCOPES)
+      expect(hasAgentProfileScope(principal(grantScopes(grants)), scope)).toBe(
+        false,
+      )
   expect(SCOPES).not.toContain('agent:profile')
   expect(SCOPES).not.toContain('agent:request')
   expect(SCOPES).not.toContain('agent:execute')

@@ -17,6 +17,20 @@ export const sessionState = z.object({
   tool: z.string().regex(/^[a-zA-Z0-9_.:/-]{1,160}$/).optional(),
   last_activity: z.iso.datetime(),
 }).strict()
+/** Worker-observed telemetry only; never execution authority or network identity. */
+const observationText = z.string().trim().min(1).max(80)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9 ._()+-]*$/)
+  .refine(v => !/\b(?:\d{1,3}\.){3}\d{1,3}\b|(?:gf|gr|gc|gro|ghp|gho|ghu|ghs|ghr)_|github_pat_|Bearer|token|password|secret/i.test(v)
+    && !/[A-Za-z0-9_-]{24,}/.test(v), 'Use a display label or observed OS version, never an address, path or credential')
+const runtimeBase = {
+  worker: z.object({id: z.string().uuid(), name: observationText}).strict(),
+  host: z.object({os: z.enum(['linux', 'macos', 'windows', 'freebsd']), version: observationText.optional()}).strict(),
+  observed_at: z.iso.datetime(),
+}
+export const sessionRuntime = z.discriminatedUnion('mode', [
+  z.object({...runtimeBase, mode: z.literal('HOST')}).strict(),
+  z.object({...runtimeBase, mode: z.literal('VM'), guest: z.object({os: observationText, version: observationText}).strict().nullable()}).strict(),
+])
 export const sessionInput = z
   .object({
     id: z.string().uuid().optional(),
@@ -24,6 +38,7 @@ export const sessionInput = z
     started_at: z.iso.datetime(),
     ended_at: z.iso.datetime().nullable().default(null),
     state: sessionState.optional(),
+    runtime: sessionRuntime.optional(),
     model: z.string().min(1).max(120),
     tokens_in: z.number().int().nonnegative().default(0),
     tokens_out: z.number().int().nonnegative().default(0),
@@ -67,5 +82,9 @@ export const receiptPayload = sessionInput.safeExtend({
 export const receiptSchema = receiptPayload.safeExtend({
   reported_by: z.literal('agent').default('agent'),
 })
+/** Safe current-session projection for the existing repository roster. */
+export const sessionObservation = z.object({id:receiptSchema.shape.id, started_at:receiptSchema.shape.started_at, ended_at:receiptSchema.shape.ended_at, updated_at:receiptSchema.shape.updated_at, version:receiptSchema.shape.version, closed:receiptSchema.shape.closed, runtime:receiptSchema.shape.runtime}).strict()
+export type SessionObservation = z.output<typeof sessionObservation>
+export type SessionRuntime = z.output<typeof sessionRuntime>
 export type SessionInput = z.output<typeof sessionInput>
 export type Receipt = z.output<typeof receiptSchema>

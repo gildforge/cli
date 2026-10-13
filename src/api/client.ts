@@ -18,21 +18,14 @@ export class ApiRequestError extends Error {
   }
 }
 export class GildClient {
-  readonly baseURL: string
-  readonly token: string
-  readonly fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   constructor(
-    baseURL: string,
-    token: string,
-    fetcher: (
+    readonly baseURL: string,
+    readonly token: string,
+    readonly fetcher: (
       input: RequestInfo | URL,
       init?: RequestInit,
     ) => Promise<Response> = fetch,
-  ) {
-    this.baseURL = baseURL
-    this.token = token
-    this.fetcher = fetcher
-  }
+  ) {}
   async request<I extends Operation>(
     operation: I,
     params: Record<string, string | number> = {},
@@ -77,7 +70,10 @@ export class GildClient {
         data.message ?? `HTTP ${res.status}`,
         Array.isArray(data.errors)
           ? data.errors.flatMap((error: unknown) =>
-            error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? [error.code] : [])
+              error !== null && typeof error === 'object' &&
+              'code' in error && typeof error.code === 'string'
+                ? [error.code] : [],
+            )
           : [],
       )
     return route.output.parse(data) as Output<I>
