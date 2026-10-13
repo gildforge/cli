@@ -398,67 +398,23 @@ test('raw streams channel frames in order, resumes from --since, never exits on 
   }
 }, 30000)
 
-test('history, participants and raw read a public channel with no identity; send still needs one', async () => {
+test('chat needs an identity: a channel is for contributors only, so no command reads it anonymously', async () => {
   const s = await setup(undefined, true)
   try {
     await unlink(`${s.root}/identity.json`)
-    s.post('sami', 'public hello')
-    const history = await cli(s.root, [
-      'chat',
-      'history',
-      'owner/demo',
-      '--server',
-      s.origin,
-    ])
-    expect(history).toMatchObject({
-      code: 0,
-      out: '1  2026-10-09T10:00:00.000Z  sami  public hello\n',
-    })
-    const participants = await cli(s.root, [
-      'chat',
-      'participants',
-      'owner/demo',
-      '--server',
-      s.origin,
-    ])
-    expect(participants.code).toBe(0)
-    expect(participants.out).toContain('@sami\thuman\tonline')
-    const raw = startCLI(s.root, [
-      'chat',
-      'raw',
-      'owner/demo',
-      '--server',
-      s.origin,
-    ])
-    const ready = (await lines(raw, 1))[0]
-    expect(ready.messages.map((m: Message) => m.body)).toEqual(['public hello'])
-    raw.kill('SIGINT')
-    await raw.exited
-    // No header at all, not "Bearer " with an empty token.
-    expect(s.seen.length).toBeGreaterThanOrEqual(3)
-    expect(s.seen.every((r) => r.auth === null)).toBe(true)
-    const send = await cli(s.root, [
-      'chat',
-      'send',
-      'owner/demo',
-      'hi',
-      '--server',
-      s.origin,
-    ])
-    expect(send.code).toBe(1)
-    expect(send.err).toContain('gild auth init')
-    expect(s.log).toHaveLength(1)
-    // A private channel refuses the anonymous reader and names the fix.
-    const priv = await cli(s.root, [
-      'chat',
-      'history',
-      'owner/secret',
-      '--server',
-      s.origin,
-    ])
-    expect(priv.code).toBe(1)
-    expect(priv.err).toContain('Bad credentials')
-    expect(priv.err).toContain('gild auth init')
+    s.post('sami', 'contributors only')
+    for (const args of [['history'], ['participants'], ['send', 'hi']]) {
+      const [command, ...rest] = args
+      const run = await cli(s.root, ['chat', command, 'owner/demo', ...rest, '--server', s.origin])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain('gild auth init')
+      expect(run.out).not.toContain('contributors only')
+    }
+    const raw = await cli(s.root, ['chat', 'raw', 'owner/demo', '--server', s.origin])
+    expect(raw.code).toBe(1)
+    expect(raw.err).toContain('gild auth init')
+    // Refused before any request: nothing reached the forge.
+    expect(s.seen).toHaveLength(0)
   } finally {
     await s.close()
   }

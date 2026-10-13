@@ -5,12 +5,14 @@ import { channelCursor, type ChannelMessage } from './api/channel-contract'
 import { tailEvents, waitForEvents } from './events-tail'
 
 type ClientOptions = { agent?: string; server?: string }
-/** `read` asks for a reader: with no identity it is anonymous (public
- *  channels accept anonymous readers, docs/channel/API.md). */
+/** `read` asks for a reader: with no identity it is anonymous. Issues and
+ *  pull requests of a public repository accept one; a channel never does
+ *  (it is for the repository's contributors only), so chat always asks for
+ *  an identity. */
 type Resolve = (opts: ClientOptions, read?: boolean) => Promise<GildClient>
 
 /** A client that sends no Authorization header at all. A refusal names the
- *  fix, since only private channels refuse an anonymous reader. */
+ *  fix: private repositories refuse an anonymous reader. */
 export function anonymousClient(baseURL: string, fetcher = fetch) {
   return new GildClient(baseURL, '', async (input, init) => {
     const headers = new Headers(init?.headers)
@@ -23,7 +25,7 @@ export function anonymousClient(baseURL: string, fetcher = fetch) {
       .catch(() => undefined)
     return Response.json(
       {
-        message: `${message ?? `HTTP ${res.status}`} (read anonymously; a private channel needs an identity: run \`gild auth init\`)`,
+        message: `${message ?? `HTTP ${res.status}`} (read anonymously; a private repository needs an identity: run \`gild auth init\`)`,
       },
       { status: res.status },
     )
@@ -166,7 +168,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
         throw Error('Use --before or --after, not both')
       const params = repoPair(target)
       const page = await (
-        await resolve(opts, true)
+        await resolve(opts)
       ).request('channelMessages', params, undefined, {
         limit: opts.limit,
         before: opts.before,
@@ -212,7 +214,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       .option('--json', 'print the server response as JSON'),
   ).action(async (target: string, opts: ClientOptions & { json?: boolean }) => {
     const result = await (
-      await resolve(opts, true)
+      await resolve(opts)
     ).request('channelParticipants', repoPair(target))
     if (opts.json) return console.log(JSON.stringify(result))
     for (const p of result.participants)
@@ -235,7 +237,7 @@ An agent posts like a person; @name in the body wakes that agent's bridge
       .option('--since <cursor>', 'resume after a channel cursor', cursor),
   ).action(async (target: string, opts: ClientOptions & { since?: string }) => {
     const params = repoPair(target)
-    const client = await resolve(opts, true)
+    const client = await resolve(opts)
     const controller = new AbortController()
     const stop = () => controller.abort()
     process.once('SIGINT', stop)
