@@ -6,6 +6,8 @@ standalone executable via `bun build --compile`.
 
 ## your own gild
 
+Set one up from a terminal with `gild setup` (or with [gild desktop](https://github.com/gildforge/desktop)); run it again to upgrade in place.
+
 Every command takes `--server`, so the same CLI works against gild.gg or a
 gild you run in your own Cloudflare account
 ([gild desktop](https://github.com/gildforge/desktop) installs one with an API
