@@ -11,6 +11,12 @@ import { anonymousClient, chatCommands, repoPair } from './chat'
 import { issueCommands } from './issue'
 import { prCommands } from './pr'
 import { gildInvocation } from './gild-invocation'
+import {
+  MULTIPASS_VM,
+  claudeTokenPath,
+  multipassMissing,
+  usesMultipass,
+} from './isolation/multipass'
 import { shellQuote } from './spawn-adapters/types'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
@@ -1056,21 +1062,17 @@ agentCmd
   .option('--note <text>', 'what the new agent is for, in a sentence')
   .option('--dir <path>', 'where to clone the repo for it (default: ./<label>)')
   .option('--no-start', 'only create the agent: no clone, nothing started')
+  .option(
+    '--vm',
+    'run it in the gild VM (Multipass on macOS and Windows, Firecracker on Linux)',
+  )
   .option('--server <url>', 'forge base URL (defaults to the joined server)')
   .action(async (target: string, label: string, run: string[], opts) => {
     childLabel(label)
     // Nobody answers a background agent's permission prompts: Claude Code
-    // starts allowed to edit files and run git and gild. Pass your own
+    // starts in auto mode (it approves routine steps, stops risky ones). Pass your own
     // command after -- to choose differently: … --agent c -- codex
-    if (!run.length)
-      run = [
-        'claude',
-        '--permission-mode',
-        'acceptEdits',
-        '--allowedTools',
-        'Bash(git:*)',
-        'Bash(gild:*)',
-      ]
+    if (!run.length) run = ['claude', '--permission-mode', 'auto']
     const params = repoPair(target)
     if (await loadAgent(label))
       throw Error(`An agent named ${label} already exists on this machine`)
@@ -1140,6 +1142,7 @@ agentCmd
         ...gild.slice(1),
         'spawn',
         '--detach',
+        ...(opts.vm ? ['--vm'] : []),
         '--as',
         label,
         '--channel',
@@ -1204,6 +1207,83 @@ for (const action of ['suspend', 'resume'] as const)
         )
       },
     )
+
+// ---------- vm: agents in a VM (Multipass on macOS and Windows) ----------
+
+const vmCmd = program
+  .command('vm')
+  .description(
+    'agents in a VM: Multipass on macOS and Windows, Firecracker on Linux',
+  )
+
+vmCmd
+  .command('login <runtime>')
+  .description('sign a coding agent in for VMs, once (claude)')
+  .action(async (runtime: string) => {
+    if (runtime !== 'claude')
+      throw Error(
+        'gild vm login knows claude for now; other agents read their own environment',
+      )
+    console.log(
+      [
+        'Agents in a VM sign in to Claude Code with a long-lived token of their own.',
+        'Next, Claude Code opens your browser to make one (`claude setup-token`).',
+        `Paste the token it prints here. gild keeps it in ${claudeTokenPath(configDir())} (only you can read it)`,
+        'and copies it into the gild VM when an agent starts there. It never goes to gild.gg or your Cloudflare.',
+      ].join('\n'),
+    )
+    const { go } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'go',
+        default: true,
+        message: 'Make the token now?',
+      },
+    ])
+    if (!go) return
+    const made = spawnSync('claude', ['setup-token'], { stdio: 'inherit' })
+    if (made.status !== 0) throw Error('claude setup-token did not finish')
+    const { token } = await inquirer.prompt([
+      {
+        type: 'password',
+        name: 'token',
+        mask: '*',
+        message: 'Paste the token',
+      },
+    ])
+    if (!String(token).trim()) throw Error('No token pasted; nothing saved')
+    await mkdir(join(configDir(), 'vm'), { recursive: true, mode: 0o700 })
+    await writeFile(claudeTokenPath(configDir()), String(token).trim() + '\n', {
+      mode: 0o600,
+    })
+    console.log(
+      chalk.green('Saved.') +
+        ' Agents started with gild spawn --vm (or gild agent launch --vm) sign in with it.',
+    )
+  })
+
+vmCmd
+  .command('status')
+  .description('the gild VM: whether it exists and is running')
+  .action(async () => {
+    if (!usesMultipass()) {
+      console.log('On Linux, gild spawn --vm uses Firecracker; see docs/VM.md')
+      return
+    }
+    const missing = multipassMissing()
+    if (missing) return console.log(missing)
+    const r = spawnSync(
+      'multipass',
+      ['info', MULTIPASS_VM, '--format', 'json'],
+      { encoding: 'utf8' },
+    )
+    if (r.status !== 0)
+      return console.log('No gild VM yet. The first gild spawn --vm makes it.')
+    const info = JSON.parse(r.stdout).info?.[MULTIPASS_VM]
+    console.log(
+      `gild VM: ${info?.state}${info?.ipv4?.length ? ` (${info.ipv4[0]})` : ''}, Ubuntu ${info?.release ?? ''}`.trim(),
+    )
+  })
 
 program
   .command('events [id]')

@@ -23,6 +23,7 @@ import { InjectionQueue } from './spawn-queue'
 import { startWatchdog } from './spawn-nudge-worker'
 import type { NudgeEvent } from './spawn-nudge'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
+import { startMultipassChild, usesMultipass } from './isolation/multipass'
 import {
   describeSync,
   type SyncResult,
@@ -357,7 +358,8 @@ async function main() {
     return fallback('PTY unavailable')
   let pty: typeof import('node-pty') | undefined
   try {
-    if (!options.vm) {
+    // Multipass sessions drive `multipass exec` on a host pty.
+    if (!options.vm || usesMultipass()) {
       const nodePty = options.ptyModule
       if (!nodePty)
         throw new Error(
@@ -593,26 +595,42 @@ async function main() {
       })
       host.openLog(join(directory, options.id))
     }
-    child = options.vm
-      ? await startVmChild({
-          configDir: options.vm.configDir,
-          sessionId: options.id,
-          cwd: process.cwd(),
-          binary,
-          args: prepared?.args ?? options.args,
-          env: guestEnvironment(env, baseEnv, options.envAllowlist),
-          cols: options.detach?.cols ?? (process.stdout.columns || 80),
-          rows: options.detach?.rows ?? (process.stdout.rows || 24),
-          log: (line) => console.error(`gild: ${line}`),
-        })
-      : pty!.spawn(binary, prepared?.args ?? options.args, {
-          name: 'xterm-256color',
-          cols: options.detach?.cols ?? process.stdout.columns,
-          rows: options.detach?.rows ?? process.stdout.rows,
-          cwd: process.cwd(),
-          env,
-          encoding: null,
-        })
+    child =
+      options.vm && usesMultipass()
+        ? await startMultipassChild({
+            pty: pty!,
+            configDir: options.vm.configDir,
+            sessionId: options.id,
+            cwd: process.cwd(),
+            binary,
+            // The user's own arguments: adapter hook files live on the host.
+            args: options.args,
+            env: guestEnvironment(env, baseEnv, options.envAllowlist),
+            agent: options.profile?.name ?? options.identity?.split('/')[1],
+            cols: options.detach?.cols ?? (process.stdout.columns || 80),
+            rows: options.detach?.rows ?? (process.stdout.rows || 24),
+            log: (line) => console.error(`gild: ${line}`),
+          })
+        : options.vm
+          ? await startVmChild({
+              configDir: options.vm.configDir,
+              sessionId: options.id,
+              cwd: process.cwd(),
+              binary,
+              args: prepared?.args ?? options.args,
+              env: guestEnvironment(env, baseEnv, options.envAllowlist),
+              cols: options.detach?.cols ?? (process.stdout.columns || 80),
+              rows: options.detach?.rows ?? (process.stdout.rows || 24),
+              log: (line) => console.error(`gild: ${line}`),
+            })
+          : pty!.spawn(binary, prepared?.args ?? options.args, {
+              name: 'xterm-256color',
+              cols: options.detach?.cols ?? process.stdout.columns,
+              rows: options.detach?.rows ?? process.stdout.rows,
+              cwd: process.cwd(),
+              env,
+              encoding: null,
+            })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
     child.onData((data) => quiet?.output(data as unknown as Buffer))

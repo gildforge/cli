@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
 import { profileSchema, resolveProfile } from './agent-profiles'
+import { ensureVm, usesMultipass } from './isolation/multipass'
 import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
@@ -87,7 +88,7 @@ export function spawnCommands(
     )
     .option(
       '--vm',
-      'run the agent inside a microVM (Firecracker on Linux, vz on macOS); the guest image is fetched on first use',
+      'run the agent inside a VM: Firecracker on Linux, Multipass on macOS and Windows (made on first use)',
     )
     .option(
       '--config-dir <path>',
@@ -175,7 +176,16 @@ export function spawnCommands(
           )
         // First --vm use: fetch the published guest image here, where the
         // terminal shows its progress; the worker then finds it installed.
-        if (opts.vm) {
+        if (opts.vm && usesMultipass()) {
+          // macOS and Windows: Multipass. Making the VM the first time shows here.
+          await ensureVm((line) => console.error(`gild: ${line}`)).catch(
+            (e) => {
+              throw Error(
+                `--vm: ${(e as Error).message}. It never falls back to running on the host`,
+              )
+            },
+          )
+        } else if (opts.vm) {
           const { vmUnavailable } = await prepareVm(opts.configDir, {
             want: true,
             log: (line) => console.error(`gild: ${line}`),
