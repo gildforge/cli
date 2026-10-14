@@ -302,7 +302,14 @@ test('git in the guest trusts the work directory although another user owns it',
     const git = (env: Record<string, string>) =>
       Bun.spawnSync(['git', '-C', work, 'status', '--porcelain'], {
         // As in the guest: the files belong to someone else (uid 1000 vs root).
-        env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1', ...env },
+        // Only this test's config counts: CI runners trust every directory globally.
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
+          ...env,
+        },
       })
     expect(Bun.spawnSync(['git', 'init', '-q', work]).exitCode).toBe(0)
     const refused = git({})
