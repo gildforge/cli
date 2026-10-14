@@ -1085,6 +1085,64 @@ agentCmd
     )
   })
 
+agentCmd
+  .command('orchestrator <repo> <agent>')
+  .description(
+    'as the repo owner, let an agent coordinate others there: it may spawn, suspend and resume child agents (--revoke takes it back, with every child)',
+  )
+  .option(
+    '--revoke',
+    'take the grant back and revoke every child spawned under it',
+  )
+  .option('--children <n>', 'most live children it may hold (default 10)')
+  .option('--server <url>', 'forge base URL (default: https://gild.gg)')
+  .action(
+    async (
+      target: string,
+      agent: string,
+      opts: { revoke?: boolean; children?: string; server?: string },
+    ) => {
+      const params = repoPair(target)
+      const bare = agent.replace(/^@/, '')
+      // sponsor/label as given; a bare label is a local agent, else yours.
+      const name = bare.includes('/')
+        ? bare
+        : ((await loadAgent(childLabel(bare)))?.name ??
+          `${(await loadIdentity())?.name}/${bare}`)
+      const [sponsor, label] = name.split('/')
+      const client = await chatClient({ server: opts.server })
+      if (opts.revoke) {
+        const result = await client.request('deleteRepoOrchestrator', {
+          ...params,
+          sponsor,
+          label,
+        })
+        console.log(
+          `@${result.agent} no longer coordinates ${target}.` +
+            (result.revoked.length
+              ? ` Revoked with it: ${result.revoked.map((a) => '@' + a).join(', ')}.`
+              : ''),
+        )
+        return
+      }
+      const limit =
+        opts.children === undefined ? undefined : Number(opts.children)
+      if (
+        limit !== undefined &&
+        !(Number.isInteger(limit) && limit >= 1 && limit <= 100)
+      )
+        throw Error('--children is a whole number from 1 to 100')
+      const result = await client.request('setRepoOrchestrator', params, {
+        agent: name,
+        ...(limit === undefined ? {} : { child_limit: limit }),
+      })
+      console.log(
+        chalk.green(`@${result.agent} coordinates ${target}`) +
+          ` and may hold up to ${result.child_limit} child agents. It spawns them with gild agent spawn-child ${target} <label> --agent ${label}.`,
+      )
+    },
+  )
+
 for (const action of ['suspend', 'resume'] as const)
   agentCmd
     .command(`${action} <repo> <label>`)

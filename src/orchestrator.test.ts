@@ -15,7 +15,10 @@ async function forge() {
   }[] = []
   const f = await fixture(async (request) => {
     const url = new URL(request.url)
-    const body = request.method === 'GET' ? undefined : await request.json()
+    const body =
+      request.method === 'GET'
+        ? undefined
+        : await request.text().then((t) => (t ? JSON.parse(t) : undefined))
     seen.push({
       method: request.method,
       path: url.pathname,
@@ -60,6 +63,30 @@ async function forge() {
         suspended: m[3] === 'suspend',
         suspended_at: m[3] === 'suspend' ? '2026-10-09T12:01:00.000Z' : null,
         suspended_by: m[3] === 'suspend' ? 'alice/test' : null,
+      })
+    if (
+      url.pathname === '/api/v1/repos/owner/demo/orchestrators' &&
+      request.method === 'POST'
+    )
+      return Response.json(
+        {
+          agent: body.agent,
+          scope: 'repo',
+          child_limit: body.child_limit ?? 10,
+          children: 0,
+          granted_by: 'owner',
+          granted_at: '2026-10-14T12:00:00.000Z',
+        },
+        { status: 201 },
+      )
+    const g = url.pathname.match(
+      /^\/api\/v1\/repos\/owner\/demo\/orchestrators\/([^/]+)\/([^/]+)$/,
+    )
+    if (g && request.method === 'DELETE')
+      return Response.json({
+        ok: true,
+        agent: `${g[1]}/${g[2]}`,
+        revoked: [`${g[1]}/helper`],
       })
     return Response.json({ message: 'nope' }, { status: 404 })
   })
@@ -211,6 +238,66 @@ test('a person suspends with their own identity', async () => {
         'Bearer gf_fixturetoken',
       ],
     ])
+  } finally {
+    await f.close()
+  }
+})
+
+test('the owner makes a local agent an orchestrator and takes it back, as themselves', async () => {
+  const { f, seen } = await forge()
+  try {
+    await f.identity()
+    await f.agent()
+    const grant = await cli(f.root, [
+      'agent',
+      'orchestrator',
+      'owner/demo',
+      'test',
+      '--children',
+      '3',
+      '--server',
+      f.origin,
+    ])
+    expect(grant.code).toBe(0)
+    expect(grant.out).toContain('@alice/test coordinates owner/demo')
+    expect(grant.out).toContain('up to 3 child agents')
+    const revoke = await cli(f.root, [
+      'agent',
+      'orchestrator',
+      'owner/demo',
+      'alice/test',
+      '--revoke',
+      '--server',
+      f.origin,
+    ])
+    expect(revoke.code).toBe(0)
+    expect(revoke.out).toContain('Revoked with it: @alice/helper')
+    expect(seen.map((s) => [s.method, s.path, s.auth, s.body])).toEqual([
+      [
+        'POST',
+        '/api/v1/repos/owner/demo/orchestrators',
+        'Bearer gf_fixturetoken',
+        { agent: 'alice/test', child_limit: 3 },
+      ],
+      [
+        'DELETE',
+        '/api/v1/repos/owner/demo/orchestrators/alice/test',
+        'Bearer gf_fixturetoken',
+        undefined,
+      ],
+    ])
+    const bad = await cli(f.root, [
+      'agent',
+      'orchestrator',
+      'owner/demo',
+      'test',
+      '--children',
+      '0',
+      '--server',
+      f.origin,
+    ])
+    expect(bad.code).toBe(1)
+    expect(seen.length).toBe(2)
   } finally {
     await f.close()
   }
