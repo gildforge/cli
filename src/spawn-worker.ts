@@ -103,7 +103,12 @@ let closing = false
 let host: DetachedHost | undefined
 let adapterReceive: ((raw: unknown) => void) | undefined
 let adapterCleanup: (() => void) | undefined
-const adapter = adapterFor(options.agent, options.args)
+// In a Multipass VM the agent's hooks can't reach this host, so the session
+// runs like an unknown agent: input waits for the terminal to go quiet.
+const adapter =
+  options.vm && usesMultipass()
+    ? undefined
+    : adapterFor(options.agent, options.args)
 const state: SessionState = {
   state: 'unknown',
   lastActivity: new Date().toISOString(),
