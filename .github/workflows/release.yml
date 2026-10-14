@@ -100,8 +100,8 @@ jobs:
           cd "out/$TAG"
           for f in gild-*; do shasum -a 256 "$f" | cut -d' ' -f1 > "$f.sha"; done
           jq -n --arg version "$VERSION" --arg tag "$TAG" \
-            --arg arm64 "$(cat gild-darwin-arm64.sha)" --arg x64 "$(cat gild-darwin-x64.sha)" --arg linux "$(cat gild-linux-x64.sha)" \
-            '{version: $version, tag: $tag, artifacts: {"gild-darwin-arm64": $arm64, "gild-darwin-x64": $x64, "gild-linux-x64": $linux}}' > manifest.json
+            --arg arm64 "$(cat gild-darwin-arm64.sha)" --arg x64 "$(cat gild-darwin-x64.sha)" --arg linux "$(cat gild-linux-x64.sha)" --arg linuxarm64 "$(cat gild-linux-arm64.sha)" \
+            '{version: $version, tag: $tag, artifacts: {"gild-darwin-arm64": $arm64, "gild-darwin-x64": $x64, "gild-linux-x64": $linux, "gild-linux-arm64": $linuxarm64}}' > manifest.json
           rm -f *.sha
           jq -n --arg version "$VERSION" --arg tag "$TAG" '{version: $version, tag: $tag}' > latest.json
           cp latest.json "../latest.json"

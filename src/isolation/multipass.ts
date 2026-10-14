@@ -9,7 +9,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import type { VmChild } from '../spawn-vm'
 
 export const MULTIPASS_VM = 'gild'
@@ -56,23 +56,87 @@ function multipassPath() {
   return r.status === 0 ? r.stdout.split(/\r?\n/)[0].trim() : 'multipass'
 }
 
+/** Multipass could not open its SSH connection into the VM. On macOS that is
+ *  Local Network privacy refusing the connection, typically once the terminal
+ *  or SSH session that started gild has gone; on any host, briefly, a VM whose
+ *  network is still coming up. */
+export const noRoute = (output: string) => /no route to host/i.test(output)
+
+export function noRouteError(platform: NodeJS.Platform = process.platform) {
+  return new Error(
+    platform === 'darwin'
+      ? 'Multipass cannot reach the gild VM (No route to host). macOS Local Network privacy is blocking it: allow Multipass in System Settings → Privacy & Security → Local Network, and keep the terminal or SSH session that starts gild open until the agent has started'
+      : 'Multipass cannot reach the gild VM (No route to host). Check `multipass list` and the host firewall, then run this again',
+  )
+}
+
+/** Runs `attempt` again while it fails with "No route to host", up to
+ *  `tries` times, waiting `delayMs` between tries. */
+export function retryNoRoute<T extends { status: number | null }>(
+  attempt: () => T & { stdout?: string; stderr?: string },
+  { tries = 5, delayMs = 1000, sleep = sleepSync } = {},
+): T {
+  for (let i = 1; ; i++) {
+    const r = attempt()
+    if (r.status === 0 || !noRoute(`${r.stderr ?? ''}${r.stdout ?? ''}`))
+      return r
+    if (i >= tries) return r
+    sleep(delayMs)
+  }
+}
+
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
 function mp(args: string[], input?: string) {
-  const r = spawnSync('multipass', args, {
-    encoding: 'utf8',
-    input,
-    maxBuffer: 64 << 20,
+  return retryNoRoute(() => {
+    const r = spawnSync('multipass', args, {
+      encoding: 'utf8',
+      input,
+      maxBuffer: 64 << 20,
+    })
+    if (r.error) throw r.error
+    return r
   })
-  if (r.error) throw r.error
-  return r
 }
 
 function must(args: string[], what: string, input?: string) {
   const r = mp(args, input)
-  if (r.status !== 0)
+  if (r.status !== 0) {
+    const output = `${r.stderr}${r.stdout}`
+    if (noRoute(output)) throw noRouteError()
     throw new Error(
       `${what}: ${(r.stderr || r.stdout).trim() || `multipass exited ${r.status}`}`,
     )
+  }
   return r.stdout
+}
+
+/** Whether the VM finished its one-time setup. Only a missing marker file
+ *  means "not set up"; a VM that cannot be reached is an error. */
+export function readiness(r: {
+  status: number | null
+  stdout: string
+  stderr: string
+}): boolean {
+  const answer = r.stdout.trim()
+  if (r.status === 0 && answer === 'ready') return true
+  if (r.status === 0 && answer === 'missing') return false
+  if (noRoute(`${r.stderr}${r.stdout}`)) throw noRouteError()
+  throw new Error(
+    `checking the gild VM: ${(r.stderr || r.stdout).trim() || `multipass exited ${r.status}`}`,
+  )
+}
+
+/** The program as the VM runs it: a program inside the working directory by
+ *  its path relative to the copy (`./agent.sh`), anything else by name, from
+ *  the VM's own PATH. */
+export function guestProgram(binary: string, cwd: string) {
+  const inside = relative(cwd, binary)
+  if (inside && !inside.startsWith('..') && !isAbsolute(inside))
+    return `./${inside.split(sep).join('/')}`
+  return basename(binary)
 }
 
 /** Why Multipass can't be used here, or null. */
@@ -122,6 +186,7 @@ function step(label: string, args: string[], log: (line: string) => void) {
         return resolve()
       }
       if (tty) process.stderr.write(`\r\x1b[2K  ✗ ${label}  ${seconds()}\n`)
+      if (noRoute(out)) return reject(noRouteError())
       const why = out
         .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
         .trim()
@@ -138,15 +203,24 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
   if (missing) throw new Error(missing)
   const info = mp(['info', MULTIPASS_VM, '--format', 'json'])
   const fresh = info.status !== 0
-  const ready =
-    !fresh && mp(['exec', MULTIPASS_VM, '--', 'test', '-f', READY]).status === 0
   const state = fresh
     ? null
     : JSON.parse(info.stdout).info?.[MULTIPASS_VM]?.state
-  if (!fresh && ready && state === 'Running') return
-  if (fresh || !ready)
+  const isReady = () =>
+    readiness(
+      mp([
+        'exec',
+        MULTIPASS_VM,
+        '--',
+        'sh',
+        '-c',
+        `test -f ${READY} && echo ready || echo missing`,
+      ]),
+    )
+  const setup = () =>
     log('setting up the gild VM (first time only, about two minutes)')
-  if (fresh)
+  if (fresh) {
+    setup()
     await step(
       'Download Ubuntu 24.04 and create the VM',
       [
@@ -165,14 +239,49 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
       ],
       log,
     )
-  else if (state !== 'Running')
+  } else if (state !== 'Running')
     await step('Start the gild VM', ['start', MULTIPASS_VM], log)
-  if (!ready)
-    await step(
-      'Install Node, git, Claude Code and gild',
-      ['exec', MULTIPASS_VM, '--', 'sh', '-c', SETUP],
-      log,
-    )
+  if (isReady()) return
+  if (!fresh) setup()
+  await step(
+    'Install Node, git, Claude Code and gild',
+    ['exec', MULTIPASS_VM, '--', 'sh', '-c', SETUP],
+    log,
+  )
+}
+
+/** Resolves when the guest wrote the session's pid file (the program is
+ *  starting), when the multipass process exits, or after `timeoutMs`. */
+function started(
+  child: import('node:child_process').ChildProcess,
+  pidFile: string,
+  timeoutMs = 20000,
+) {
+  return new Promise<void>((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      child.off('exit', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, timeoutMs)
+    child.once('exit', finish)
+    const poll = () => {
+      if (done) return
+      const check = spawn(
+        multipassPath(),
+        ['exec', MULTIPASS_VM, '--', 'test', '-s', pidFile],
+        { stdio: 'ignore' },
+      )
+      check.on('error', finish)
+      check.on('exit', (code) =>
+        code === 0 ? finish() : setTimeout(poll, 250),
+      )
+    }
+    poll()
+  })
 }
 
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
@@ -223,14 +332,17 @@ export async function startMultipassChild(opts: {
   )
   opts.log?.(`copying ${opts.cwd} into the VM`)
   // A tar stream: sockets and other special files are skipped, not fatal.
-  const copy = spawnSync(
-    'sh',
-    [
-      '-c',
-      `COPYFILE_DISABLE=1 tar -C ${quote(opts.cwd)} -cf - . 2>/dev/null | ${quote(multipassPath())} exec ${MULTIPASS_VM} -- sh -c ${quote(`mkdir -p ${quote(ws)} && tar -C ${quote(ws)} -xf - 2>/dev/null`)}`,
-    ],
-    { encoding: 'utf8', maxBuffer: 16 << 20 },
+  const copy = retryNoRoute(() =>
+    spawnSync(
+      'sh',
+      [
+        '-c',
+        `COPYFILE_DISABLE=1 tar -C ${quote(opts.cwd)} -cf - . 2>/dev/null | ${quote(multipassPath())} exec ${MULTIPASS_VM} -- sh -c ${quote(`mkdir -p ${quote(ws)} && tar -C ${quote(ws)} -xf - 2>/dev/null`)}`,
+      ],
+      { encoding: 'utf8', maxBuffer: 16 << 20 },
+    ),
   )
+  if (noRoute(copy.stderr ?? '')) throw noRouteError()
   if (
     copy.status !== 0 ||
     mp(['exec', MULTIPASS_VM, '--', 'test', '-d', ws]).status !== 0
@@ -239,8 +351,8 @@ export async function startMultipassChild(opts: {
       `copying the working directory into the VM: ${copy.stderr.trim() || 'tar failed'}`,
     )
 
-  const program = basename(opts.binary)
-  if (program === 'claude') {
+  const program = guestProgram(opts.binary, opts.cwd)
+  if (basename(opts.binary) === 'claude') {
     // Claude Code signs in with a token made once by `gild vm login claude`.
     const token =
       process.env.CLAUDE_CODE_OAUTH_TOKEN ??
@@ -331,6 +443,10 @@ o=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\\1#')
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   )
+  // Return once the program runs in the VM: `gild spawn --detach` reports the
+  // session ready only then, so the session that started it is still there
+  // while Multipass connects (macOS Local Network privacy refuses it after).
+  await started(p, `${dir}/pid`)
   const hangUp = () =>
     mp([
       'exec',
@@ -348,7 +464,11 @@ o=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\\1#')
     resize: () => {},
     onData: (cb) => {
       p.stdout.on('data', (d: Buffer) => cb(d))
-      p.stderr.on('data', (d: Buffer) => cb(d))
+      p.stderr.on('data', (d: Buffer) => {
+        cb(d)
+        if (noRoute(d.toString()))
+          cb(Buffer.from(`\r\ngild: ${noRouteError().message}\r\n`))
+      })
     },
     onExit: (cb) =>
       void p.on('exit', (code, signal) =>

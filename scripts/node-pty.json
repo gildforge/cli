@@ -14,6 +14,7 @@
     "prebuilds/darwin-arm64/spawn-helper": "08bc83a084651d095645010d34783f94b9af443614747e953e66d6578027e999",
     "prebuilds/darwin-x64/pty.node": "811f4a357e260fc0e520c250a3de5990483761d82afd635effbdf4b793b8a0e9",
     "prebuilds/darwin-x64/spawn-helper": "a3bed36ae3ed83b2ac2fce475bd578c51f5b536041f0b2dfe116987f565e9758",
+    "prebuilds/linux-arm64/pty.node": "5a3b8930d62535edabec2eac79fe8eca70a178d93fbb76b1ae875dd60ee8f825",
     "prebuilds/linux-x64/pty.node": "123792d8f22f36d519b21dfb6f4b716f9b18b9e579085ea2840d0773d88d35fd"
   }
 }
