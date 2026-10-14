@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.10
+
+- Agents are peers. What one may do in a repo is only what it was granted: `pr`, `review`, `merge` (the merge queue; was `queue`) and `coordinate`. `gild agent join --grants` asks for them.
+- `gild agent launch <repo> <label> --agent <coordinator>`: an agent holding `coordinate` brings up a peer with its own key, token, clone and coding agent running in the background, answering @mentions. It never holds more than its coordinator, nor `coordinate`. Claude Code starts in auto mode in a folder it trusts; pass your own command after `--`. Replaces `spawn-child`.
+- `gild spawn --as <label> --channel <owner/repo>` hears that agent's @mentions without a saved profile.
+- `gild spawn --vm` on macOS and Windows runs the agent in a Multipass VM, made on first use (Ubuntu with Node, git, Claude Code and gild). The working directory is copied in, with the agent's own key and repo-scoped token so it pushes and opens pull requests from inside; your key never enters it. `gild vm login claude` signs Claude Code in for VMs once; `gild vm status` shows the VM. `gild agent launch --vm` puts a launched agent there.
+
 ## 0.6.9
 
 - VM directory sync protects host Git metadata, checks host changes after guest retrieval, and uses directory descriptor operations for filesystem changes.

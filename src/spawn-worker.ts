@@ -23,6 +23,7 @@ import { InjectionQueue } from './spawn-queue'
 import { startWatchdog } from './spawn-nudge-worker'
 import type { NudgeEvent } from './spawn-nudge'
 import { guestEnvironment, startVmChild, type VmChild } from './spawn-vm'
+import { startMultipassChild, usesMultipass } from './isolation/multipass'
 import {
   describeSync,
   type SyncResult,
@@ -102,7 +103,12 @@ let closing = false
 let host: DetachedHost | undefined
 let adapterReceive: ((raw: unknown) => void) | undefined
 let adapterCleanup: (() => void) | undefined
-const adapter = adapterFor(options.agent, options.args)
+// In a Multipass VM the agent's hooks can't reach this host, so the session
+// runs like an unknown agent: input waits for the terminal to go quiet.
+const adapter =
+  options.vm && usesMultipass(options.vm.configDir)
+    ? undefined
+    : adapterFor(options.agent, options.args)
 const state: SessionState = {
   state: 'unknown',
   lastActivity: new Date().toISOString(),
@@ -357,7 +363,8 @@ async function main() {
     return fallback('PTY unavailable')
   let pty: typeof import('node-pty') | undefined
   try {
-    if (!options.vm) {
+    // Multipass sessions drive `multipass exec` on a host pty.
+    if (!options.vm || usesMultipass(options.vm.configDir)) {
       const nodePty = options.ptyModule
       if (!nodePty)
         throw new Error(
@@ -593,26 +600,42 @@ async function main() {
       })
       host.openLog(join(directory, options.id))
     }
-    child = options.vm
-      ? await startVmChild({
-          configDir: options.vm.configDir,
-          sessionId: options.id,
-          cwd: process.cwd(),
-          binary,
-          args: prepared?.args ?? options.args,
-          env: guestEnvironment(env, baseEnv, options.envAllowlist),
-          cols: options.detach?.cols ?? (process.stdout.columns || 80),
-          rows: options.detach?.rows ?? (process.stdout.rows || 24),
-          log: (line) => console.error(`gild: ${line}`),
-        })
-      : pty!.spawn(binary, prepared?.args ?? options.args, {
-          name: 'xterm-256color',
-          cols: options.detach?.cols ?? process.stdout.columns,
-          rows: options.detach?.rows ?? process.stdout.rows,
-          cwd: process.cwd(),
-          env,
-          encoding: null,
-        })
+    child =
+      options.vm && usesMultipass(options.vm.configDir)
+        ? await startMultipassChild({
+            pty: pty!,
+            configDir: options.vm.configDir,
+            sessionId: options.id,
+            cwd: process.cwd(),
+            binary,
+            // The user's own arguments: adapter hook files live on the host.
+            args: options.args,
+            env: guestEnvironment(env, baseEnv, options.envAllowlist),
+            agent: options.profile?.name ?? options.identity?.split('/')[1],
+            cols: options.detach?.cols ?? (process.stdout.columns || 80),
+            rows: options.detach?.rows ?? (process.stdout.rows || 24),
+            log: (line) => console.error(`gild: ${line}`),
+          })
+        : options.vm
+          ? await startVmChild({
+              configDir: options.vm.configDir,
+              sessionId: options.id,
+              cwd: process.cwd(),
+              binary,
+              args: prepared?.args ?? options.args,
+              env: guestEnvironment(env, baseEnv, options.envAllowlist),
+              cols: options.detach?.cols ?? (process.stdout.columns || 80),
+              rows: options.detach?.rows ?? (process.stdout.rows || 24),
+              log: (line) => console.error(`gild: ${line}`),
+            })
+          : pty!.spawn(binary, prepared?.args ?? options.args, {
+              name: 'xterm-256color',
+              cols: options.detach?.cols ?? process.stdout.columns,
+              rows: options.detach?.rows ?? process.stdout.rows,
+              cwd: process.cwd(),
+              env,
+              encoding: null,
+            })
     // Output from the first byte on, so attach can replay the start.
     if (host) child.onData((data) => host!.push(data as unknown as Buffer))
     child.onData((data) => quiet?.output(data as unknown as Buffer))

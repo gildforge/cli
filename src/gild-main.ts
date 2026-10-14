@@ -11,6 +11,12 @@ import { anonymousClient, chatCommands, repoPair } from './chat'
 import { issueCommands } from './issue'
 import { prCommands } from './pr'
 import { gildInvocation } from './gild-invocation'
+import {
+  MULTIPASS_VM,
+  claudeTokenPath,
+  multipassMissing,
+  usesMultipass,
+} from './isolation/multipass'
 import { shellQuote } from './spawn-adapters/types'
 import { spawnSync } from 'node:child_process'
 import { Command } from 'commander'
@@ -33,7 +39,7 @@ import {
 } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { spawnCommands, localEvents } from './spawn'
@@ -858,7 +864,7 @@ agentCmd
   .option('--repo <owner/name>', 'a repo you want to work in')
   .option(
     '--grants <list>',
-    'what you ask for there: pr, review, queue (comma separated)',
+    'what you ask for there: pr (push, issues, pull requests), review, merge, coordinate (launch and manage other agents); comma separated',
     'pr',
   )
   .option('--note <text>', 'why, in a sentence the approver will read')
@@ -1016,7 +1022,7 @@ agentCmd
     }
   })
 
-// ---------- orchestrators: spawn, suspend and resume child agents ----------
+// ---------- coordination: launch agents, take them offline, bring them back ----------
 
 const childLabel = (value: string) => {
   if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(value))
@@ -1024,64 +1030,133 @@ const childLabel = (value: string) => {
   return value
 }
 
+/** Mark one folder trusted in Claude Code's own config (~/.claude.json),
+ *  changing nothing else; written whole and renamed into place. */
+async function trustClaudeFolder(dir: string) {
+  const path = join(homedir(), '.claude.json')
+  const config = JSON.parse(await readFile(path, 'utf8').catch(() => '{}'))
+  config.projects ??= {}
+  config.projects[dir] = {
+    ...config.projects[dir],
+    hasTrustDialogAccepted: true,
+  }
+  const temp = `${path}.gild-${process.pid}`
+  await writeFile(temp, JSON.stringify(config, null, 2), { mode: 0o600 })
+  await rename(temp, path)
+}
+
 agentCmd
-  .command('spawn-child <repo> <label>')
+  .command('launch <repo> <label> [run...]')
   .description(
-    "as an orchestrator, create a child agent in <owner/repo>; its token goes to this machine's agent store, never to the terminal",
+    'with the coordinate grant: bring up a new agent in <owner/repo>, a peer with the grants you give it. It gets its own key and token (stored on this machine, never printed), its own clone, and a coding agent running in the background that answers @mentions',
   )
   .requiredOption(
     '--agent <label>',
-    'the orchestrator: an approved local agent holding the orchestrator grant there',
+    'the coordinator: an approved local agent holding the coordinate grant there',
   )
   .option(
     '--grants <list>',
-    'what the child may do there: pr, review, queue (comma separated; never more than the orchestrator holds)',
-    '',
+    'what the new agent may do: pr, review, merge (comma separated; never more than the coordinator holds)',
+    'pr',
   )
-  .option('--note <text>', 'why the child exists, in a sentence')
+  .option('--note <text>', 'what the new agent is for, in a sentence')
+  .option('--dir <path>', 'where to clone the repo for it (default: ./<label>)')
+  .option('--no-start', 'only create the agent: no clone, nothing started')
+  .option(
+    '--vm',
+    'run it in the gild VM (Multipass on macOS and Windows, Firecracker on Linux)',
+  )
   .option('--server <url>', 'forge base URL (defaults to the joined server)')
-  .action(async (target: string, label: string, opts) => {
+  .action(async (target: string, label: string, run: string[], opts) => {
     childLabel(label)
+    // Nobody answers a background agent's permission prompts: Claude Code
+    // starts in auto mode (it approves routine steps, stops risky ones). Pass your own
+    // command after -- to choose differently: … --agent c -- codex
+    if (!run.length) run = ['claude', '--permission-mode', 'auto']
     const params = repoPair(target)
     if (await loadAgent(label))
       throw Error(`An agent named ${label} already exists on this machine`)
-    const orchestrator = await loadAgent(opts.agent)
-    if (!orchestrator?.token)
+    const coordinator = await loadAgent(opts.agent)
+    if (!coordinator?.token)
       throw Error(`No approved agent named ${opts.agent} on this machine`)
-    const server = agentServer(orchestrator, opts.server)
+    const server = agentServer(coordinator, opts.server)
     const { publicKey, privateKey } = generateKeyPairSync('ed25519')
     const pub = `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`
-    const child = await new GildClient(
+    const created = await new GildClient(
       server + '/api/v1',
-      orchestrator.token,
+      coordinator.token,
     ).request('createChildAgent', params, {
       label,
       publicKey: pub,
       grants: String(opts.grants ?? '')
         .split(',')
         .map((g: string) => g.trim())
-        .filter(Boolean) as ('pr' | 'review' | 'queue')[],
+        .filter(Boolean) as ('pr' | 'review' | 'merge')[],
       note: opts.note,
     })
     await saveAgent(label, {
       schema: 1,
-      name: child.name,
+      name: created.name,
       server,
       publicKey: pub,
       secretKey: privateKey
         .export({ format: 'der', type: 'pkcs8' })
         .toString('base64'),
-      requestId: child.request_id,
-      token: child.token,
-      createdAt: child.created_at,
+      requestId: created.request_id,
+      token: created.token,
+      createdAt: created.created_at,
     })
     console.log(
-      chalk.green(`Spawned @${child.name} in ${child.repo}`) +
-        ` for @${child.human}, sponsored by @${child.sponsor}.` +
-        (child.grants.length ? ` It may: ${child.grants.join(', ')}.` : ''),
+      chalk.green(`Launched @${created.name} in ${created.repo}`) +
+        (created.grants.length
+          ? `. It may: ${created.grants.join(', ')}.`
+          : '.'),
     )
+    if (!opts.start) {
+      console.log(
+        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} --channel ${target} ${run.join(' ')}`,
+      )
+      return
+    }
+    const dir = resolve(opts.dir ?? label)
+    // The same identity directory, so the clone and the session find the new agent.
+    const gild = [
+      ...gildInvocation(),
+      ...(identityDirectory ? ['--config-dir', identityDirectory] : []),
+    ]
+    const clone = spawnSync(
+      gild[0],
+      [...gild.slice(1), 'clone', target, dir, '--agent', label],
+      { stdio: 'inherit' },
+    )
+    if (clone.status !== 0)
+      throw Error(
+        `Cloning ${target} for @${created.name} failed; the agent exists, start it by hand`,
+      )
+    // gild made this folder, so Claude Code may trust it; in the background
+    // nobody could answer its trust question.
+    if (basename(run[0]) === 'claude') await trustClaudeFolder(dir)
+    const started = spawnSync(
+      gild[0],
+      [
+        ...gild.slice(1),
+        'spawn',
+        '--detach',
+        ...(opts.vm ? ['--vm'] : []),
+        '--as',
+        label,
+        '--channel',
+        target,
+        ...run,
+      ],
+      { cwd: dir, encoding: 'utf8' },
+    )
+    if (started.status !== 0)
+      throw Error(
+        `Starting ${run[0]} for @${created.name} failed: ${(started.stderr || started.stdout).trim()}`,
+      )
     console.log(
-      `Its token is stored as local agent ${chalk.bold(label)} (scopes: ${child.scopes.join(', ')}); print it with gild agent token ${label}.`,
+      `@${created.name} is running ${run[0]} in ${dir} (gild attach ${label} to watch, gild send ${label} "…" to talk).`,
     )
   })
 
@@ -1090,12 +1165,12 @@ for (const action of ['suspend', 'resume'] as const)
     .command(`${action} <repo> <label>`)
     .description(
       action === 'suspend'
-        ? 'take an agent offline: it leaves the channel, gets no mentions and its token answers 403'
+        ? 'take an agent offline (you, or a coordinator for agents it launched): it leaves the channel, gets no mentions and its token answers 403'
         : 'bring a suspended agent back',
     )
     .option(
       '--agent <label>',
-      'act as an approved local orchestrator agent (default: you)',
+      'act as an approved local coordinator agent (default: you)',
     )
     .option(
       '--server <url>',
@@ -1132,6 +1207,83 @@ for (const action of ['suspend', 'resume'] as const)
         )
       },
     )
+
+// ---------- vm: agents in a VM (Multipass on macOS and Windows) ----------
+
+const vmCmd = program
+  .command('vm')
+  .description(
+    'agents in a VM: Multipass on macOS and Windows, Firecracker on Linux',
+  )
+
+vmCmd
+  .command('login <runtime>')
+  .description('sign a coding agent in for VMs, once (claude)')
+  .action(async (runtime: string) => {
+    if (runtime !== 'claude')
+      throw Error(
+        'gild vm login knows claude for now; other agents read their own environment',
+      )
+    console.log(
+      [
+        'Agents in a VM sign in to Claude Code with a long-lived token of their own.',
+        'Next, Claude Code opens your browser to make one (`claude setup-token`).',
+        `Paste the token it prints here. gild keeps it in ${claudeTokenPath(configDir())} (only you can read it)`,
+        'and copies it into the gild VM when an agent starts there. It never goes to gild.gg or your Cloudflare.',
+      ].join('\n'),
+    )
+    const { go } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'go',
+        default: true,
+        message: 'Make the token now?',
+      },
+    ])
+    if (!go) return
+    const made = spawnSync('claude', ['setup-token'], { stdio: 'inherit' })
+    if (made.status !== 0) throw Error('claude setup-token did not finish')
+    const { token } = await inquirer.prompt([
+      {
+        type: 'password',
+        name: 'token',
+        mask: '*',
+        message: 'Paste the token',
+      },
+    ])
+    if (!String(token).trim()) throw Error('No token pasted; nothing saved')
+    await mkdir(join(configDir(), 'vm'), { recursive: true, mode: 0o700 })
+    await writeFile(claudeTokenPath(configDir()), String(token).trim() + '\n', {
+      mode: 0o600,
+    })
+    console.log(
+      chalk.green('Saved.') +
+        ' Agents started with gild spawn --vm (or gild agent launch --vm) sign in with it.',
+    )
+  })
+
+vmCmd
+  .command('status')
+  .description('the gild VM: whether it exists and is running')
+  .action(async () => {
+    if (!usesMultipass()) {
+      console.log('On Linux, gild spawn --vm uses Firecracker; see docs/VM.md')
+      return
+    }
+    const missing = multipassMissing()
+    if (missing) return console.log(missing)
+    const r = spawnSync(
+      'multipass',
+      ['info', MULTIPASS_VM, '--format', 'json'],
+      { encoding: 'utf8' },
+    )
+    if (r.status !== 0)
+      return console.log('No gild VM yet. The first gild spawn --vm makes it.')
+    const info = JSON.parse(r.stdout).info?.[MULTIPASS_VM]
+    console.log(
+      `gild VM: ${info?.state}${info?.ipv4?.length ? ` (${info.ipv4[0]})` : ''}, Ubuntu ${info?.release ?? ''}`.trim(),
+    )
+  })
 
 program
   .command('events [id]')

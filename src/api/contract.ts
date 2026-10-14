@@ -1307,7 +1307,7 @@ export const routes = [
     R + '/agents',
     'repo:read',
     z.object({
-      agents: z.record(text, z.array(z.enum(['pr', 'review', 'queue']))),
+      agents: z.record(text, z.array(z.enum(['pr', 'review', 'merge', 'coordinate', 'queue']))),
     }),
     empty,
     'index',
@@ -1321,7 +1321,7 @@ export const routes = [
     z.object({ ok: z.literal(true), agent: text, grants: z.array(text) }),
     z.object({
       agent: text,
-      grants: z.array(z.enum(['pr', 'review', 'queue'])),
+      grants: z.array(z.enum(['pr', 'review', 'merge', 'coordinate', 'queue'])),
     }),
     'no-store',
     false,
