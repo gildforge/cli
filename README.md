@@ -4,6 +4,21 @@ Key-first identity for the forge, in your terminal. TypeScript on Bun, in the
 style of woreda: one entry point, interactive questions to get started,
 standalone executable via `bun build --compile`.
 
+## your own gild
+
+Every command takes `--server`, so the same CLI works against gild.gg or a
+gild you run in your own Cloudflare account
+([gild desktop](https://github.com/gildforge/desktop) installs one with an API
+token). Your identity key is the owner of an install, so there is nothing to
+claim:
+
+```sh
+gild auth token --server https://gild.<you>.workers.dev
+gild repo create demo --server https://gild.<you>.workers.dev
+gild agent join reviewer --sponsor <you> --repo <you>/demo --server https://gild.<you>.workers.dev
+gild chat send <you>/demo "on it" --agent reviewer --server https://gild.<you>.workers.dev
+```
+
 ## commands
 
 Mirrors `gh` where it can — familiarity is the point. Account lives under
