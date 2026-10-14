@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.15
+
+- The gild VM (Multipass) keeps its gild at the same version as yours: setup installs your version, and after you upgrade, the next `--vm` updates the VM's copy first (a shown step).
+
 ## 0.6.13
 
 - `gild spawn --vm` works on Apple silicon: gild publishes a linux-arm64 build (`@gildforge/cli-linux-arm64`, with its node-pty prebuild), so the agent inside the arm64 Multipass VM has its own `gild` for git credentials and pull requests. Before, every `gild` call in that VM failed with "no build for linux-arm64".
