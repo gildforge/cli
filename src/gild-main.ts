@@ -1208,6 +1208,160 @@ for (const action of ['suspend', 'resume'] as const)
       },
     )
 
+// ---------- setup: your own gild in your Cloudflare account ----------
+
+/** The gild version `gild setup` puts in your account: the kit's prebuilt Worker and its installer. */
+const SETUP_KIT = '0.7.7'
+
+program
+  .command('setup')
+  .description(
+    'set up your own gild in your Cloudflare account (Workers Paid); run it again to upgrade in place',
+  )
+  .option(
+    '--name <worker>',
+    'Worker name; it also names the databases, bucket and queues',
+    'gild',
+  )
+  .option(
+    '--account <id>',
+    'Cloudflare account id (asked when the token reaches several)',
+  )
+  .option('--owner <name>', 'your name on this gild')
+  .option('--email <email>', 'your email')
+  .action(
+    async (opts: {
+      name: string
+      account?: string
+      owner?: string
+      email?: string
+    }) => {
+      const identity = await loadIdentity()
+      if (!identity)
+        throw Error(
+          'Run gild auth init first: your gild key becomes the owner of the new gild',
+        )
+      console.log(
+        [
+          'gild setup makes a gild in your Cloudflare account: a Worker, two D1 databases,',
+          'an R2 bucket and three Queues, named after the Worker. It needs Workers Paid and',
+          'an API token (permissions: https://github.com/gildforge/desktop#token-permissions).',
+          'The token is used for this setup only and is not saved.',
+        ].join('\n'),
+      )
+      const token =
+        process.env.CLOUDFLARE_API_TOKEN ||
+        String(
+          (
+            await inquirer.prompt([
+              {
+                type: 'password',
+                name: 'token',
+                mask: '*',
+                message: 'Cloudflare API token',
+              },
+            ])
+          ).token,
+        ).trim()
+      if (!token) throw Error('No token; nothing was changed')
+      const listed = (await (
+        await fetch(
+          'https://api.cloudflare.com/client/v4/accounts?per_page=50',
+          {
+            headers: { authorization: `Bearer ${token}` },
+          },
+        )
+      ).json()) as {
+        success: boolean
+        result?: { id: string; name: string }[]
+        errors?: { message: string }[]
+      }
+      if (!listed.success || !listed.result?.length)
+        throw Error(
+          `Cloudflare did not accept this token: ${listed.errors?.map((e) => e.message).join('; ') || 'it reaches no account'}`,
+        )
+      const account =
+        opts.account ??
+        (listed.result.length === 1
+          ? listed.result[0].id
+          : String(
+              (
+                await inquirer.prompt([
+                  {
+                    type: 'list',
+                    name: 'account',
+                    message: 'Which account',
+                    choices: listed.result.map((a) => ({
+                      name: a.name,
+                      value: a.id,
+                    })),
+                  },
+                ])
+              ).account,
+            ))
+      const gitEmail = spawnSync('git', ['config', '--global', 'user.email'], {
+        encoding: 'utf8',
+      }).stdout.trim()
+      const answers = await inquirer.prompt([
+        ...(opts.owner
+          ? []
+          : [
+              {
+                type: 'input',
+                name: 'owner',
+                message: 'Your name on this gild',
+                default: identity.name ?? undefined,
+              },
+            ]),
+        ...(opts.email
+          ? []
+          : [
+              {
+                type: 'input',
+                name: 'email',
+                message: 'Your email',
+                default: gitEmail || undefined,
+              },
+            ]),
+      ] as never)
+      const owner = String(opts.owner ?? (answers as { owner: string }).owner)
+        .trim()
+        .toLowerCase()
+      const email = String(
+        opts.email ?? (answers as { email: string }).email,
+      ).trim()
+      if (!/^[a-z0-9][a-z0-9-]{0,38}$/.test(owner))
+        throw Error('Your name is lowercase letters, digits and dashes')
+      // The kit's installer and prebuilt Worker: the same steps gild desktop runs.
+      const run = spawnSync(
+        'npx',
+        [
+          '-y',
+          '-p',
+          `@gildforge/kit@${SETUP_KIT}`,
+          'gild-install',
+          account,
+          owner,
+          email,
+          opts.name,
+        ],
+        {
+          stdio: ['ignore', 'inherit', 'inherit'],
+          env: { ...process.env, CLOUDFLARE_API_TOKEN: token },
+        },
+      )
+      if (run.error) throw Error('gild setup needs Node.js (npx) on PATH')
+      if (run.status !== 0)
+        throw Error(
+          'Setup stopped; run gild setup again to pick up where it stopped',
+        )
+      console.log(
+        chalk.green('Your gild is ready.') +
+          ' Sign in to it from here with: gild auth token --server <the URL above>',
+      )
+    },
+  )
+
 // ---------- vm: agents in a VM (Multipass on macOS and Windows) ----------
 
 const vmCmd = program

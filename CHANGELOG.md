@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.12
+
+- `gild setup` sets up your own gild in your Cloudflare account from a terminal (the same steps as gild desktop): it asks for the API token (not saved), the account, your name and email, and makes your gild key the owner. Running it again upgrades in place.
+
 ## 0.6.11
 
 - Making the gild VM shows each step as it runs: a spinner, its elapsed time, and Multipass's own percentage while Ubuntu downloads; a tick when it's done. Off a terminal, plain lines with timings.
