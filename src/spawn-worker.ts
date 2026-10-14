@@ -213,16 +213,21 @@ function quiesce() {
   adapterCleanup?.()
   adapterCleanup = undefined
 }
-function restore() {
-  quiesce()
-  for (const socket of sockets) socket.destroy()
-  host?.cleanup()
-  server.close()
+/** Unlinking the path leaves connected viewers and subscribers connected. */
+function unlinkSocket() {
   if (ownsSocket && path) {
     try {
       unlinkSync(path)
     } catch {}
+    ownsSocket = false
   }
+}
+function restore() {
+  quiesce()
+  for (const socket of sockets) socket.destroy()
+  unlinkSocket()
+  host?.cleanup()
+  server.close()
 }
 /** The final event: subscribers (and a `gild stop` caller) learn the exit
  * code, and are closed in order before the socket goes. */
@@ -286,7 +291,11 @@ function finish(code: number, terminate = true) {
           host?.push(Buffer.from(notice))
         }
         // Subscribers and stop callers stay connected until final sync/recovery
-        // has determined the actual session result.
+        // has determined the actual session result. The socket path and the
+        // session directory go first (the output log is kept), so a caller
+        // that saw the exit never finds them still there.
+        unlinkSocket()
+        host?.cleanup()
         announceExit(code, recovery)
         await exitFlushed
         restore()

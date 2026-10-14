@@ -241,7 +241,8 @@ export class DetachedHost {
     this.log?.close()
     if (!this.directory) return
     const log = this.log?.path
-    if (log && existsSync(log)) {
+    // A session that never printed (one that failed to start) leaves nothing.
+    if (log && existsSync(log) && statSync(log).size > 0) {
       const sessions = dirname(this.directory)
       try {
         renameSync(log, endedLogPath(sessions, basename(this.directory)))

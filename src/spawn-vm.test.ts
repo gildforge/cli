@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createConnection } from 'node:net'
 import { existsSync } from 'node:fs'
-import { finishVmSync, guestEnvironment } from './spawn-vm'
+import { finishVmSync, guestEnvironment, guestGitEnvironment } from './spawn-vm'
 import { loadHostConfig } from './isolation'
 import { localRequest, socketPath } from './spawn-sessions'
 
@@ -292,6 +292,26 @@ test('guest env: a fixed baseline, plus only adapter additions and allowlisted n
   expect(env.KEEP_ME).toBe('k') // allowlisted
   expect(env.HOST_SECRET).toBeUndefined()
   expect(guestEnvironment(adapted, baseline).KEEP_ME).toBeUndefined()
+  expect(env).toMatchObject(guestGitEnvironment('/workspace'))
+})
+
+test('git in the guest trusts the work directory although another user owns it', async () => {
+  await mkdir(resolve('.tmp'), { recursive: true })
+  const work = await mkdtemp(resolve('.tmp/vm-git-'))
+  try {
+    const git = (env: Record<string, string>) =>
+      Bun.spawnSync(['git', '-C', work, 'status', '--porcelain'], {
+        // As in the guest: the files belong to someone else (uid 1000 vs root).
+        env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1', ...env },
+      })
+    expect(Bun.spawnSync(['git', 'init', '-q', work]).exitCode).toBe(0)
+    const refused = git({})
+    expect(refused.exitCode).toBe(128)
+    expect(refused.stderr.toString()).toContain('dubious ownership')
+    expect(git(guestGitEnvironment(work)).exitCode).toBe(0)
+  } finally {
+    await rm(work, { recursive: true, force: true })
+  }
 })
 
 test('spawn --vm --detach starts the VM worker (no TTY needed) and reports why a VM could not start', async () => {

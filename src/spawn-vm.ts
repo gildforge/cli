@@ -128,6 +128,18 @@ export async function finishVmSync(
   return result!
 }
 
+/**
+ * Git in the guest trusts the work directory. Its files keep the host user's
+ * uid (mke2fs -d copies ownership) while the agent runs as root, so without
+ * this every git command in /workspace stops at "detected dubious ownership".
+ * Set through git's environment config, so it needs no change to the image.
+ */
+export const guestGitEnvironment = (work = '/workspace') => ({
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'safe.directory',
+  GIT_CONFIG_VALUE_0: work,
+})
+
 /** Env for the guest: a fixed baseline plus only what the adapter or profile added; never the host env. */
 export function guestEnvironment(
   hostEnv: Record<string, string | undefined>,
@@ -139,6 +151,7 @@ export function guestEnvironment(
     HOME: '/root',
     TERM: 'xterm-256color',
     LANG: 'C.UTF-8',
+    ...guestGitEnvironment(),
   }
   for (const [k, v] of Object.entries(hostEnv)) {
     if (v === undefined || k in out) continue
@@ -169,7 +182,7 @@ export async function startVmChild(opts: {
     throw new Error(
       vmBackend() === 'vz'
         ? '--vm needs a working vz setup: the published guest image and gild-vz helper (fetched on first use), or `vm` (kernel, rootfs, vz helper) in <config dir>/isolation.json (docs/VM.md)'
-        : '--vm needs a working Firecracker setup: Firecracker on PATH (or `vm.firecracker` in <config dir>/isolation.json), mke2fs, and an accessible /dev/kvm (docs/VM.md)',
+        : '--vm needs a working Firecracker setup: Firecracker (shipped next to gild in the npm package; else on PATH or `vm.firecracker` in <config dir>/isolation.json), mke2fs, and an accessible /dev/kvm (docs/VM.md)',
     )
   const kb = Number(
     execFileSync('du', ['-sk', opts.cwd], { encoding: 'utf8' }).split(/\s+/)[0],

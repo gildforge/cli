@@ -81,7 +81,11 @@ function ptyAgent(early: string[]) {
     onClose() {},
     close() {},
   })
-  return { opener, say, exit: (code: number) => data(framed({ t: 'exit', code })) }
+  return {
+    opener,
+    say,
+    exit: (code: number) => data(framed({ t: 'exit', code })),
+  }
 }
 const request = {
   argv: ['bash'],
