@@ -1,7 +1,21 @@
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { OutputLog, OutputRing } from './spawn-detach'
+import {
+  OutputLog,
+  OutputRing,
+  endedLogPath,
+  pruneEndedLogs,
+} from './spawn-detach'
 
 test('the output ring keeps only the most recent bytes, in order', () => {
   const ring = new OutputRing(10)
@@ -66,3 +80,24 @@ for (const scenario of ['no-tty', 'send', 'attach', 'stop']) {
     }
   }, 55000)
 }
+
+test('only the newest ended-session logs are kept', async () => {
+  await mkdir(resolve('.tmp'), { recursive: true })
+  const root = await mkdtemp(resolve('.tmp/ended-'))
+  try {
+    for (let i = 0; i < 4; i++) {
+      const path = endedLogPath(root, `s${i}`)
+      await writeFile(path, `${i}`)
+      await utimes(path, 1000 + i, 1000 + i)
+    }
+    await writeFile(join(root, 'live.sock.txt'), 'not a log')
+    pruneEndedLogs(root, 2)
+    expect((await readdir(root)).sort()).toEqual([
+      'live.sock.txt',
+      's2.output.log',
+      's3.output.log',
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

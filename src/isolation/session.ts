@@ -297,14 +297,22 @@ export async function guestPty(
   request: PtyRequest,
 ): Promise<PtyHandle> {
   const ch = await open()
+  // Every onData listener sees every byte (a detached session has two: the
+  // output log and the quiet detector). Output that arrives before the first
+  // listener is held for it, and an exit that comes before onExit is replayed.
   let buf = Buffer.alloc(0),
-    exited = false,
-    dataCb: (d: Buffer) => void = () => {},
-    exitCb: (code: number) => void = () => {}
+    exitCode: number | undefined,
+    pending: Buffer[] | undefined = []
+  const dataCbs: ((d: Buffer) => void)[] = [],
+    exitCbs: ((code: number) => void)[] = []
+  const emit = (d: Buffer) => {
+    if (pending) pending.push(d)
+    else for (const cb of dataCbs) cb(d)
+  }
   const done = (code: number) => {
-    if (exited) return
-    exited = true
-    exitCb(code)
+    if (exitCode !== undefined) return
+    exitCode = code
+    for (const cb of exitCbs) cb(code)
   }
   ch.onData((chunk) => {
     buf = Buffer.concat([buf, chunk])
@@ -312,10 +320,10 @@ export async function guestPty(
       const n = buf.readUInt32BE(0)
       const r = JSON.parse(buf.subarray(4, 4 + n).toString()) as Reply
       buf = buf.subarray(4 + n)
-      if (r.t === 'out') dataCb(Buffer.from(r.d, 'base64'))
+      if (r.t === 'out') emit(Buffer.from(r.d, 'base64'))
       else if (r.t === 'exit') done(r.code)
       else if (r.t === 'error') {
-        dataCb(Buffer.from(`gild: ${r.message}\r\n`))
+        emit(Buffer.from(`gild: ${r.message}\r\n`))
         done(127)
       }
     }
@@ -326,8 +334,17 @@ export async function guestPty(
     write: (d) =>
       ch.write(frame({ t: 'in', d: Buffer.from(d).toString('base64') })),
     resize: (cols, rows) => ch.write(frame({ t: 'resize', cols, rows })),
-    onData: (cb) => (dataCb = cb),
-    onExit: (cb) => (exitCb = cb),
+    onData: (cb) => {
+      dataCbs.push(cb)
+      if (!pending) return
+      const held = pending
+      pending = undefined
+      for (const d of held) cb(d)
+    },
+    onExit: (cb) => {
+      exitCbs.push(cb)
+      if (exitCode !== undefined) cb(exitCode)
+    },
     close: () => ch.close(),
   }
 }

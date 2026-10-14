@@ -206,6 +206,12 @@ try:
         check(not (SESSIONS / 'stubborn').exists() and not (SESSIONS / 'stubborn.sock').exists(), 'stubborn left files')
         r = cli('stop', 'stubborn')
         check(r.returncode == 1 and b'No live session stubborn' in r.stderr, r)
+        # The output outlives the session: private, and readable with attach --watch.
+        kept = SESSIONS / 'stubborn.output.log'
+        check(kept.exists() and b'"ready": true' in kept.read_bytes(), 'output not kept')
+        check(kept.stat().st_mode & 0o777 == 0o600, oct(kept.stat().st_mode))
+        r = cli('attach', '--watch', 'stubborn')
+        check(r.returncode == 0 and b'"ready": true' in r.stdout and b'stubborn has ended' in r.stderr, r)
     else:
         raise SystemExit(f'unknown case {CASE}')
     print(json.dumps({'case': CASE, 'passed': True}))
