@@ -176,7 +176,7 @@ export function spawnCommands(
           )
         // First --vm use: fetch the published guest image here, where the
         // terminal shows its progress; the worker then finds it installed.
-        if (opts.vm && usesMultipass()) {
+        if (opts.vm && usesMultipass(opts.configDir)) {
           // macOS and Windows: Multipass. Making the VM the first time shows here.
           await ensureVm((line) => console.error(`gild: ${line}`)).catch(
             (e) => {

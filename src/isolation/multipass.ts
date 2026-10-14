@@ -7,6 +7,7 @@
 // inside the VM. Your own gild key never enters it. Work leaves the VM through
 // git; the session's copy stays in the VM until you remove it.
 import { spawn, spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import type { VmChild } from '../spawn-vm'
@@ -14,8 +15,21 @@ import type { VmChild } from '../spawn-vm'
 export const MULTIPASS_VM = 'gild'
 const HOME = '/home/ubuntu'
 
-export const usesMultipass = (platform: NodeJS.Platform = process.platform) =>
-  platform === 'darwin' || platform === 'win32'
+/** macOS and Windows run `--vm` in Multipass, unless isolation.json in the
+ *  config directory sets up its own `vm` (kernel and rootfs for vz or Firecracker). */
+export function usesMultipass(
+  configDir?: string,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== 'darwin' && platform !== 'win32') return false
+  if (!configDir) return true
+  try {
+    return !JSON.parse(readFileSync(join(configDir, 'isolation.json'), 'utf8'))
+      .vm
+  } catch {
+    return true
+  }
+}
 
 /** Where `gild vm login claude` keeps the Claude Code token (0600, this machine only). */
 export const claudeTokenPath = (configDir: string) =>
@@ -158,10 +172,22 @@ export async function startMultipassChild(opts: {
     'preparing the session in the VM',
   )
   opts.log?.(`copying ${opts.cwd} into the VM`)
-  must(
-    ['transfer', '--recursive', opts.cwd, `${MULTIPASS_VM}:${ws}`],
-    'copying the working directory into the VM',
+  // A tar stream: sockets and other special files are skipped, not fatal.
+  const copy = spawnSync(
+    'sh',
+    [
+      '-c',
+      `COPYFILE_DISABLE=1 tar -C ${quote(opts.cwd)} -cf - . 2>/dev/null | ${quote(multipassPath())} exec ${MULTIPASS_VM} -- sh -c ${quote(`mkdir -p ${quote(ws)} && tar -C ${quote(ws)} -xf - 2>/dev/null`)}`,
+    ],
+    { encoding: 'utf8', maxBuffer: 16 << 20 },
   )
+  if (
+    copy.status !== 0 ||
+    mp(['exec', MULTIPASS_VM, '--', 'test', '-d', ws]).status !== 0
+  )
+    throw new Error(
+      `copying the working directory into the VM: ${copy.stderr.trim() || 'tar failed'}`,
+    )
 
   const program = basename(opts.binary)
   if (program === 'claude') {

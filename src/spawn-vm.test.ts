@@ -16,6 +16,13 @@ for (const [mode, outcome] of [
   test(`VM worker final result: ${mode} ${outcome} sync precedes exit and recovery delivery`, async () => {
     await mkdir('.tmp', { recursive: true })
     const home = await mkdtemp(resolve('.tmp/final-worker-'))
+    // A configured vm (kernel and rootfs): the vz/Firecracker path, not Multipass.
+    await writeFile(
+      join(home, 'isolation.json'),
+      JSON.stringify({
+        vm: { kernel: '/fixture/kernel', rootfs: '/fixture/rootfs' },
+      }),
+    )
     const worker = join(home, 'worker.mjs')
     const built = await Bun.build({
       entrypoints: [resolve('src/spawn-worker.ts')],

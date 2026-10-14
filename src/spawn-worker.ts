@@ -106,7 +106,7 @@ let adapterCleanup: (() => void) | undefined
 // In a Multipass VM the agent's hooks can't reach this host, so the session
 // runs like an unknown agent: input waits for the terminal to go quiet.
 const adapter =
-  options.vm && usesMultipass()
+  options.vm && usesMultipass(options.vm.configDir)
     ? undefined
     : adapterFor(options.agent, options.args)
 const state: SessionState = {
@@ -364,7 +364,7 @@ async function main() {
   let pty: typeof import('node-pty') | undefined
   try {
     // Multipass sessions drive `multipass exec` on a host pty.
-    if (!options.vm || usesMultipass()) {
+    if (!options.vm || usesMultipass(options.vm.configDir)) {
       const nodePty = options.ptyModule
       if (!nodePty)
         throw new Error(
@@ -601,7 +601,7 @@ async function main() {
       host.openLog(join(directory, options.id))
     }
     child =
-      options.vm && usesMultipass()
+      options.vm && usesMultipass(options.vm.configDir)
         ? await startMultipassChild({
             pty: pty!,
             configDir: options.vm.configDir,
