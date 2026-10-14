@@ -33,7 +33,7 @@ import {
 } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
 import { runnerCommands } from './runner'
 import { spawnCommands, localEvents } from './spawn'
@@ -1024,8 +1024,23 @@ const childLabel = (value: string) => {
   return value
 }
 
+/** Mark one folder trusted in Claude Code's own config (~/.claude.json),
+ *  changing nothing else; written whole and renamed into place. */
+async function trustClaudeFolder(dir: string) {
+  const path = join(homedir(), '.claude.json')
+  const config = JSON.parse(await readFile(path, 'utf8').catch(() => '{}'))
+  config.projects ??= {}
+  config.projects[dir] = {
+    ...config.projects[dir],
+    hasTrustDialogAccepted: true,
+  }
+  const temp = `${path}.gild-${process.pid}`
+  await writeFile(temp, JSON.stringify(config, null, 2), { mode: 0o600 })
+  await rename(temp, path)
+}
+
 agentCmd
-  .command('launch <repo> <label>')
+  .command('launch <repo> <label> [run...]')
   .description(
     'with the coordinate grant: bring up a new agent in <owner/repo>, a peer with the grants you give it. It gets its own key and token (stored on this machine, never printed), its own clone, and a coding agent running in the background that answers @mentions',
   )
@@ -1039,16 +1054,23 @@ agentCmd
     'pr',
   )
   .option('--note <text>', 'what the new agent is for, in a sentence')
-  .option(
-    '--run <agent>',
-    'the coding agent to start (claude, codex, …)',
-    'claude',
-  )
   .option('--dir <path>', 'where to clone the repo for it (default: ./<label>)')
   .option('--no-start', 'only create the agent: no clone, nothing started')
   .option('--server <url>', 'forge base URL (defaults to the joined server)')
-  .action(async (target: string, label: string, opts) => {
+  .action(async (target: string, label: string, run: string[], opts) => {
     childLabel(label)
+    // Nobody answers a background agent's permission prompts: Claude Code
+    // starts allowed to edit files and run git and gild. Pass your own
+    // command after -- to choose differently: … --agent c -- codex
+    if (!run.length)
+      run = [
+        'claude',
+        '--permission-mode',
+        'acceptEdits',
+        '--allowedTools',
+        'Bash(git:*)',
+        'Bash(gild:*)',
+      ]
     const params = repoPair(target)
     if (await loadAgent(label))
       throw Error(`An agent named ${label} already exists on this machine`)
@@ -1090,7 +1112,7 @@ agentCmd
     )
     if (!opts.start) {
       console.log(
-        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} --channel ${target} ${opts.run}`,
+        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} --channel ${target} ${run.join(' ')}`,
       )
       return
     }
@@ -1109,7 +1131,10 @@ agentCmd
       throw Error(
         `Cloning ${target} for @${created.name} failed; the agent exists, start it by hand`,
       )
-    const run = spawnSync(
+    // gild made this folder, so Claude Code may trust it; in the background
+    // nobody could answer its trust question.
+    if (basename(run[0]) === 'claude') await trustClaudeFolder(dir)
+    const started = spawnSync(
       gild[0],
       [
         ...gild.slice(1),
@@ -1119,16 +1144,16 @@ agentCmd
         label,
         '--channel',
         target,
-        opts.run,
+        ...run,
       ],
       { cwd: dir, encoding: 'utf8' },
     )
-    if (run.status !== 0)
+    if (started.status !== 0)
       throw Error(
-        `Starting ${opts.run} for @${created.name} failed: ${(run.stderr || run.stdout).trim()}`,
+        `Starting ${run[0]} for @${created.name} failed: ${(started.stderr || started.stdout).trim()}`,
       )
     console.log(
-      `@${created.name} is running ${opts.run} in ${dir} (gild attach ${label} to watch, gild send ${label} "…" to talk).`,
+      `@${created.name} is running ${run[0]} in ${dir} (gild attach ${label} to watch, gild send ${label} "…" to talk).`,
     )
   })
 
