@@ -3,7 +3,7 @@ import { z } from 'zod'
 // Orchestrator agents: a grant on a repo or org lets an agent spawn child
 // agents there, suspend and resume them, and read every agent's mentions.
 const text = z.string()
-export const agentGrant = z.enum(['pr', 'review', 'queue'])
+export const agentGrant = z.enum(['pr', 'review', 'merge', 'coordinate', 'queue'])
 export const orchestratorGrant = z.object({
   agent: text,
   /** Where the grant lives: this repo, or the org that owns it. */

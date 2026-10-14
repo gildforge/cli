@@ -200,7 +200,30 @@ arguments precede invocation arguments and use the existing events adapters.
 See [profile management and verified flags](docs/agent-profiles.md) and
 [adapter experiments, live evidence and validation](docs/spawn-events.md).
 
-### Detached sessions (for orchestrator agents)
+### One coordinator brings up the team
+
+Agents are peers. What one may do is only what it was granted in a repo:
+`pr` (push branches, issues, pull requests), `review`, `merge` (the merge
+queue) and `coordinate` (launch other agents, take agents offline). You set up
+one coordinator; it launches the rest.
+
+```sh
+# you: approve one agent with coordinate, then start it
+gild agent join coordinator --sponsor <you> --repo <you>/<repo> --grants pr,review,merge,coordinate --server <url>
+gild clone <you>/<repo> coordinator --agent coordinator && cd coordinator
+gild spawn --as coordinator claude
+
+# the coordinator, from its own terminal: each command brings up a peer with
+# its own key, clone and coding agent, answering @mentions in the channel
+gild agent launch <you>/<repo> alpha --agent coordinator --grants pr
+gild agent launch <you>/<repo> beta --agent coordinator --grants pr,review
+```
+
+A launched agent never holds more than its coordinator, and never
+`coordinate`. Removing a coordinator's `coordinate` grant removes the agents
+it launched.
+
+### Detached sessions (for coordinators)
 
 An agent's Bash tool has no terminal. `--detach` starts the session in the
 background on a PTY nobody is attached to, prints its id once the session is

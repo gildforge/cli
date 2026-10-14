@@ -858,7 +858,7 @@ agentCmd
   .option('--repo <owner/name>', 'a repo you want to work in')
   .option(
     '--grants <list>',
-    'what you ask for there: pr, review, queue (comma separated)',
+    'what you ask for there: pr (push, issues, pull requests), review, merge, coordinate (launch and manage other agents); comma separated',
     'pr',
   )
   .option('--note <text>', 'why, in a sentence the approver will read')
@@ -1016,7 +1016,7 @@ agentCmd
     }
   })
 
-// ---------- orchestrators: spawn, suspend and resume child agents ----------
+// ---------- coordination: launch agents, take them offline, bring them back ----------
 
 const childLabel = (value: string) => {
   if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(value))
@@ -1025,63 +1025,106 @@ const childLabel = (value: string) => {
 }
 
 agentCmd
-  .command('spawn-child <repo> <label>')
+  .command('launch <repo> <label>')
   .description(
-    "as an orchestrator, create a child agent in <owner/repo>; its token goes to this machine's agent store, never to the terminal",
+    'with the coordinate grant: bring up a new agent in <owner/repo>, a peer with the grants you give it. It gets its own key and token (stored on this machine, never printed), its own clone, and a coding agent running in the background that answers @mentions',
   )
   .requiredOption(
     '--agent <label>',
-    'the orchestrator: an approved local agent holding the orchestrator grant there',
+    'the coordinator: an approved local agent holding the coordinate grant there',
   )
   .option(
     '--grants <list>',
-    'what the child may do there: pr, review, queue (comma separated; never more than the orchestrator holds)',
-    '',
+    'what the new agent may do: pr, review, merge (comma separated; never more than the coordinator holds)',
+    'pr',
   )
-  .option('--note <text>', 'why the child exists, in a sentence')
+  .option('--note <text>', 'what the new agent is for, in a sentence')
+  .option(
+    '--run <agent>',
+    'the coding agent to start (claude, codex, …)',
+    'claude',
+  )
+  .option('--dir <path>', 'where to clone the repo for it (default: ./<label>)')
+  .option('--no-start', 'only create the agent: no clone, nothing started')
   .option('--server <url>', 'forge base URL (defaults to the joined server)')
   .action(async (target: string, label: string, opts) => {
     childLabel(label)
     const params = repoPair(target)
     if (await loadAgent(label))
       throw Error(`An agent named ${label} already exists on this machine`)
-    const orchestrator = await loadAgent(opts.agent)
-    if (!orchestrator?.token)
+    const coordinator = await loadAgent(opts.agent)
+    if (!coordinator?.token)
       throw Error(`No approved agent named ${opts.agent} on this machine`)
-    const server = agentServer(orchestrator, opts.server)
+    const server = agentServer(coordinator, opts.server)
     const { publicKey, privateKey } = generateKeyPairSync('ed25519')
     const pub = `ed25519:${publicKey.export({ format: 'der', type: 'spki' }).toString('base64')}`
-    const child = await new GildClient(
+    const created = await new GildClient(
       server + '/api/v1',
-      orchestrator.token,
+      coordinator.token,
     ).request('createChildAgent', params, {
       label,
       publicKey: pub,
       grants: String(opts.grants ?? '')
         .split(',')
         .map((g: string) => g.trim())
-        .filter(Boolean) as ('pr' | 'review' | 'queue')[],
+        .filter(Boolean) as ('pr' | 'review' | 'merge')[],
       note: opts.note,
     })
     await saveAgent(label, {
       schema: 1,
-      name: child.name,
+      name: created.name,
       server,
       publicKey: pub,
       secretKey: privateKey
         .export({ format: 'der', type: 'pkcs8' })
         .toString('base64'),
-      requestId: child.request_id,
-      token: child.token,
-      createdAt: child.created_at,
+      requestId: created.request_id,
+      token: created.token,
+      createdAt: created.created_at,
     })
     console.log(
-      chalk.green(`Spawned @${child.name} in ${child.repo}`) +
-        ` for @${child.human}, sponsored by @${child.sponsor}.` +
-        (child.grants.length ? ` It may: ${child.grants.join(', ')}.` : ''),
+      chalk.green(`Launched @${created.name} in ${created.repo}`) +
+        (created.grants.length
+          ? `. It may: ${created.grants.join(', ')}.`
+          : '.'),
     )
+    if (!opts.start) {
+      console.log(
+        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} ${opts.run}`,
+      )
+      return
+    }
+    const dir = resolve(opts.dir ?? label)
+    const gild = gildInvocation()
+    const clone = spawnSync(
+      gild[0],
+      [...gild.slice(1), 'clone', target, dir, '--agent', label],
+      { stdio: 'inherit' },
+    )
+    if (clone.status !== 0)
+      throw Error(
+        `Cloning ${target} for @${created.name} failed; the agent exists, start it by hand`,
+      )
+    const run = spawnSync(
+      gild[0],
+      [
+        ...gild.slice(1),
+        'spawn',
+        '--detach',
+        '--name',
+        label,
+        '--as',
+        label,
+        opts.run,
+      ],
+      { cwd: dir, encoding: 'utf8' },
+    )
+    if (run.status !== 0)
+      throw Error(
+        `Starting ${opts.run} for @${created.name} failed: ${(run.stderr || run.stdout).trim()}`,
+      )
     console.log(
-      `Its token is stored as local agent ${chalk.bold(label)} (scopes: ${child.scopes.join(', ')}); print it with gild agent token ${label}.`,
+      `@${created.name} is running ${opts.run} in ${dir} (gild attach ${label} to watch, gild send ${label} "…" to talk).`,
     )
   })
 
@@ -1090,12 +1133,12 @@ for (const action of ['suspend', 'resume'] as const)
     .command(`${action} <repo> <label>`)
     .description(
       action === 'suspend'
-        ? 'take an agent offline: it leaves the channel, gets no mentions and its token answers 403'
+        ? 'take an agent offline (you, or a coordinator for agents it launched): it leaves the channel, gets no mentions and its token answers 403'
         : 'bring a suspended agent back',
     )
     .option(
       '--agent <label>',
-      'act as an approved local orchestrator agent (default: you)',
+      'act as an approved local coordinator agent (default: you)',
     )
     .option(
       '--server <url>',

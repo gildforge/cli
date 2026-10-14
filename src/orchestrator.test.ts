@@ -66,15 +66,16 @@ async function forge() {
   return { f, seen }
 }
 
-test('spawn-child stores the child token locally and never prints it', async () => {
+test("launch stores the new agent's token locally and never prints it", async () => {
   const { f, seen } = await forge()
   try {
     await f.agent()
     const result = await cli(f.root, [
       'agent',
-      'spawn-child',
+      'launch',
       'owner/demo',
       'helper',
+      '--no-start',
       '--agent',
       'test',
       '--grants',
@@ -84,7 +85,10 @@ test('spawn-child stores the child token locally and never prints it', async () 
     ])
     expect(result.code).toBe(0)
     expect(result.out + result.err).not.toContain(SECRET)
-    expect(result.out).toContain('Spawned @alice/helper in owner/demo')
+    expect(result.out).toContain('Launched @alice/helper in owner/demo')
+    expect(result.out).toContain(
+      'Start it later: gild clone owner/demo helper --agent helper',
+    )
     const post = seen.find((s) => s.path.endsWith('/agents/children'))!
     expect(post.auth).toBe('Bearer gf_agentfixture')
     expect(post.body.label).toBe('helper')
@@ -106,7 +110,7 @@ test('spawn-child stores the child token locally and never prints it', async () 
     expect(token.out.trim()).toBe(SECRET)
     const again = await cli(f.root, [
       'agent',
-      'spawn-child',
+      'launch',
       'owner/demo',
       'helper',
       '--agent',
@@ -122,12 +126,12 @@ test('spawn-child stores the child token locally and never prints it', async () 
   }
 })
 
-test('spawn-child refuses an orchestrator without a local token and a bad label', async () => {
+test('launch refuses a coordinator without a local token and a bad label', async () => {
   const { f, seen } = await forge()
   try {
     const missing = await cli(f.root, [
       'agent',
-      'spawn-child',
+      'launch',
       'owner/demo',
       'helper',
       '--agent',
@@ -138,7 +142,7 @@ test('spawn-child refuses an orchestrator without a local token and a bad label'
     await f.agent()
     const bad = await cli(f.root, [
       'agent',
-      'spawn-child',
+      'launch',
       'owner/demo',
       'Bad_Label',
       '--agent',
@@ -151,7 +155,7 @@ test('spawn-child refuses an orchestrator without a local token and a bad label'
   }
 })
 
-test('suspend and resume name the child under the orchestrator and use its token', async () => {
+test('suspend and resume name a launched agent under its coordinator and use its token', async () => {
   const { f, seen } = await forge()
   try {
     await f.agent()
