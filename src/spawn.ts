@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { realAgent, agentEnvironment } from './spawn-binary'
-import { resolveProfile } from './agent-profiles'
+import { profileSchema, resolveProfile } from './agent-profiles'
 import { parseNudge } from './spawn-nudge'
 import type { ReportTarget } from './spawn-report'
 import type { BridgeTarget } from './spawn-bridge'
@@ -67,6 +67,11 @@ export function spawnCommands(
       '--as <label>',
       'report state with an approved local agent identity',
     )
+    .option(
+      '--channel <owner/repo>',
+      "with --as: hear @mentions in this repo's channel (typed into the agent); repeat",
+      (value: string, previous: string[] = []) => [...previous, value],
+    )
     .option('--print-id', 'print the local session id to stderr')
     .option(
       '--nudge <rule>',
@@ -111,6 +116,7 @@ export function spawnCommands(
           name?: string
           idleMs: number
           as?: string
+          channel?: string[]
           printId?: boolean
           nudge?: string[]
           detach?: boolean
@@ -124,13 +130,31 @@ export function spawnCommands(
           agent === 'agent'
             ? await resolveProfile(args.shift() ?? '', args)
             : undefined
-        const profile = resolved?.profile
+        let profile = resolved?.profile
         if (profile && opts.as && opts.as !== profile.name)
           throw Error(
             'A profile uses its own approved agent label; --as must match the profile name',
           )
         if (profile && opts.name)
           throw Error('Profile sessions are named after the agent; omit --name')
+        if (opts.channel?.length) {
+          if (profile)
+            throw Error(
+              'A profile lists its own channels; use gild agent edit --channel',
+            )
+          if (!opts.as)
+            throw Error(
+              '--channel needs --as <label>: mentions are addressed to an agent',
+            )
+          // A profile for this session only: the bridge hears the agent's mentions there.
+          profile = profileSchema.parse({
+            name: opts.as,
+            runtime: agent,
+            directory: process.cwd(),
+            args,
+            channels: opts.channel,
+          })
+        }
         agent = profile?.runtime ?? agent
         args = resolved?.args ?? args
         const cwd = profile?.directory ?? process.cwd()

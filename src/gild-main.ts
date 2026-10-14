@@ -1090,12 +1090,16 @@ agentCmd
     )
     if (!opts.start) {
       console.log(
-        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} ${opts.run}`,
+        `Start it later: gild clone ${target} ${label} --agent ${label} && cd ${label} && gild spawn --as ${label} --channel ${target} ${opts.run}`,
       )
       return
     }
     const dir = resolve(opts.dir ?? label)
-    const gild = gildInvocation()
+    // The same identity directory, so the clone and the session find the new agent.
+    const gild = [
+      ...gildInvocation(),
+      ...(identityDirectory ? ['--config-dir', identityDirectory] : []),
+    ]
     const clone = spawnSync(
       gild[0],
       [...gild.slice(1), 'clone', target, dir, '--agent', label],
@@ -1111,10 +1115,10 @@ agentCmd
         ...gild.slice(1),
         'spawn',
         '--detach',
-        '--name',
-        label,
         '--as',
         label,
+        '--channel',
+        target,
         opts.run,
       ],
       { cwd: dir, encoding: 'utf8' },
