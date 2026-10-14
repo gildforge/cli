@@ -86,13 +86,69 @@ export function multipassMissing(): string | null {
 }
 
 /** Make or start the `gild` VM. */
+/** One step of making the VM: a spinner, its elapsed time and, while Ubuntu
+ *  downloads, Multipass's own percentage; a plain line when not on a terminal. */
+function step(label: string, args: string[], log: (line: string) => void) {
+  const tty = !!process.stderr.isTTY
+  const started = Date.now()
+  const seconds = () => `${Math.round((Date.now() - started) / 1000)}s`
+  const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  let frame = 0,
+    detail = '',
+    out = ''
+  if (!tty) log(`${label}…`)
+  const draw = () =>
+    process.stderr.write(
+      `\r\x1b[2K  ${frames[frame++ % frames.length]} ${label}${detail ? ` · ${detail}` : ''}  ${seconds()}`,
+    )
+  const timer = tty ? setInterval(draw, 120) : undefined
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(multipassPath(), args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const read = (d: Buffer) => {
+      out += d.toString()
+      const percent = [...d.toString().matchAll(/(\d{1,3})%/g)].at(-1)?.[1]
+      if (percent) detail = `${percent}%`
+    }
+    child.stdout.on('data', read)
+    child.stderr.on('data', read)
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      if (timer) clearInterval(timer)
+      if (code === 0) {
+        if (tty) process.stderr.write(`\r\x1b[2K  ✓ ${label}  ${seconds()}\n`)
+        else log(`${label}: done in ${seconds()}`)
+        return resolve()
+      }
+      if (tty) process.stderr.write(`\r\x1b[2K  ✗ ${label}  ${seconds()}\n`)
+      const why = out
+        .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+        .trim()
+        .split('\n')
+        .at(-1)
+      reject(new Error(`${label}: ${why || `multipass exited ${code}`}`))
+    })
+  })
+}
+
+/** Make or start the `gild` VM, showing each step. */
 export async function ensureVm(log: (line: string) => void = () => {}) {
   const missing = multipassMissing()
   if (missing) throw new Error(missing)
   const info = mp(['info', MULTIPASS_VM, '--format', 'json'])
-  if (info.status !== 0) {
-    log('making the gild VM (once, about two minutes)')
-    must(
+  const fresh = info.status !== 0
+  const ready =
+    !fresh && mp(['exec', MULTIPASS_VM, '--', 'test', '-f', READY]).status === 0
+  const state = fresh
+    ? null
+    : JSON.parse(info.stdout).info?.[MULTIPASS_VM]?.state
+  if (!fresh && ready && state === 'Running') return
+  if (fresh || !ready)
+    log('setting up the gild VM (first time only, about two minutes)')
+  if (fresh)
+    await step(
+      'Download Ubuntu 24.04 and create the VM',
       [
         'launch',
         '24.04',
@@ -107,22 +163,16 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
         '--timeout',
         '600',
       ],
-      'making the gild VM',
+      log,
     )
-  } else {
-    const state = JSON.parse(info.stdout).info?.[MULTIPASS_VM]?.state
-    if (state !== 'Running') {
-      log('starting the gild VM')
-      must(['start', MULTIPASS_VM], 'starting the gild VM')
-    }
-  }
-  if (mp(['exec', MULTIPASS_VM, '--', 'test', '-f', READY]).status !== 0) {
-    log('installing Node, git, Claude Code and gild in the gild VM (once)')
-    must(
+  else if (state !== 'Running')
+    await step('Start the gild VM', ['start', MULTIPASS_VM], log)
+  if (!ready)
+    await step(
+      'Install Node, git, Claude Code and gild',
       ['exec', MULTIPASS_VM, '--', 'sh', '-c', SETUP],
-      'setting up the gild VM',
+      log,
     )
-  }
 }
 
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`

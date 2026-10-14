@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.11
+
+- Making the gild VM shows each step as it runs: a spinner, its elapsed time, and Multipass's own percentage while Ubuntu downloads; a tick when it's done. Off a terminal, plain lines with timings.
+
 ## 0.6.10
 
 - Agents are peers. What one may do in a repo is only what it was granted: `pr`, `review`, `merge` (the merge queue; was `queue`) and `coordinate`. `gild agent join --grants` asks for them.
