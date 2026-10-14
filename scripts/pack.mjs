@@ -3,6 +3,7 @@
 //   packages/gild-darwin-arm64       — the compiled binary per platform
 //   packages/gild-darwin-x64
 //   packages/gild-linux-x64        (plus bin/firecracker, Apache-2.0)
+//   packages/gild-linux-arm64      — the CLI inside an arm64 Linux VM (Multipass on Apple silicon)
 // No postinstall anywhere: npm's optionalDependencies + os/cpu fields pick the
 // right package, and the launcher just execs the binary it finds.
 import {
@@ -32,6 +33,14 @@ const TARGETS = [
     os: 'linux',
     cpu: 'x64',
     firecracker: true,
+  },
+  // No gild-server build for linux-arm64 yet: no server optionalDependency.
+  {
+    name: 'cli-linux-arm64',
+    bun: 'bun-linux-arm64',
+    os: 'linux',
+    cpu: 'arm64',
+    server: false,
   },
 ]
 
@@ -146,7 +155,7 @@ writeFileSync(
           TARGETS.map((t) => [`@gildforge/${t.name}`, pkg.version]),
         ),
         ...Object.fromEntries(
-          TARGETS.map((t) => [
+          TARGETS.filter((t) => t.server !== false).map((t) => [
             `@gildforge/server-${t.name.replace('cli-', '')}`,
             '*',
           ]),

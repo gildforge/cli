@@ -1,12 +1,18 @@
 # Changelog
 
-## 0.6.13
+## 0.6.14
 
 - Linux x64: Firecracker v1.17.0 ships inside `@gildforge/cli-linux-x64` next to `gild` (Apache-2.0; LICENSE, NOTICE and THIRD-PARTY in `vendor/firecracker/`), checked against a pinned sha256 and the one Firecracker publishes. gild uses `vm.firecracker` from isolation.json, then the bundled one, then `firecracker` on PATH.
 - `gild spawn --vm --detach` output reaches `output.log` and `gild attach`: the guest terminal fed only its last listener, so the log stayed empty. Output from before the first listener and an exit before anyone listened are kept too.
 - A detached session's output outlives it as `~/.gild/sessions/<id>.output.log` (0600, newest 10 kept), and `gild attach --watch <id>` prints it after the session ended. Short `--vm --detach` runs no longer vanish without a trace.
 - Git works in a Firecracker guest: `/workspace` keeps the host uid while the agent runs as root, which stopped every git command at "detected dubious ownership"; the guest now trusts `/workspace`.
 - docs/VM.md: which VM `--vm` uses where (Multipass on macOS by default, vz only with a `vm` block in isolation.json), and that Firecracker guests have no network by default, so the agent edits in the VM and the host commits and pushes.
+
+## 0.6.13
+
+- `gild spawn --vm` works on Apple silicon: gild publishes a linux-arm64 build (`@gildforge/cli-linux-arm64`, with its node-pty prebuild), so the agent inside the arm64 Multipass VM has its own `gild` for git credentials and pull requests. Before, every `gild` call in that VM failed with "no build for linux-arm64".
+- Multipass VM: a connection refused with "No route to host" is retried briefly, then reported with the fix (on macOS: allow Multipass in System Settings → Privacy & Security → Local Network) instead of being mistaken for an unfinished VM setup. `gild spawn --detach --vm` returns once the agent has started in the VM, so closing the terminal or SSH session right after no longer kills the session before it starts.
+- `gild spawn --vm ./agent.sh` runs the script from the copied working directory; a program inside the working directory was looked up by name on the VM's PATH and never started.
 
 ## 0.6.12
 
