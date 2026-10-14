@@ -6,11 +6,9 @@
 // repo-scoped token, so the agent clones, pushes and opens pull requests from
 // inside the VM. Your own gild key never enters it. Work leaves the VM through
 // git; the session's copy stays in the VM until you remove it.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { IPty } from 'node-pty'
 import type { VmChild } from '../spawn-vm'
 
 export const MULTIPASS_VM = 'gild'
@@ -23,13 +21,26 @@ export const usesMultipass = (platform: NodeJS.Platform = process.platform) =>
 export const claudeTokenPath = (configDir: string) =>
   join(configDir, 'vm', 'claude.token')
 
-// One-time setup of the VM: what an agent needs to work from inside it.
-const CLOUD_INIT = `#cloud-config
-package_update: true
-packages: [git, nodejs, npm, python3, build-essential, ca-certificates]
-runcmd:
-  - npm install -g @anthropic-ai/claude-code gildforge
-`
+// One-time setup of the VM: what an agent needs to work from inside it. Run
+// as plain commands after launch (a cloud-init file left the VM without a
+// network address on macOS); a marker file says it finished.
+const READY = `${HOME}/.gild-ready`
+const SETUP = `set -e
+export DEBIAN_FRONTEND=noninteractive
+sudo apt-get update -qq
+sudo apt-get install -y -qq git nodejs npm python3 build-essential ca-certificates >/dev/null
+sudo npm install -g --silent @anthropic-ai/claude-code gildforge
+touch ${READY}`
+
+/** The multipass binary's full path: the pty helper runs a path, not a name. */
+function multipassPath() {
+  const r = spawnSync(
+    process.platform === 'win32' ? 'where' : 'which',
+    ['multipass'],
+    { encoding: 'utf8' },
+  )
+  return r.status === 0 ? r.stdout.split(/\r?\n/)[0].trim() : 'multipass'
+}
 
 function mp(args: string[], input?: string) {
   const r = spawnSync('multipass', args, {
@@ -66,16 +77,7 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
   if (missing) throw new Error(missing)
   const info = mp(['info', MULTIPASS_VM, '--format', 'json'])
   if (info.status !== 0) {
-    log(
-      'making the gild VM (once; a few minutes while it installs Node, git, Claude Code and gild)',
-    )
-    const dir = join(homedir(), '.gild')
-    const file = join(dir, 'multipass-cloud-init.yaml')
-    await import('node:fs/promises').then((fs) =>
-      fs
-        .mkdir(dir, { recursive: true, mode: 0o700 })
-        .then(() => fs.writeFile(file, CLOUD_INIT, { mode: 0o600 })),
-    )
+    log('making the gild VM (once, about two minutes)')
     must(
       [
         'launch',
@@ -88,23 +90,24 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
         '4G',
         '--disk',
         '20G',
-        '--cloud-init',
-        file,
         '--timeout',
-        '1200',
+        '600',
       ],
       'making the gild VM',
     )
+  } else {
+    const state = JSON.parse(info.stdout).info?.[MULTIPASS_VM]?.state
+    if (state !== 'Running') {
+      log('starting the gild VM')
+      must(['start', MULTIPASS_VM], 'starting the gild VM')
+    }
+  }
+  if (mp(['exec', MULTIPASS_VM, '--', 'test', '-f', READY]).status !== 0) {
+    log('installing Node, git, Claude Code and gild in the gild VM (once)')
     must(
-      ['exec', MULTIPASS_VM, '--', 'cloud-init', 'status', '--wait'],
+      ['exec', MULTIPASS_VM, '--', 'sh', '-c', SETUP],
       'setting up the gild VM',
     )
-    return
-  }
-  const state = JSON.parse(info.stdout).info?.[MULTIPASS_VM]?.state
-  if (state !== 'Running') {
-    log('starting the gild VM')
-    must(['start', MULTIPASS_VM], 'starting the gild VM')
   }
 }
 
@@ -222,32 +225,34 @@ o=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\\1#')
     HOME,
     PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
   }
-  const assignments = Object.entries(env).map(([k, v]) => `${k}=${v}`)
-  // Its pid is kept so the session can be hung up from the host.
-  const launch = `echo $$ > ${quote(dir + '/pid')}; t=${quote(HOME + '/.config/gild/vm/claude.token')}; [ -f "$t" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$t")"; exec env "$@"`
-  const p: IPty = opts.pty.spawn(
-    'multipass',
+  // The agent's terminal is made inside the VM by `script`; the host only
+  // pipes bytes through `multipass exec` (a host pty helper never got as far
+  // as running multipass from a detached session). Its pid is kept so the
+  // session can be hung up from the host.
+  const command = [
+    `echo $$ > ${quote(dir + '/pid')}`,
+    `stty cols ${opts.cols} rows ${opts.rows}`,
+    `t=${quote(HOME + '/.config/gild/vm/claude.token')}; [ -f "$t" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$t")"`,
+    `exec env ${Object.entries(env)
+      .map(([k, v]) => quote(`${k}=${v}`))
+      .join(' ')} ${[program, ...opts.args].map(quote).join(' ')}`,
+  ].join('; ')
+  const p = spawn(
+    multipassPath(),
     [
       'exec',
       MULTIPASS_VM,
       '--working-directory',
       ws,
       '--',
-      'sh',
-      '-c',
-      launch,
-      'sh',
-      ...assignments,
-      program,
-      ...opts.args,
+      'script',
+      '-qfec',
+      command,
+      '/dev/null',
     ],
     {
-      name: 'xterm-256color',
-      cols: opts.cols,
-      rows: opts.rows,
       cwd: opts.cwd,
-      env: process.env as Record<string, string>,
-      encoding: null,
+      stdio: ['pipe', 'pipe', 'pipe'],
     },
   )
   const hangUp = () =>
@@ -261,18 +266,26 @@ o=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\\1#')
     ])
   const none = { written: [], deleted: [], conflicts: [], rejected: [] }
   return {
-    pid: p.pid,
-    write: (data) =>
-      p.write(
-        typeof data === 'string' ? data : Buffer.from(data).toString('utf8'),
-      ),
-    resize: (cols, rows) => p.resize(cols, rows),
-    onData: (cb) =>
-      void p.onData((d) => cb(Buffer.isBuffer(d) ? d : Buffer.from(d))),
+    pid: p.pid ?? -1,
+    write: (data) => void p.stdin.write(data),
+    // The guest terminal keeps the size it started with.
+    resize: () => {},
+    onData: (cb) => {
+      p.stdout.on('data', (d: Buffer) => cb(d))
+      p.stderr.on('data', (d: Buffer) => cb(d))
+    },
     onExit: (cb) =>
-      void p.onExit((e) => cb({ exitCode: e.exitCode, signal: e.signal })),
-    pause: () => p.pause(),
-    resume: () => p.resume(),
+      void p.on('exit', (code, signal) =>
+        cb({ exitCode: code ?? 1, signal: signal ? 1 : undefined }),
+      ),
+    pause: () => {
+      p.stdout.pause()
+      p.stderr.pause()
+    },
+    resume: () => {
+      p.stdout.resume()
+      p.stderr.resume()
+    },
     kill: () => {
       hangUp()
       p.kill()
