@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.18
+
+- `gild clone` imports a repository that was too large for gild's servers on your machine first, then clones it.
+
 ## 0.6.17
 
 - `gild setup` sets up gild 0.7.11: imported repositories no longer stay Pending (annotated tags and import refs blocked publishing).
