@@ -248,7 +248,10 @@ for `attach` to replay and appends everything to
 `~/.gild/sessions/<id>/output.log` (0600, 8 MiB, one rotation to `output.log.1`).
 Keystrokes from `attach` go through the same input tracking as an attached
 spawn, so an unsent draft still holds injected messages. Detaching never stops
-the agent; `gild stop` does, and removes the socket, settings and log with it.
+the agent; `gild stop` does, and removes the socket and settings with it. The
+output outlives the session as `~/.gild/sessions/<id>.output.log` (0600; the
+newest 10 ended sessions are kept), and `gild attach --watch <id>` prints it
+once the session has ended.
 
 `--detach` combines with `--vm`: `gild spawn --vm --detach --name bob claude`
 runs the child in a microVM with no terminal, and `send`, `attach`, `sync` and
@@ -256,16 +259,16 @@ runs the child in a microVM with no terminal, and `send`, `attach`, `sync` and
 
 ### microVM sessions (`--vm`)
 
-`gild spawn --vm` runs the agent in a Firecracker microVM on a copy of the
-working directory (`gild sync <id>` brings changes back; exit does too). Build
-the guest image once per gild version on an x86_64 Linux host with Docker:
-
-```sh
-bun run vm:image        # in a gildforge/cli checkout; writes ~/.config/gild/vm/
-```
-
-A guest image built for another gild version is refused at boot with that same
-command as the fix. Details: [docs/VM.md](docs/VM.md).
+`gild spawn --vm` runs the agent in a VM: Firecracker on Linux, Multipass on
+macOS and Windows (vz on macOS only when isolation.json sets up a `vm`). On
+Linux the npm package ships Firecracker next to `gild`, and the guest image is
+downloaded on first use; you need `/dev/kvm` and `mke2fs`. The guest works on a
+copy of the working directory with no network by default: the agent edits
+there, its file changes come back to the host (`gild sync <id>`, and at exit),
+and the host commits and pushes. Commits made in the guest stay in the guest
+(host Git metadata is protected). Multipass VMs push from inside. Details, and
+building the guest image yourself: [docs/VM.md](docs/VM.md). A guest image
+built for another gild version is refused at boot.
 
 Automatic sync protects host Git metadata and retains incomplete work for
 recovery. Published images currently cover Linux x64 and Apple Silicon; they

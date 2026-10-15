@@ -2,7 +2,7 @@
 //   packages/gildforge               — the umbrella (bin launcher + optionalDependencies)
 //   packages/gild-darwin-arm64       — the compiled binary per platform
 //   packages/gild-darwin-x64
-//   packages/gild-linux-x64
+//   packages/gild-linux-x64        (plus bin/firecracker, Apache-2.0)
 //   packages/gild-linux-arm64      — the CLI inside an arm64 Linux VM (Multipass on Apple silicon)
 // No postinstall anywhere: npm's optionalDependencies + os/cpu fields pick the
 // right package, and the launcher just execs the binary it finds.
@@ -16,6 +16,7 @@ import {
 import { join } from 'node:path'
 import pkg from '../package.json'
 import { vendorPty } from './vendor-pty.mjs'
+import { vendorFirecracker } from './vendor-firecracker.mjs'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const TARGETS = [
@@ -26,7 +27,13 @@ const TARGETS = [
     cpu: 'arm64',
   },
   { name: 'cli-darwin-x64', bun: 'bun-darwin-x64', os: 'darwin', cpu: 'x64' },
-  { name: 'cli-linux-x64', bun: 'bun-linux-x64', os: 'linux', cpu: 'x64' },
+  {
+    name: 'cli-linux-x64',
+    bun: 'bun-linux-x64',
+    os: 'linux',
+    cpu: 'x64',
+    firecracker: true,
+  },
   // No gild-server build for linux-arm64 yet: no server optionalDependency.
   {
     name: 'cli-linux-arm64',
@@ -86,6 +93,9 @@ for (const t of TARGETS) {
 }
 
 await vendorPty(ROOT, TARGETS)
+for (const t of TARGETS)
+  if (t.firecracker)
+    await vendorFirecracker(ROOT, join(ROOT, 'packages', t.name))
 
 const launcher = (family, bin) => `#!/usr/bin/env node
 // Picks the platform binary installed via optionalDependencies and execs it.

@@ -1,7 +1,8 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { Command, InvalidArgumentError } from 'commander'
-import type { StartMessage } from './spawn-detach'
+import { readFile } from 'node:fs/promises'
+import { endedLogPath, type StartMessage } from './spawn-detach'
 import { privateSessionsDirectory, socketPath } from './spawn-sessions'
 
 /** Caller side of detached sessions: `gild spawn --detach`, `gild attach`,
@@ -120,7 +121,20 @@ export async function attachSession(id: string, watch: boolean) {
     )
     socket.on('error', (error) => {
       cleanup()
-      reject(sessionError(id, error))
+      const failure = sessionError(id, error)
+      if (failure === error) return reject(failure)
+      // An ended session: show the output it left behind.
+      const path = endedLogPath(directory, id)
+      readFile(path).then(
+        (log) => {
+          process.stdout.write(log)
+          process.stderr.write(
+            `\r\n[${id} has ended; its output is kept in ${path}]\r\n`,
+          )
+          resolve()
+        },
+        () => reject(failure),
+      )
     })
     const show = (data: Buffer) => {
       if (data.length && !process.stdout.write(data)) socket.pause()
