@@ -19,7 +19,7 @@ import {
   readFile,
 } from 'node:fs/promises'
 import { existsSync, accessSync, constants } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { bootNetArgs, networkState, planNetwork } from './network'
 import {
   checkGuestProtocol,
@@ -49,6 +49,21 @@ export interface FirecrackerConfig {
 }
 
 export const GUEST_WORK = '/workspace'
+
+/**
+ * The Firecracker to run when isolation.json names none: the one shipped next
+ * to the gild executable (@gildforge/cli-linux-x64 bundles it), else
+ * `firecracker` on PATH. `vm.firecracker` in isolation.json wins over both.
+ */
+export function defaultFirecracker(execPath = process.execPath) {
+  const bundled = join(dirname(execPath), 'firecracker')
+  try {
+    accessSync(bundled, constants.X_OK)
+    return bundled
+  } catch {
+    return 'firecracker'
+  }
+}
 
 /** /dev/kvm, Firecracker and mke2fs: what this host needs besides the guest image. */
 export function firecrackerHostReady(firecracker: string) {

@@ -5,6 +5,7 @@ import {
   REBUILD_HINT,
   checkGuestProtocol,
   guestPing,
+  guestPty,
   type Opener,
 } from './session'
 
@@ -59,4 +60,59 @@ test('a newer agent is refused too, and a matching one passes', async () => {
 
 test('sync-back needs protocol 2 or later (list and get)', () => {
   expect(GUEST_PROTOCOL).toBeGreaterThanOrEqual(2)
+})
+
+/** A guest agent whose pty prints `early` as soon as it starts; `say` and
+ * `exit` drive it afterwards. */
+function ptyAgent(early: string[]) {
+  let data: (c: Buffer) => void = () => {}
+  const framed = (value: unknown) => {
+    const body = Buffer.from(JSON.stringify(value))
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(body.length)
+    return Buffer.concat([head, body])
+  }
+  const say = (c: string) =>
+    data(framed({ t: 'out', d: Buffer.from(c).toString('base64') }))
+  const opener: Opener = async () => ({
+    // Replies arrive synchronously, before guestPty's caller can listen.
+    write: () => early.forEach(say),
+    onData: (cb) => (data = cb),
+    onClose() {},
+    close() {},
+  })
+  return {
+    opener,
+    say,
+    exit: (code: number) => data(framed({ t: 'exit', code })),
+  }
+}
+const request = {
+  argv: ['bash'],
+  env: {},
+  cwd: '/workspace',
+  cols: 80,
+  rows: 24,
+}
+
+test('every guest pty listener gets the output, and the first one gets what came before it', async () => {
+  const agent = ptyAgent(['EARLY '])
+  const pty = await guestPty(agent.opener, request)
+  // A detached session listens twice: the output log, then the quiet detector.
+  const log: string[] = [],
+    quiet: string[] = []
+  pty.onData((d) => log.push(d.toString()))
+  pty.onData((d) => quiet.push(d.toString()))
+  agent.say('Linux (none) 5.10')
+  expect(log.join('')).toBe('EARLY Linux (none) 5.10')
+  expect(quiet.join('')).toBe('Linux (none) 5.10')
+})
+
+test('a guest pty exit before anyone listens is replayed to onExit', async () => {
+  const agent = ptyAgent([])
+  const pty = await guestPty(agent.opener, request)
+  agent.exit(3)
+  const codes: number[] = []
+  pty.onExit((c) => codes.push(c))
+  expect(codes).toEqual([3])
 })

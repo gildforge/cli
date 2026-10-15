@@ -1,14 +1,17 @@
 import {
   chmodSync,
   closeSync,
+  existsSync,
   fchmodSync,
   mkdirSync,
   openSync,
+  readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { Socket } from 'node:net'
 import type { RecoveryLocation } from './isolation/sync'
 
@@ -19,6 +22,30 @@ export const DEFAULT_ROWS = 40
 export const RING_BYTES = 256 * 1024
 export const LOG_BYTES = 8 * 1024 * 1024
 const MAX_VIEWER_BACKLOG = 1024 * 1024
+/** Ended sessions whose output is kept (newest first); each is at most LOG_BYTES. */
+export const KEPT_LOGS = 10
+const ENDED_LOG = '.output.log'
+
+/** Where an ended session's output stays: `<sessions>/<id>.output.log` (0600). */
+export const endedLogPath = (sessions: string, id: string) =>
+  join(sessions, id + ENDED_LOG)
+
+/** Keep only the newest `keep` ended-session logs in `sessions`. */
+export function pruneEndedLogs(sessions: string, keep = KEPT_LOGS) {
+  const logs = readdirSync(sessions)
+    .filter((name) => name.endsWith(ENDED_LOG))
+    .map((name) => {
+      const path = join(sessions, name)
+      try {
+        return { path, mtime: statSync(path).mtimeMs }
+      } catch {
+        return undefined
+      }
+    })
+    .filter((log) => log !== undefined)
+    .sort((a, b) => b.mtime - a.mtime)
+  for (const { path } of logs.slice(keep)) rmSync(path, { force: true })
+}
 
 /** The most recent PTY output, bounded; replayed to whoever attaches. */
 export class OutputRing {
@@ -207,10 +234,22 @@ export class DetachedHost {
     this.viewers.clear()
     return sockets
   }
-  /** Removes the log with the rest of the session's private files. */
+  /** Removes the session's private files but keeps its latest output as
+   * `<sessions>/<id>.output.log`, so it can be read after the session ended
+   * (`gild attach --watch <id>`); only the newest KEPT_LOGS are kept. */
   cleanup() {
     this.log?.close()
-    if (this.directory) rmSync(this.directory, { recursive: true, force: true })
+    if (!this.directory) return
+    const log = this.log?.path
+    // A session that never printed (one that failed to start) leaves nothing.
+    if (log && existsSync(log) && statSync(log).size > 0) {
+      const sessions = dirname(this.directory)
+      try {
+        renameSync(log, endedLogPath(sessions, basename(this.directory)))
+        pruneEndedLogs(sessions)
+      } catch {}
+    }
+    rmSync(this.directory, { recursive: true, force: true })
   }
 }
 

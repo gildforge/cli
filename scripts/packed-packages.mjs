@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
 import pin from './node-pty.json' with { type: 'json' }
 import { ptyFiles, sha256 } from './vendor-pty.mjs'
+import { firecrackerFiles, firecrackerHash } from './vendor-firecracker.mjs'
 
 export const root = resolve(new URL('..', import.meta.url).pathname)
 export const npm = process.env.TEST_NPM_CLI
@@ -62,7 +63,10 @@ export function packPackages() {
     const [packed] = Array.isArray(result) ? result : Object.values(result)
     const tarball = join(dest, packed.filename)
     const read = (file) =>
-      execFileSync('tar', ['-xOf', tarball, `package/${file}`])
+      execFileSync('tar', ['-xOf', tarball, `package/${file}`], {
+        // bin/firecracker is 3.6 MB; the default 1 MiB buffer fails.
+        maxBuffer: 64 * 1024 * 1024,
+      })
     for (const { path } of packed.files) {
       if (path.endsWith('package.json'))
         noInstallScripts(JSON.parse(read(path)), `${packed.name}/${path}`)
@@ -84,6 +88,18 @@ export function packPackages() {
         (!helper || (helper.mode & 0o111) !== 0o111)
       )
         throw new Error(`${name}: packed spawn-helper is not executable`)
+      // Linux x64 ships Firecracker next to gild, with its license files.
+      const firecracker = packed.files.find(
+        (file) => file.path === 'bin/firecracker',
+      )
+      if (name === 'cli-linux-x64') {
+        for (const file of Object.keys(firecrackerFiles))
+          if (sha256(read(file)) !== firecrackerHash(file))
+            throw new Error(`${name}: packed ${file} hash mismatch`)
+        if ((firecracker.mode & 0o111) !== 0o111)
+          throw new Error(`${name}: packed firecracker is not executable`)
+      } else if (firecracker)
+        throw new Error(`${name}: firecracker is for linux-x64 only`)
     }
     packages.set(pkg.name, { pkg, tarball, integrity: packed.integrity })
     console.log(

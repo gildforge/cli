@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
+  defaultFirecracker,
   firecrackerAvailable,
   firecrackerHostReady,
   startFirecracker,
@@ -60,7 +61,8 @@ export const hostConfigSchema = (configDir: string) =>
     default: level.optional(),
     vm: z
       .strictObject({
-        firecracker: z.string().default('firecracker'),
+        /** Linux: the bundled one next to gild, else `firecracker` on PATH. */
+        firecracker: z.string().default(() => defaultFirecracker()),
         /** macOS: the signed Virtualization.framework helper: the published
          *  one in <config dir>/vm when it was fetched, else `gild-vz` on PATH
          *  (scripts/build-vz-helper.sh). */
@@ -180,7 +182,7 @@ export async function prepareVm(
     ((h: HostConfig) =>
       vmBackend() === 'vz'
         ? vzHostReady()
-        : firecrackerHostReady(h.vm?.firecracker ?? 'firecracker'))
+        : firecrackerHostReady(h.vm?.firecracker ?? defaultFirecracker()))
   // No Firecracker, /dev/kvm or hypervisor: an image would not help; vmAvailable says what is missing.
   if (platform && !ready(host)) return { host }
   try {

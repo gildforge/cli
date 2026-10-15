@@ -3,6 +3,13 @@
 ## 0.6.15
 
 - The gild VM (Multipass) keeps its gild at the same version as yours: setup installs your version, and after you upgrade, the next `--vm` updates the VM's copy first (a shown step).
+## 0.6.14
+
+- Linux x64: Firecracker v1.17.0 ships inside `@gildforge/cli-linux-x64` next to `gild` (Apache-2.0; LICENSE, NOTICE and THIRD-PARTY in `vendor/firecracker/`), checked against a pinned sha256 and the one Firecracker publishes. gild uses `vm.firecracker` from isolation.json, then the bundled one, then `firecracker` on PATH.
+- `gild spawn --vm --detach` output reaches `output.log` and `gild attach`: the guest terminal fed only its last listener, so the log stayed empty. Output from before the first listener and an exit before anyone listened are kept too.
+- A detached session's output outlives it as `~/.gild/sessions/<id>.output.log` (0600, newest 10 kept), and `gild attach --watch <id>` prints it after the session ended. Short `--vm --detach` runs no longer vanish without a trace.
+- Git works in a Firecracker guest: `/workspace` keeps the host uid while the agent runs as root, which stopped every git command at "detected dubious ownership"; the guest now trusts `/workspace`.
+- docs/VM.md: which VM `--vm` uses where (Multipass on macOS by default, vz only with a `vm` block in isolation.json), and that Firecracker guests have no network by default, so the agent edits in the VM and the host commits and pushes.
 
 ## 0.6.13
 
