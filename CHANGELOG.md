@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.17
+
+- `gild setup` sets up gild 0.7.11: imported repositories no longer stay Pending (annotated tags and import refs blocked publishing).
+
 ## 0.6.16
 
 - `gild setup` sets up gild 0.7.8, which never stores your Cloudflare token in the Worker: a token that can't create the Worker's own stops setup with what to add.
