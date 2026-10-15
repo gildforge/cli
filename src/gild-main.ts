@@ -1211,7 +1211,7 @@ for (const action of ['suspend', 'resume'] as const)
 // ---------- setup: your own gild in your Cloudflare account ----------
 
 /** The gild version `gild setup` puts in your account: the kit's prebuilt Worker and its installer. */
-const SETUP_KIT = '0.7.7'
+const SETUP_KIT = '0.7.8'
 
 program
   .command('setup')

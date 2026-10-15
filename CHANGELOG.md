@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.16
+
+- `gild setup` sets up gild 0.7.8, which never stores your Cloudflare token in the Worker: a token that can't create the Worker's own stops setup with what to add.
+
 ## 0.6.15
 
 - The gild VM (Multipass) keeps its gild at the same version as yours: setup installs your version, and after you upgrade, the next `--vm` updates the VM's copy first (a shown step).
