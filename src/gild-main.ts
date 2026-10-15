@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { importCommands } from './import/commands'
+import { importCommands, importIfWaiting } from './import/commands'
 import { ApiRequestError, GildClient } from './api/client'
 import { ProofClient } from './api/bootstrap-contract'
 import { serverTokenSchema, forgeServer, tokenForServer } from './server-token'
@@ -622,6 +622,13 @@ const cloneAction = async (
     ? agentServer(agent, opts.server)
     : forgeServer(opts.server ?? 'https://gild.gg')
   if (identity?.apiToken) tokenForServer(identity.apiToken, server)
+  if (identity && !agent)
+    await importIfWaiting(
+      await clientFor(server, identity),
+      server,
+      repoArg,
+      configDir(),
+    )
   const helper =
     '!' +
     [

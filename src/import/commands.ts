@@ -6,6 +6,35 @@ import { homedir } from 'node:os'
 import type { GildClient } from '../api/client'
 import { sourceURL } from './source'
 import { executeImport } from './execute'
+/** An import too large for gild's servers waits for its owner's machine:
+ *  `gild clone` runs it here first, then clones as usual. */
+export async function importIfWaiting(
+  api: GildClient,
+  server: string,
+  repository: string,
+  root: string,
+) {
+  const [owner, repo] = repository.split('/'),
+    params = { owner, repo }
+  const status = await api.request('importStatus', params).catch(() => null)
+  if (!status?.local || status.state !== 'queued') return
+  const job = await api.request('importClaim', params)
+  if (!job) return
+  console.log(
+    `Importing ${status.source} on this machine (too large for gild's servers)`,
+  )
+  const controller = new AbortController(),
+    stop = () => controller.abort()
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
+  try {
+    await executeImport(server, job, root, controller.signal)
+  } finally {
+    process.removeListener('SIGINT', stop)
+    process.removeListener('SIGTERM', stop)
+  }
+}
+
 export function importCommands(
   repo: Command,
   client: (server: string) => Promise<GildClient>,
