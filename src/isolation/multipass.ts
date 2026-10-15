@@ -6,6 +6,7 @@
 // repo-scoped token, so the agent clones, pushes and opens pull requests from
 // inside the VM. Your own gild key never enters it. Work leaves the VM through
 // git; the session's copy stays in the VM until you remove it.
+import pkg from '../../package.json'
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -43,7 +44,7 @@ const SETUP = `set -e
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
 sudo apt-get install -y -qq git nodejs npm python3 build-essential ca-certificates >/dev/null
-sudo npm install -g --silent @anthropic-ai/claude-code gildforge
+sudo npm install -g --silent @anthropic-ai/claude-code gildforge@${pkg.version}
 touch ${READY}`
 
 /** The multipass binary's full path: the pty helper runs a path, not a name. */
@@ -218,7 +219,7 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
       ]),
     )
   const setup = () =>
-    log('setting up the gild VM (first time only, about two minutes)')
+    log('setting up the gild VM (first time only, a few minutes)')
   if (fresh) {
     setup()
     await step(
@@ -241,7 +242,35 @@ export async function ensureVm(log: (line: string) => void = () => {}) {
     )
   } else if (state !== 'Running')
     await step('Start the gild VM', ['start', MULTIPASS_VM], log)
-  if (isReady()) return
+  if (isReady()) {
+    // The VM's gild follows this one: an agent in the VM signs, clones and
+    // pushes with it, so an upgrade here upgrades it there.
+    const inside = mp([
+      'exec',
+      MULTIPASS_VM,
+      '--',
+      'gild',
+      '--version',
+    ]).stdout.trim()
+    if (inside !== pkg.version)
+      await step(
+        `Update gild in the VM to ${pkg.version}`,
+        [
+          'exec',
+          MULTIPASS_VM,
+          '--',
+          'sudo',
+          'npm',
+          'install',
+          '-g',
+          '--silent',
+          '--prefer-online',
+          `gildforge@${pkg.version}`,
+        ],
+        log,
+      )
+    return
+  }
   if (!fresh) setup()
   await step(
     'Install Node, git, Claude Code and gild',

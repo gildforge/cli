@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.15
+
+- The gild VM (Multipass) keeps its gild at the same version as yours: setup installs your version, and after you upgrade, the next `--vm` updates the VM's copy first (a shown step).
 ## 0.6.14
 
 - Linux x64: Firecracker v1.17.0 ships inside `@gildforge/cli-linux-x64` next to `gild` (Apache-2.0; LICENSE, NOTICE and THIRD-PARTY in `vendor/firecracker/`), checked against a pinned sha256 and the one Firecracker publishes. gild uses `vm.firecracker` from isolation.json, then the bundled one, then `firecracker` on PATH.
